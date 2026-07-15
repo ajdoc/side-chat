@@ -19,7 +19,13 @@ return [
 
     'allowed_methods' => ['*'],
 
-    'allowed_origins' => ['*'],
+    // Comma-separated list of allowed browser origins, from env. Defaults to the
+    // local Nuxt dev server; in production set CORS_ALLOWED_ORIGINS to the
+    // frontend's Render URL, e.g. https://sidechat-web.onrender.com
+    'allowed_origins' => array_values(array_filter(array_map(
+        'trim',
+        explode(',', (string) env('CORS_ALLOWED_ORIGINS', 'http://localhost:3000')),
+    ))),
 
     'allowed_origins_patterns' => [],
 
