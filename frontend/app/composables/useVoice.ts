@@ -326,6 +326,34 @@ export function useVoice() {
     handle.cameraTransceiver = pc.addTransceiver('video', { direction: 'sendrecv' })
     handle.screenTransceiver = pc.addTransceiver('video', { direction: 'sendrecv' })
 
+    /**
+     * Keep the two video m-lines lean, so the offer stays small.
+     *
+     * Left alone, each video m-line advertises the browser's entire codec catalogue — VP8,
+     * VP9, several H.264 profiles, AV1 — every one with its own rtcp-fb and fmtp lines. With
+     * *two* video m-lines that list is the bulk of the SDP, and a full offer runs past the
+     * message-size limit of the WebSocket our signalling rides on (Reverb closes the socket
+     * with a 1009, which the mesh sees as a peer flapping in and out of the call). Pinning
+     * each slot to a single codec (plus its retransmission) roughly halves the offer and
+     * keeps it comfortably under the limit. Both ends run this same code, so the m-lines
+     * still line up. VP8 is the safe universal choice and encodes screen text acceptably.
+     */
+    const videoCaps = RTCRtpSender.getCapabilities('video')
+    if (videoCaps) {
+      const lean = videoCaps.codecs.filter(
+        c => c.mimeType === 'video/VP8' || c.mimeType === 'video/rtx',
+      )
+      if (lean.some(c => c.mimeType === 'video/VP8')) {
+        try {
+          handle.cameraTransceiver.setCodecPreferences(lean)
+          handle.screenTransceiver.setCodecPreferences(lean)
+        } catch {
+          // Older browsers without setCodecPreferences fall back to the full list; if the
+          // offer is then too large they'll flap, but nothing else here breaks.
+        }
+      }
+    }
+
     if (cameraTrack) void handle.cameraTransceiver.sender.replaceTrack(cameraTrack)
     if (screenTrack) void handle.screenTransceiver.sender.replaceTrack(screenTrack)
 
