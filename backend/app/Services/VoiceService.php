@@ -89,7 +89,7 @@ final class VoiceService
                 'credential' => config('webrtc.turn.credential'),
             ];
         }
-
+        
         return $servers;
     }
 

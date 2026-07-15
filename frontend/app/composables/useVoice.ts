@@ -157,6 +157,37 @@ function audioRoot(): HTMLElement {
   return root
 }
 
+/**
+ * gzip a string to base64, and back.
+ *
+ * The SDP is the one signalling field big enough to matter: an offer can run to ~17KB
+ * once every codec and — with TURN — every relay candidate is spelled out, and Reverb
+ * closes the socket with a 1009 on any whisper past its message-size limit (which the
+ * mesh experiences as peers that flap in and out or never connect). SDP is highly
+ * repetitive text, so gzip takes that ~17KB down to a couple of KB, comfortably under
+ * the cap and independent of how many codecs or candidates the browser decided to list.
+ */
+async function gzipToBase64(text: string): Promise<string> {
+  const stream = new Blob([text]).stream().pipeThrough(new CompressionStream('gzip'))
+  const bytes = new Uint8Array(await new Response(stream).arrayBuffer())
+
+  // Chunked so a large SDP can't overflow the argument list of String.fromCharCode.
+  let binary = ''
+  for (let i = 0; i < bytes.length; i += 0x8000) {
+    binary += String.fromCharCode(...bytes.subarray(i, i + 0x8000))
+  }
+  return btoa(binary)
+}
+
+async function base64ToGunzip(b64: string): Promise<string> {
+  const binary = atob(b64)
+  const bytes = new Uint8Array(binary.length)
+  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i)
+
+  const stream = new Blob([bytes]).stream().pipeThrough(new DecompressionStream('gzip'))
+  return new Response(stream).text()
+}
+
 export function useVoice() {
   const api = useApi()
   const config = useRuntimeConfig()
@@ -224,9 +255,21 @@ export function useVoice() {
 
   // --- signalling ---
 
-  function signal(to: number, payload: Omit<SignalPayload, 'to' | 'from'>) {
+  async function signal(to: number, payload: Omit<SignalPayload, 'to' | 'from'>) {
     if (!presence || !user.value) return
-    presence.whisper('signal', { to, from: user.value.id, ...payload })
+
+    // The SDP rides compressed (see gzipToBase64) as `sdpz`; everything else — the tiny
+    // ICE candidates and the routing ids — passes through untouched.
+    const body: Record<string, unknown> = { to, from: user.value.id }
+    if (payload.description) {
+      body.description = {
+        type: payload.description.type,
+        sdpz: await gzipToBase64(payload.description.sdp ?? ''),
+      }
+    }
+    if (payload.candidate) body.candidate = payload.candidate
+
+    presence.whisper('signal', body)
   }
 
   /** Tell the people in the call what my mic, camera and screen are doing, right now. */
@@ -361,7 +404,7 @@ export function useVoice() {
       try {
         handle.makingOffer = true
         await pc.setLocalDescription()
-        signal(id, { description: pc.localDescription!.toJSON() })
+        await signal(id, { description: pc.localDescription!.toJSON() })
       } catch {
         // A failed offer isn't fatal: ICE restart below picks the connection back up.
       } finally {
@@ -370,7 +413,7 @@ export function useVoice() {
     }
 
     pc.onicecandidate = ({ candidate }) => {
-      if (candidate) signal(id, { candidate: candidate.toJSON() })
+      if (candidate) void signal(id, { candidate: candidate.toJSON() })
     }
 
     pc.onconnectionstatechange = () => {
@@ -479,7 +522,12 @@ export function useVoice() {
 
     try {
       if (payload.description) {
-        const description = payload.description
+        // The SDP arrives gzip'd as `sdpz` (see signal); older/uncompressed `sdp` is still
+        // accepted so a half-deployed pair doesn't wedge.
+        const wire = payload.description as RTCSessionDescriptionInit & { sdpz?: string }
+        const description: RTCSessionDescriptionInit = wire.sdpz
+          ? { type: wire.type, sdp: await base64ToGunzip(wire.sdpz) }
+          : wire
 
         const readyForOffer = !handle.makingOffer
           && (pc.signalingState === 'stable' || handle.settingRemoteAnswer)
@@ -497,7 +545,7 @@ export function useVoice() {
 
         if (description.type === 'offer') {
           await pc.setLocalDescription()
-          signal(payload.from, { description: pc.localDescription!.toJSON() })
+          await signal(payload.from, { description: pc.localDescription!.toJSON() })
         }
       } else if (payload.candidate) {
         try {
