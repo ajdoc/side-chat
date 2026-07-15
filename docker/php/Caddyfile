@@ -1,0 +1,14 @@
+{
+	frankenphp
+	# Local dev: no automatic HTTPS, TLS isn't needed behind the compose network.
+	auto_https off
+}
+
+# Non-privileged port so FrankenPHP runs as the unprivileged "app" user.
+:8000 {
+	root * /app/public
+	encode zstd br gzip
+
+	# Serve the Laravel front controller; php_server handles try_files -> index.php.
+	php_server
+}

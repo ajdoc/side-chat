@@ -1,0 +1,249 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+
+@custom-variant dark (&:is(.dark *));
+
+/* ---------------------------------------------------------------------------
+   Accent registry
+   ---------------------------------------------------------------------------
+   Every colour in the app is built from one hue. An accent only declares the
+   handful of numbers below; the light and dark palettes further down do the
+   rest, so a new accent is a single row here and nothing else.
+
+     --h    hue angle
+     --c    chroma of the accent in light mode…
+     --cd   …and in dark mode. They differ because a colour holds far less chroma
+            as it gets brighter: at L .72 blue tops out around .145, not .19.
+     --cs   surface chroma multiplier — how far the "neutrals" (background, cards,
+            borders, hovers) bend toward the hue. Low values keep an accent quiet.
+     --pl   lightness of the accent in light mode…
+     --pld  …and in dark mode.
+     --pf   lightness of the label sitting *on* the accent, light mode…
+     --pfd  …and dark mode.
+
+   The accent has to work as a fill (buttons, badges) *and* as text (links,
+   text-primary), which pins the numbers down: in light mode it must be deep
+   enough to read as text on a near-white canvas, so it takes a white label; in
+   dark mode it must be bright enough to read on a near-black canvas, so it takes
+   a near-black label. Every pairing below clears WCAG AA (≥4.5:1) and sits inside
+   sRGB — the values are solved, not eyeballed, so don't nudge them casually.
+   ------------------------------------------------------------------------- */
+[data-accent="slate"] {
+  --h: 265; --c: 0.03; --cd: 0.03; --cs: 0.35;
+  --pl: 0.32; --pld: 0.92; --pf: 0.98; --pfd: 0.22;
+}
+[data-accent="blue"] {
+  --h: 258; --c: 0.19; --cd: 0.145; --cs: 1;
+  --pl: 0.54; --pld: 0.72; --pf: 0.98; --pfd: 0.2;
+}
+[data-accent="violet"] {
+  --h: 295; --c: 0.19; --cd: 0.165; --cs: 1;
+  --pl: 0.55; --pld: 0.72; --pf: 0.98; --pfd: 0.2;
+}
+[data-accent="rose"] {
+  --h: 350; --c: 0.19; --cd: 0.19; --cs: 1;
+  --pl: 0.56; --pld: 0.72; --pf: 0.98; --pfd: 0.2;
+}
+[data-accent="red"] {
+  --h: 27; --c: 0.21; --cd: 0.175; --cs: 0.9;
+  --pl: 0.56; --pld: 0.72; --pf: 0.98; --pfd: 0.2;
+}
+[data-accent="amber"] {
+  --h: 75; --c: 0.12; --cd: 0.155; --cs: 0.8;
+  --pl: 0.54; --pld: 0.72; --pf: 0.98; --pfd: 0.2;
+}
+[data-accent="green"] {
+  --h: 150; --c: 0.15; --cd: 0.16; --cs: 0.9;
+  --pl: 0.52; --pld: 0.72; --pf: 0.98; --pfd: 0.2;
+}
+[data-accent="teal"] {
+  --h: 195; --c: 0.095; --cd: 0.125; --cs: 0.95;
+  --pl: 0.52; --pld: 0.72; --pf: 0.98; --pfd: 0.2;
+}
+
+/* The first paint, before the accent attribute lands: plain blue. Scoped to
+   :not([data-accent]) on purpose — a bare :root ties on specificity with the
+   registry above and, coming later, would quietly pin every accent to blue. */
+:root:not([data-accent]) {
+  --h: 258; --c: 0.19; --cd: 0.145; --cs: 1;
+  --pl: 0.54; --pld: 0.72; --pf: 0.98; --pfd: 0.2;
+}
+
+/* --- Light palette ---------------------------------------------------------
+   Neutrals are not neutral: each one is a low-chroma tint of the active hue, so
+   switching accent re-skins the whole app rather than just the buttons.
+   `--cs` scales that tint, keeping deliberately quiet accents (slate) quiet. */
+:root {
+  --radius: 0.625rem;
+
+  --background: oklch(0.985 calc(0.008 * var(--cs)) var(--h));
+  --foreground: oklch(0.19 calc(0.03 * var(--cs)) var(--h));
+
+  --card: oklch(0.995 calc(0.002 * var(--cs)) var(--h));
+  --card-foreground: var(--foreground);
+  --popover: oklch(0.99 calc(0.004 * var(--cs)) var(--h));
+  --popover-foreground: var(--foreground);
+
+  --primary: oklch(var(--pl) var(--c) var(--h));
+  --primary-foreground: oklch(var(--pf) calc(0.01 * var(--cs)) var(--h));
+
+  --secondary: oklch(0.94 calc(0.022 * var(--cs)) var(--h));
+  --secondary-foreground: oklch(0.3 calc(0.06 * var(--cs)) var(--h));
+
+  --muted: oklch(0.955 calc(0.016 * var(--cs)) var(--h));
+  --muted-foreground: oklch(0.51 calc(0.035 * var(--cs)) var(--h));
+
+  --accent: oklch(0.93 calc(0.035 * var(--cs)) var(--h));
+  --accent-foreground: oklch(0.32 calc(0.07 * var(--cs)) var(--h));
+
+  --destructive: oklch(0.577 0.245 27.325);
+
+  --border: oklch(0.895 calc(0.022 * var(--cs)) var(--h));
+  --input: oklch(0.9 calc(0.022 * var(--cs)) var(--h));
+  --ring: oklch(var(--pl) var(--c) var(--h));
+
+  /* Chrome around the conversation: the server rail is the deepest surface, the
+     channel sidebar sits between it and the message canvas. */
+  --sidebar: oklch(0.955 calc(0.02 * var(--cs)) var(--h));
+  --rail: oklch(0.925 calc(0.03 * var(--cs)) var(--h));
+
+  /* Shadows pick up the hue too — grey shadows over a tinted surface read dirty. */
+  --shadow-tint: oklch(var(--pl) var(--c) var(--h) / 0.14);
+  --glow: oklch(var(--pl) var(--c) var(--h) / 0.07);
+}
+
+/* --- Dark palette --------------------------------------------------------- */
+.dark {
+  --background: oklch(0.17 calc(0.018 * var(--cs)) var(--h));
+  --foreground: oklch(0.95 calc(0.012 * var(--cs)) var(--h));
+
+  --card: oklch(0.215 calc(0.024 * var(--cs)) var(--h));
+  --card-foreground: var(--foreground);
+  --popover: oklch(0.225 calc(0.026 * var(--cs)) var(--h));
+  --popover-foreground: var(--foreground);
+
+  --primary: oklch(var(--pld) var(--cd) var(--h));
+  --primary-foreground: oklch(var(--pfd) calc(0.02 * var(--cs)) var(--h));
+
+  --secondary: oklch(0.28 calc(0.035 * var(--cs)) var(--h));
+  --secondary-foreground: oklch(0.95 calc(0.015 * var(--cs)) var(--h));
+
+  --muted: oklch(0.27 calc(0.03 * var(--cs)) var(--h));
+  --muted-foreground: oklch(0.72 calc(0.035 * var(--cs)) var(--h));
+
+  --accent: oklch(0.31 calc(0.05 * var(--cs)) var(--h));
+  --accent-foreground: oklch(0.95 calc(0.02 * var(--cs)) var(--h));
+
+  --destructive: oklch(0.704 0.191 22.216);
+
+  --border: oklch(0.33 calc(0.035 * var(--cs)) var(--h));
+  --input: oklch(0.36 calc(0.04 * var(--cs)) var(--h));
+  --ring: oklch(var(--pld) var(--cd) var(--h));
+
+  --sidebar: oklch(0.2 calc(0.024 * var(--cs)) var(--h));
+  --rail: oklch(0.145 calc(0.02 * var(--cs)) var(--h));
+
+  --shadow-tint: oklch(0.08 calc(0.03 * var(--cs)) var(--h) / 0.5);
+  --glow: oklch(var(--pld) var(--cd) var(--h) / 0.09);
+}
+
+@theme inline {
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --color-sidebar: var(--sidebar);
+  --color-rail: var(--rail);
+
+  /* Elevation carries the hue as well: a neutral grey drop-shadow over a tinted
+     surface reads as dirt. Overriding the scale here means every shadow-* already
+     in the components (dialogs, dropdowns, cards, inputs) gets it for free. */
+  --shadow-xs: 0 1px 2px var(--shadow-tint);
+  --shadow-sm: 0 1px 2px var(--shadow-tint), 0 1px 1px -1px var(--shadow-tint);
+  --shadow-md: 0 2px 6px -1px var(--shadow-tint), 0 1px 3px -1px var(--shadow-tint);
+  --shadow-lg: 0 10px 28px -8px var(--shadow-tint), 0 3px 8px -3px var(--shadow-tint);
+  --shadow-xl: 0 20px 44px -12px var(--shadow-tint), 0 6px 14px -6px var(--shadow-tint);
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+  }
+  body {
+    @apply bg-background text-foreground;
+  }
+
+  ::selection {
+    background-color: color-mix(in oklab, var(--primary) 30%, transparent);
+  }
+
+  /* Scrollbars are a big share of the visible chrome in a three-pane chat app. */
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: var(--border) transparent;
+  }
+  ::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  ::-webkit-scrollbar-thumb {
+    background-color: var(--border);
+    border: 2px solid transparent;
+    background-clip: padding-box;
+    border-radius: 9999px;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background-color: var(--muted-foreground);
+  }
+}
+
+@layer components {
+  /* The message canvas: flat --background plus a soft wash of the accent, so the
+     open area has some depth instead of reading as an empty grey sheet. */
+  .app-shell {
+    background-color: var(--background);
+    background-image:
+      radial-gradient(80rem 50rem at 15% -10%, var(--glow), transparent 60%),
+      radial-gradient(60rem 40rem at 100% 110%, var(--glow), transparent 65%);
+    background-attachment: fixed;
+  }
+
+  /* A swatch in the theme picker. It carries its own `data-accent`, so the
+     registry vars resolve to *that* accent and the chip previews both halves of
+     what it does: the vivid accent, and the surface tint it washes the app in. */
+  .accent-swatch {
+    background-image: linear-gradient(
+      135deg,
+      oklch(var(--pl) var(--c) var(--h)) 0 55%,
+      oklch(0.93 calc(0.04 * var(--cs)) var(--h)) 55% 100%
+    );
+  }
+  .dark .accent-swatch {
+    background-image: linear-gradient(
+      135deg,
+      oklch(var(--pld) var(--cd) var(--h)) 0 55%,
+      oklch(0.3 calc(0.05 * var(--cs)) var(--h)) 55% 100%
+    );
+  }
+}

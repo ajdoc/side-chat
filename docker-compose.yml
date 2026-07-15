@@ -1,0 +1,187 @@
+# side-chat — Discord/Slack-style app.
+#   app       FrankenPHP (Caddy + PHP 8.5) serving the Laravel API
+#   reverb    Laravel Reverb WebSocket server
+#   worker    supervisord: queue:work + schedule:work
+#   postgres  database
+#   redis     queue / cache backend
+#   frontend  Nuxt (Vue + shadcn) dev server
+#
+# The reverb & worker images are built FROM the app image (sidechat/php:local),
+# so build the app service first — the Makefile's `build` target handles ordering.
+
+x-php-env: &php-env
+  APP_ENV: local
+  DB_CONNECTION: pgsql
+  DB_HOST: postgres
+  DB_PORT: 5432
+  DB_DATABASE: ${POSTGRES_DB}
+  DB_USERNAME: ${POSTGRES_USER}
+  DB_PASSWORD: ${POSTGRES_PASSWORD}
+  REDIS_HOST: redis
+  REDIS_PORT: 6379
+  QUEUE_CONNECTION: redis
+  CACHE_STORE: redis
+  BROADCAST_CONNECTION: reverb
+  REVERB_APP_ID: ${REVERB_APP_ID}
+  REVERB_APP_KEY: ${REVERB_APP_KEY}
+  REVERB_APP_SECRET: ${REVERB_APP_SECRET}
+  REVERB_HOST: reverb
+  REVERB_PORT: 8080
+  REVERB_SCHEME: http
+  # WebRTC signalling rides over Reverb client events, and a single SDP offer describing
+  # audio + a screen-share video track runs well past the 10KB default — every codec,
+  # header extension and ICE candidate the browser is willing to consider is spelled out
+  # in it. Under the default the offer is silently dropped and the call just never
+  # connects. 64KB is roomy enough for the fattest offer Chrome produces.
+  REVERB_APP_MAX_MESSAGE_SIZE: 64000
+
+x-php-depends: &php-depends
+  postgres:
+    condition: service_healthy
+  redis:
+    condition: service_healthy
+
+services:
+  app:
+    build:
+      context: ./docker/php
+      args:
+        UID: ${UID:-1000}
+        GID: ${GID:-1000}
+    image: sidechat/php:local
+    restart: unless-stopped
+    environment: *php-env
+    volumes:
+      - ./backend:/app
+    ports:
+      - "${APP_PORT:-8000}:8000"
+    depends_on: *php-depends
+
+  reverb:
+    build:
+      context: ./docker/reverb
+    image: sidechat/reverb:local
+    restart: unless-stopped
+    environment: *php-env
+    volumes:
+      - ./backend:/app
+    ports:
+      - "${REVERB_PORT:-8080}:8080"
+    depends_on: *php-depends
+    healthcheck:
+      test: ["CMD", "php", "-r", "exit(@fsockopen('127.0.0.1', 8080) ? 0 : 1);"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  worker:
+    build:
+      context: ./docker/worker
+    image: sidechat/worker:local
+    restart: unless-stopped
+    environment: *php-env
+    volumes:
+      - ./backend:/app
+    depends_on: *php-depends
+    healthcheck:
+      test: ["CMD-SHELL", "pgrep -f queue:work >/dev/null && pgrep -f schedule:work >/dev/null"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  # --- Opt-in worker-mode variants (benchmark against the classic `app`) ---
+  # Start with:  docker compose --profile octane up -d   (or `make octane-up`)
+  app-octane-frankenphp:
+    build:
+      context: ./docker/octane-frankenphp
+    image: sidechat/octane-frankenphp:local
+    profiles: ["octane"]
+    restart: unless-stopped
+    environment: *php-env
+    volumes:
+      - ./backend:/app
+    ports:
+      - "${OCTANE_FRANKENPHP_PORT:-8001}:8000"
+    depends_on: *php-depends
+    healthcheck:
+      test: ["CMD", "php", "-r", "exit(@fsockopen('127.0.0.1', 8000) ? 0 : 1);"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  app-octane-swoole:
+    build:
+      context: ./docker/octane-swoole
+    image: sidechat/octane-swoole:local
+    profiles: ["octane"]
+    restart: unless-stopped
+    environment: *php-env
+    volumes:
+      - ./backend:/app
+    ports:
+      - "${OCTANE_SWOOLE_PORT:-8002}:8000"
+    depends_on: *php-depends
+    healthcheck:
+      test: ["CMD", "php", "-r", "exit(@fsockopen('127.0.0.1', 8000) ? 0 : 1);"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  postgres:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redisdata:/data
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  frontend:
+    build:
+      context: ./docker/frontend
+    image: sidechat/frontend:local
+    restart: unless-stopped
+    environment:
+      NUXT_PUBLIC_API_BASE: ${API_BASE_URL:-http://localhost:8000}
+      NUXT_PUBLIC_REVERB_KEY: ${REVERB_APP_KEY}
+      NUXT_PUBLIC_REVERB_HOST: localhost
+      NUXT_PUBLIC_REVERB_PORT: ${REVERB_PORT:-8080}
+      NUXT_PUBLIC_REVERB_SCHEME: http
+    volumes:
+      - ./frontend:/app
+      - frontend_node_modules:/app/node_modules
+    ports:
+      - "${FRONTEND_PORT:-3000}:3000"
+    depends_on:
+      - app
+
+volumes:
+  pgdata:
+  redisdata:
+  frontend_node_modules:

@@ -1,0 +1,109 @@
+<script setup lang="ts">
+import { Headphones, HeadphoneOff, Mic, MicOff, PhoneOff, ScreenShare, Signal, Video, VideoOff } from 'lucide-vue-next'
+
+/**
+ * "You're in a call" — pinned above your name in the sidebar.
+ *
+ * A call isn't a page. You should be able to wander off into a text channel, another
+ * server, or a different chat entirely while you talk, and the audio has no business
+ * stopping because the component that started it unmounted — which is exactly why useVoice
+ * keeps the peer connections and audio elements in module scope, outside Vue's lifecycle.
+ * This bar is what makes that visible: your mic, your camera, your headphones, and the way
+ * out, wherever you happen to be.
+ *
+ * It has to name the place you're talking in, and that place is now one of two things: a
+ * channel in a server, or a chat. Both are only a channel id as far as useVoice is
+ * concerned, so this asks both lists and links to whichever one claims it.
+ */
+const { user } = useAuth()
+const { server, channels } = useServer()
+const { conversations } = useConversations()
+const {
+  channelId, status, peers, selfMuted, selfDeafened, isSharing, isCameraOn, inCall,
+  toggleMute, toggleDeafen, toggleCamera, disconnect,
+} = useVoice()
+
+const channel = computed(() => channels.value.find(c => c.id === channelId.value) ?? null)
+const conversation = computed(() =>
+  conversations.value.find(c => c.channel_id === channelId.value) ?? null,
+)
+
+const label = computed(() => {
+  if (conversation.value) return conversationTitle(conversation.value, user.value)
+
+  return channel.value?.name ?? 'Call'
+})
+
+const link = computed(() => {
+  if (conversation.value) return `/chats/${conversation.value.id}`
+  if (server.value && channel.value) return `/servers/${server.value.id}/channels/${channel.value.id}`
+
+  return null
+})
+</script>
+
+<template>
+  <div v-if="inCall" class="shrink-0 border-t bg-muted/40 p-2">
+    <div class="flex items-center gap-2 px-1 pb-2">
+      <Signal
+        class="h-4 w-4 shrink-0"
+        :class="status === 'connected' ? 'text-green-600 dark:text-green-400' : 'animate-pulse text-amber-500'"
+      />
+      <div class="min-w-0 flex-1">
+        <p class="truncate text-xs font-semibold" :class="status === 'connected' ? 'text-green-600 dark:text-green-400' : 'text-amber-500'">
+          {{ status === 'connected' ? 'Voice connected' : 'Connecting…' }}
+        </p>
+        <NuxtLink v-if="link" :to="link" class="block truncate text-xs text-muted-foreground hover:underline">
+          {{ label }} · {{ peers.length + 1 }}
+        </NuxtLink>
+      </div>
+      <ScreenShare v-if="isSharing" class="h-4 w-4 shrink-0 text-primary" title="You're sharing your screen" />
+    </div>
+
+    <div class="flex gap-1">
+      <button
+        type="button"
+        class="flex flex-1 items-center justify-center rounded p-1.5 transition hover:bg-muted"
+        :class="selfMuted ? 'text-destructive' : 'text-muted-foreground'"
+        :title="selfMuted ? 'Unmute' : 'Mute'"
+        @click="toggleMute"
+      >
+        <MicOff v-if="selfMuted" class="h-4 w-4" />
+        <Mic v-else class="h-4 w-4" />
+      </button>
+      <!--
+        Reachable from anywhere, deliberately. The camera light stays on until you turn it
+        off, and needing to navigate back to the call you wandered away from in order to do
+        that is not an acceptable thing to ask of someone.
+      -->
+      <button
+        type="button"
+        class="flex flex-1 items-center justify-center rounded p-1.5 transition hover:bg-muted"
+        :class="isCameraOn ? 'text-primary' : 'text-muted-foreground'"
+        :title="isCameraOn ? 'Turn your camera off' : 'Turn your camera on'"
+        @click="toggleCamera"
+      >
+        <Video v-if="isCameraOn" class="h-4 w-4" />
+        <VideoOff v-else class="h-4 w-4" />
+      </button>
+      <button
+        type="button"
+        class="flex flex-1 items-center justify-center rounded p-1.5 transition hover:bg-muted"
+        :class="selfDeafened ? 'text-destructive' : 'text-muted-foreground'"
+        :title="selfDeafened ? 'Undeafen' : 'Deafen'"
+        @click="toggleDeafen"
+      >
+        <HeadphoneOff v-if="selfDeafened" class="h-4 w-4" />
+        <Headphones v-else class="h-4 w-4" />
+      </button>
+      <button
+        type="button"
+        class="flex flex-1 items-center justify-center rounded p-1.5 text-muted-foreground transition hover:bg-destructive/10 hover:text-destructive"
+        title="Leave the call"
+        @click="disconnect"
+      >
+        <PhoneOff class="h-4 w-4" />
+      </button>
+    </div>
+  </div>
+</template>

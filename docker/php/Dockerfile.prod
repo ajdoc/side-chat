@@ -1,0 +1,54 @@
+# Production PHP image for Render. Unlike docker/php/Dockerfile (dev, source is
+# bind-mounted), this bakes the backend code INTO the image so it runs on a
+# platform that doesn't mount your repo. One image serves all three PHP roles —
+# app (FrankenPHP), reverb, worker — which differ only by start command, set per
+# service in render.yaml via `dockerCommand`.
+#
+# Build context MUST be the repo root (see render.yaml dockerContext: .) so the
+# COPY of backend/ and the docker/php config files both resolve.
+FROM dunglas/frankenphp:php8.5-alpine
+
+# Same extension set as the dev image.
+RUN install-php-extensions \
+        pdo_pgsql \
+        pgsql \
+        redis \
+        bcmath \
+        pcntl \
+        intl \
+        zip \
+        opcache
+
+# supervisor for the worker role (queue:work + schedule:work under one process).
+RUN apk add --no-cache supervisor
+
+COPY --from=composer:latest /usr/bin/composer /usr/bin/composer
+
+# Production PHP + web server config.
+COPY docker/php/php.prod.ini /usr/local/etc/php/conf.d/zz-app.ini
+COPY docker/php/Caddyfile.prod /etc/frankenphp/Caddyfile
+COPY docker/worker/supervisord.prod.conf /etc/supervisor/supervisord.conf
+
+WORKDIR /app
+
+# Install PHP deps first (better layer caching) using only the manifest, then the app.
+COPY backend/composer.json backend/composer.lock ./
+RUN composer install --no-dev --optimize-autoloader --no-scripts --no-interaction
+
+# Application code.
+COPY backend/ ./
+
+# Finish autoloader now that all classes are present; framework discovery too.
+RUN composer dump-autoload --optimize --no-dev \
+    && php artisan package:discover --ansi || true
+
+# Laravel needs these writable at runtime.
+RUN chown -R www-data:www-data storage bootstrap/cache
+
+EXPOSE 8000
+
+USER www-data
+
+# Default command = the API webserver. reverb/worker override this in render.yaml.
+# Caddyfile.prod binds {$PORT} so Render's assigned port is honoured.
+CMD ["frankenphp", "run", "--config", "/etc/frankenphp/Caddyfile"]

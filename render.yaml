@@ -1,0 +1,152 @@
+# Render Blueprint for side-chat. Render does NOT read docker-compose.yml — this
+# file is the equivalent: it declares every service as its own Render resource.
+# Push it to your repo, then in Render: New > Blueprint > pick this repo.
+#
+# Resources created:
+#   sidechat-api     web (Docker)   Laravel/FrankenPHP API — public URL
+#   sidechat-reverb  web (Docker)   Reverb WebSocket server — public wss URL
+#   sidechat-worker  worker(Docker) supervisord: queue:work + schedule:work
+#   sidechat-web     static site    Nuxt SPA (ssr:false, prerendered)
+#   sidechat-db      postgres       managed Postgres
+#   sidechat-redis   keyvalue       managed Redis (queue + cache)
+#
+# Values marked `sync: false` are secrets/URLs you set once in the dashboard.
+
+# ---------------------------------------------------------------------------
+# Shared env group: Reverb credentials + APP_KEY + Passport keys must be
+# IDENTICAL across api, reverb, and worker, so they live here and are pulled in
+# by all three via `fromGroup`.
+# ---------------------------------------------------------------------------
+envVarGroups:
+  - name: sidechat-shared
+    envVars:
+      - key: APP_KEY
+        sync: false          # run `php artisan key:generate --show` and paste (base64:...)
+      - key: REVERB_APP_ID
+        generateValue: true
+      - key: REVERB_APP_KEY
+        generateValue: true
+      - key: REVERB_APP_SECRET
+        generateValue: true
+      # Passport signing keys (see README "For production, set PASSPORT_*").
+      - key: PASSPORT_PRIVATE_KEY
+        sync: false
+      - key: PASSPORT_PUBLIC_KEY
+        sync: false
+
+databases:
+  - name: sidechat-db
+    databaseName: sidechat
+    user: sidechat
+    plan: basic-256mb      # smallest paid tier; bump as needed
+
+services:
+  # --- Managed Redis --------------------------------------------------------
+  - type: keyvalue
+    name: sidechat-redis
+    plan: starter
+    ipAllowList: []        # empty = reachable only from your Render services
+
+  # --- Laravel API (FrankenPHP) --------------------------------------------
+  - type: web
+    name: sidechat-api
+    runtime: docker
+    dockerfilePath: ./docker/php/Dockerfile.prod
+    dockerContext: .
+    plan: starter
+    healthCheckPath: /up
+    # Runs once per deploy, before traffic shifts, against the live DB.
+    preDeployCommand: php artisan migrate --force
+    envVars:
+      - fromGroup: sidechat-shared
+      - { key: APP_ENV, value: production }
+      - { key: APP_DEBUG, value: "false" }
+      - key: APP_URL          # https://sidechat-api.onrender.com (your api URL)
+        sync: false
+      # Postgres wiring
+      - { key: DB_CONNECTION, value: pgsql }
+      - { key: DB_HOST,     fromDatabase: { name: sidechat-db, property: host } }
+      - { key: DB_PORT,     fromDatabase: { name: sidechat-db, property: port } }
+      - { key: DB_DATABASE, fromDatabase: { name: sidechat-db, property: database } }
+      - { key: DB_USERNAME, fromDatabase: { name: sidechat-db, property: user } }
+      - { key: DB_PASSWORD, fromDatabase: { name: sidechat-db, property: password } }
+      # Redis wiring (connectionString includes auth)
+      - { key: REDIS_URL, fromService: { name: sidechat-redis, type: keyvalue, property: connectionString } }
+      - { key: QUEUE_CONNECTION, value: redis }
+      - { key: CACHE_STORE, value: redis }
+      - { key: SESSION_DRIVER, value: redis }
+      # Broadcasting via Reverb — app talks to the reverb service over its public URL
+      - { key: BROADCAST_CONNECTION, value: reverb }
+      - { key: REVERB_HOST, fromService: { name: sidechat-reverb, type: web, property: host } }
+      - { key: REVERB_PORT, value: "443" }
+      - { key: REVERB_SCHEME, value: https }
+      - { key: REVERB_APP_MAX_MESSAGE_SIZE, value: "64000" }  # WebRTC SDP offers exceed the 10KB default
+
+  # --- Reverb WebSocket server ---------------------------------------------
+  - type: web
+    name: sidechat-reverb
+    runtime: docker
+    dockerfilePath: ./docker/php/Dockerfile.prod
+    dockerContext: .
+    plan: starter
+    # Same image as the API; only the start command differs. Bind Render's $PORT.
+    dockerCommand: sh -c "php artisan reverb:start --host=0.0.0.0 --port=$PORT"
+    envVars:
+      - fromGroup: sidechat-shared
+      - { key: APP_ENV, value: production }
+      - { key: DB_CONNECTION, value: pgsql }
+      - { key: DB_HOST,     fromDatabase: { name: sidechat-db, property: host } }
+      - { key: DB_PORT,     fromDatabase: { name: sidechat-db, property: port } }
+      - { key: DB_DATABASE, fromDatabase: { name: sidechat-db, property: database } }
+      - { key: DB_USERNAME, fromDatabase: { name: sidechat-db, property: user } }
+      - { key: DB_PASSWORD, fromDatabase: { name: sidechat-db, property: password } }
+      - { key: REDIS_URL, fromService: { name: sidechat-redis, type: keyvalue, property: connectionString } }
+      - { key: REVERB_APP_MAX_MESSAGE_SIZE, value: "64000" }
+
+  # --- Queue worker + scheduler --------------------------------------------
+  - type: worker
+    name: sidechat-worker
+    runtime: docker
+    dockerfilePath: ./docker/php/Dockerfile.prod
+    dockerContext: .
+    plan: starter
+    dockerCommand: supervisord -c /etc/supervisor/supervisord.conf
+    envVars:
+      - fromGroup: sidechat-shared
+      - { key: APP_ENV, value: production }
+      - { key: DB_CONNECTION, value: pgsql }
+      - { key: DB_HOST,     fromDatabase: { name: sidechat-db, property: host } }
+      - { key: DB_PORT,     fromDatabase: { name: sidechat-db, property: port } }
+      - { key: DB_DATABASE, fromDatabase: { name: sidechat-db, property: database } }
+      - { key: DB_USERNAME, fromDatabase: { name: sidechat-db, property: user } }
+      - { key: DB_PASSWORD, fromDatabase: { name: sidechat-db, property: password } }
+      - { key: REDIS_URL, fromService: { name: sidechat-redis, type: keyvalue, property: connectionString } }
+      - { key: QUEUE_CONNECTION, value: redis }
+      - { key: CACHE_STORE, value: redis }
+      - { key: BROADCAST_CONNECTION, value: reverb }
+      - { key: REVERB_HOST, fromService: { name: sidechat-reverb, type: web, property: host } }
+      - { key: REVERB_PORT, value: "443" }
+      - { key: REVERB_SCHEME, value: https }
+      - { key: REVERB_APP_MAX_MESSAGE_SIZE, value: "64000" }
+
+  # --- Nuxt frontend (static SPA) ------------------------------------------
+  # Requires `ssr: false` in nuxt.config.ts so `npm run generate` emits a pure
+  # SPA into .output/public. The rewrite makes deep links (/chats/:id) resolve.
+  - type: web
+    name: sidechat-web
+    runtime: static
+    buildCommand: cd frontend && npm ci && npm run generate
+    staticPublishPath: frontend/.output/public
+    routes:
+      - { type: rewrite, source: /*, destination: /index.html }
+    envVars:
+      # NUXT_PUBLIC_* are inlined at build time. They need full scheme+host URLs,
+      # which can't be cross-referenced from other services, so set them by hand:
+      - key: NUXT_PUBLIC_API_BASE     # https://sidechat-api.onrender.com
+        sync: false
+      - key: NUXT_PUBLIC_REVERB_KEY   # must equal REVERB_APP_KEY from the shared group
+        sync: false
+      - key: NUXT_PUBLIC_REVERB_HOST  # sidechat-reverb.onrender.com  (no scheme)
+        sync: false
+      - { key: NUXT_PUBLIC_REVERB_PORT, value: "443" }
+      - { key: NUXT_PUBLIC_REVERB_SCHEME, value: https }

@@ -1,0 +1,9 @@
+# Root env (contains secrets); per-app envs are ignored in their own .gitignore.
+/.env
+
+# Dependencies (also covered per-app, listed here for safety).
+/backend/vendor
+/frontend/node_modules
+
+*.log
+.DS_Store
