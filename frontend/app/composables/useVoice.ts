@@ -78,11 +78,14 @@ interface PeerHandle {
    * appear in two places at once — their face on their tile, their screen on the stage —
    * and a single video slot forces a choice between them. Keeping the transceivers around
    * is also how `ontrack` knows which is which: a track carries no label saying "this is a
-   * webcam", but it does arrive on the transceiver it was negotiated into, and both ends
-   * create them in the same order.
+   * webcam", but it does arrive on the transceiver it was negotiated into.
+   *
+   * Null until known. The impolite peer creates both up front; the polite peer starts with
+   * null and adopts them in ontrack as the impolite peer's m-lines arrive (camera first,
+   * then screen). See createPeer for why only one side creates them.
    */
-  cameraTransceiver: RTCRtpTransceiver
-  screenTransceiver: RTCRtpTransceiver
+  cameraTransceiver: RTCRtpTransceiver | null
+  screenTransceiver: RTCRtpTransceiver | null
   analyser: AnalyserNode | null
   speakingUntil: number
   // --- perfect negotiation bookkeeping (see negotiate/onSignal) ---
@@ -90,6 +93,16 @@ interface PeerHandle {
   makingOffer: boolean
   ignoreOffer: boolean
   settingRemoteAnswer: boolean
+  /**
+   * Has the first offer/answer for this pair completed yet?
+   *
+   * Used to break the *initial* glare: both ends create the same transceivers the instant
+   * they see each other, so if both also fire the first offer they collide, and the polite
+   * peer's rollback strands its video transceivers as sendonly (every remote video black).
+   * So the polite peer holds its first offer and answers the impolite peer's instead; once
+   * that's done either side may offer freely (a camera toggle, say).
+   */
+  negotiated: boolean
 }
 
 interface SignalPayload {
@@ -199,6 +212,9 @@ export function useVoice() {
   const channelId = useState<number | null>('voice:channelId', () => null)
   const status = useState<'idle' | 'connecting' | 'connected' | 'error'>('voice:status', () => 'idle')
   const error = useState<string | null>('voice:error', () => null)
+  // A short-lived line for something that happened *to* you — being disconnected by a
+  // moderator, say — that outlives the call it's about and so can't ride on `error`.
+  const notice = useState<string | null>('voice:notice', () => null)
   const peers = useState<Peer[]>('voice:peers', () => [])
   const selfMuted = useState<boolean>('voice:selfMuted', () => false)
   const selfDeafened = useState<boolean>('voice:selfDeafened', () => false)
@@ -339,11 +355,12 @@ export function useVoice() {
       makingOffer: false,
       ignoreOffer: false,
       settingRemoteAnswer: false,
+      negotiated: false,
       analyser: null,
       speakingUntil: 0,
-      // Placeholders; replaced immediately below.
-      cameraTransceiver: null as unknown as RTCRtpTransceiver,
-      screenTransceiver: null as unknown as RTCRtpTransceiver,
+      // The impolite peer fills these in just below; the polite peer adopts them in ontrack.
+      cameraTransceiver: null,
+      screenTransceiver: null,
     }
 
     for (const track of localStream.getAudioTracks()) {
@@ -351,56 +368,46 @@ export function useVoice() {
     }
 
     /**
-     * Two empty video slots, negotiated up front: one for a camera, one for a screen.
+     * Two video slots, one for a camera and one for a screen — but created by *one* side
+     * only, and this is the crux of the whole thing.
      *
-     * Turning either on later then costs a `replaceTrack` into the slot that's already
-     * there, which by spec needs no renegotiation at all. Adding a track only when the
-     * user clicks the button would instead trigger a fresh offer/answer with every peer at
-     * once — the one moment in a call when everybody's connection is busy — and each of
-     * those is a chance to collide, be dropped, or arrive out of order. This way the
-     * awkward part happens once, while connecting, and the buttons are close to instant.
+     * The tidy-looking idea is for both ends to create the same two transceivers, so the
+     * m-lines line up by construction. It does not survive contact with reality: both ends
+     * see each other at the same instant, both fire an offer, and that collision (even with
+     * perfect negotiation resolving it) leaves the rolled-back side's video transceivers
+     * stranded — duplicated, stuck `sendonly`, never receiving. That was the bug behind
+     * every black remote video: `#0 audio, #1 video sendonly, #2 video sendonly` (mine,
+     * orphaned) plus `#3 video recvonly, #4 video recvonly` (adopted) — four video m-lines
+     * where there should be two.
      *
-     * The order matters and is load-bearing: both ends of a pair run this same code, so
-     * both create [audio, camera, screen] in that order, the m-lines line up, and each
-     * incoming track arrives on the transceiver it was meant for. That's what `ontrack`
-     * below relies on to tell a face from a screen — nothing in a MediaStreamTrack says
-     * which it is.
+     * So only the *impolite* peer lays out the video slots. The polite peer creates none and
+     * adopts the impolite peer's when they arrive — see ontrack, which assigns
+     * camera/screen in arrival order (the impolite peer creates them camera-then-screen, and
+     * m-lines arrive in that order). One creator means there is nothing to duplicate, whatever
+     * the timing. We keep the slots pre-negotiated rather than added on the click so that
+     * turning a camera on is a cheap replaceTrack, not an offer storm across every peer.
+     *
+     * No codec pinning: forcing both video m-lines to one shared VP8 payload type made them
+     * indistinguishable on the shared BUNDLE transport, so the receiver dropped every packet.
+     * Letting Chrome number them gives distinct payload types; gzip (see signal) keeps the
+     * larger SDP well under the wire limit.
      */
-    handle.cameraTransceiver = pc.addTransceiver('video', { direction: 'sendrecv' })
-    handle.screenTransceiver = pc.addTransceiver('video', { direction: 'sendrecv' })
+    if (!handle.polite) {
+      handle.cameraTransceiver = pc.addTransceiver('video', { direction: 'sendrecv' })
+      handle.screenTransceiver = pc.addTransceiver('video', { direction: 'sendrecv' })
 
-    /**
-     * Keep the two video m-lines lean, so the offer stays small.
-     *
-     * Left alone, each video m-line advertises the browser's entire codec catalogue — VP8,
-     * VP9, several H.264 profiles, AV1 — every one with its own rtcp-fb and fmtp lines. With
-     * *two* video m-lines that list is the bulk of the SDP, and a full offer runs past the
-     * message-size limit of the WebSocket our signalling rides on (Reverb closes the socket
-     * with a 1009, which the mesh sees as a peer flapping in and out of the call). Pinning
-     * each slot to a single codec (plus its retransmission) roughly halves the offer and
-     * keeps it comfortably under the limit. Both ends run this same code, so the m-lines
-     * still line up. VP8 is the safe universal choice and encodes screen text acceptably.
-     */
-    const videoCaps = RTCRtpSender.getCapabilities('video')
-    if (videoCaps) {
-      const lean = videoCaps.codecs.filter(
-        c => c.mimeType === 'video/VP8' || c.mimeType === 'video/rtx',
-      )
-      if (lean.some(c => c.mimeType === 'video/VP8')) {
-        try {
-          handle.cameraTransceiver.setCodecPreferences(lean)
-          handle.screenTransceiver.setCodecPreferences(lean)
-        } catch {
-          // Older browsers without setCodecPreferences fall back to the full list; if the
-          // offer is then too large they'll flap, but nothing else here breaks.
-        }
-      }
+      if (cameraTrack) void handle.cameraTransceiver.sender.replaceTrack(cameraTrack)
+      if (screenTrack) void handle.screenTransceiver.sender.replaceTrack(screenTrack)
     }
 
-    if (cameraTrack) void handle.cameraTransceiver.sender.replaceTrack(cameraTrack)
-    if (screenTrack) void handle.screenTransceiver.sender.replaceTrack(screenTrack)
-
     pc.onnegotiationneeded = async () => {
+      // Break the initial glare: until the first offer/answer is done, only the impolite
+      // peer offers. Both ends added the same transceivers a moment ago, so if both offered
+      // now they'd collide and the polite peer's rollback would strand its video
+      // transceivers as sendonly — the exact "remote video is black" bug. The polite peer
+      // instead waits and answers; afterwards `negotiated` is set and either side may offer.
+      if (handle.polite && !handle.negotiated) return
+
       try {
         handle.makingOffer = true
         await pc.setLocalDescription()
@@ -434,18 +441,22 @@ export function useVoice() {
     /**
      * Sort each incoming track into the stream it belongs to, by the slot it arrived in.
      *
-     * Two things are going on here.
+     * Three things are going on here.
      *
      * First: we assemble the streams by hand rather than trusting `event.streams[0]`. The
      * stream a track claims to belong to comes from an `msid` in the SDP, and the video
-     * slots above were negotiated *empty* — so there is no msid to speak of, and a track
-     * pushed into one later can arrive orphaned. Adding tracks to streams we own sidesteps
-     * the question entirely.
+     * slots were negotiated *empty* — so there is no msid to speak of, and a track pushed
+     * into one later can arrive orphaned. Adding tracks to streams we own sidesteps that.
      *
-     * Second, and the reason the camera works at all: a MediaStreamTrack carries nothing
-     * that says "webcam" rather than "screen". What it does carry is the transceiver it
-     * came in on — and since both ends created [audio, camera, screen] in the same order,
-     * that's a reliable label. Hence the identity comparison rather than any guessing.
+     * Second: a MediaStreamTrack carries nothing that says "webcam" rather than "screen".
+     * What it does carry is the transceiver it came in on — so telling a face from a screen
+     * is an identity comparison against the two slots, never a guess.
+     *
+     * Third, adoption: the polite peer created no video slots (see createPeer), so for it
+     * the two are still null here. It learns them now, in arrival order — the impolite peer
+     * creates them camera-then-screen and the m-lines arrive in that order, so the first
+     * video track is the camera and the second is the screen. The impolite peer already has
+     * both set, so this adoption is a no-op for it and the identity comparison stands.
      */
     pc.ontrack = ({ track, transceiver }) => {
       if (track.kind === 'audio') {
@@ -459,6 +470,12 @@ export function useVoice() {
         applyAudio(id)
 
         return
+      }
+
+      if (!handle.cameraTransceiver) {
+        handle.cameraTransceiver = transceiver
+      } else if (transceiver !== handle.cameraTransceiver && !handle.screenTransceiver) {
+        handle.screenTransceiver = transceiver
       }
 
       const camera = transceiver === handle.cameraTransceiver
@@ -509,6 +526,42 @@ export function useVoice() {
     peers.value = peers.value.filter(p => p.id !== id)
   }
 
+  /**
+   * Force a fresh offer to one peer, after the tracks a sender carries have changed.
+   *
+   * The video slots are negotiated *empty* (see createPeer), and the promise on the two
+   * screen/camera functions — "replaceTrack, no renegotiation" — turns out to be only half
+   * true. Swapping one live track for another needs no renegotiation, yes. But going from
+   * *no* track to a live one is different: the far end built its m-line expecting nothing,
+   * so the SSRC and msid the new track carries have to be announced, or its depacketizer
+   * quietly drops packets it was never told to decode. On screen that's a video tile that
+   * stays black while the audio is perfectly fine — which is exactly the bug this fixes.
+   *
+   * Only from a stable state. An offer already in flight will carry the new track when it
+   * lands, and a collision (both ends offering at once) is untangled by perfect negotiation
+   * in onSignal — the same makingOffer bookkeeping onnegotiationneeded uses.
+   */
+  async function renegotiate(id: number) {
+    const handle = handles.get(id)
+    if (!handle || handle.pc.signalingState !== 'stable') return
+
+    try {
+      handle.makingOffer = true
+      await handle.pc.setLocalDescription()
+      await signal(id, { description: handle.pc.localDescription!.toJSON() })
+    } catch {
+      // Best effort: a dropped renegotiation is recovered by the next one, or by the ICE
+      // restart in onconnectionstatechange.
+    } finally {
+      handle.makingOffer = false
+    }
+  }
+
+  /** Renegotiate with everyone at once — after a camera or screen goes on or off. */
+  function renegotiateAll() {
+    return Promise.all([...handles.keys()].map(id => renegotiate(id)))
+  }
+
   /** The other half of perfect negotiation: what to do with what they sent. */
   async function onSignal(payload: SignalPayload) {
     // Whispers reach every subscriber — Reverb has no way to address one. Everyone else's
@@ -542,6 +595,9 @@ export function useVoice() {
         // The polite peer, mid-collision, rolls its own offer back here implicitly.
         await pc.setRemoteDescription(description)
         handle.settingRemoteAnswer = false
+        // The first exchange is done, so the initial-glare guard in onnegotiationneeded can
+        // stand down: from here the polite peer is free to offer too (to add its camera).
+        handle.negotiated = true
 
         if (description.type === 'offer') {
           await pc.setLocalDescription()
@@ -861,10 +917,16 @@ export function useVoice() {
     // The browser's own "Stop sharing" bar bypasses our button entirely.
     screenTrack.onended = () => { void stopScreenShare() }
 
-    // Slot it into the transceiver every peer already negotiated. No renegotiation, no
-    // offer/answer storm — the picture simply starts flowing.
+    // Slot it into each peer's screen transceiver, then tell them the slot is live — see
+    // renegotiate() for why the second half isn't optional. The direction bump matters for
+    // the polite peer, whose adopted slot came up recvonly: without flipping it to sendrecv
+    // it can receive a screen but never send one.
     await Promise.all([...handles.values()].map(async (handle) => {
-      const sender = handle.screenTransceiver.sender
+      const transceiver = handle.screenTransceiver
+      if (!transceiver) return
+
+      if (transceiver.direction !== 'sendrecv') transceiver.direction = 'sendrecv'
+      const sender = transceiver.sender
       await sender.replaceTrack(screenTrack)
 
       const params = sender.getParameters()
@@ -872,6 +934,7 @@ export function useVoice() {
       params.encodings[0]!.maxBitrate = SCREEN_MAX_BITRATE
       await sender.setParameters(params).catch(() => {})
     }))
+    await renegotiateAll()
 
     screenStream.value = markRaw(display)
     await publishState()
@@ -881,8 +944,9 @@ export function useVoice() {
     if (!isSharing.value) return
 
     await Promise.all(
-      [...handles.values()].map(handle => handle.screenTransceiver.sender.replaceTrack(null)),
+      [...handles.values()].map(handle => handle.screenTransceiver?.sender.replaceTrack(null)),
     )
+    await renegotiateAll()
 
     screenTrack?.stop()
     screenTrack = null
@@ -901,9 +965,9 @@ export function useVoice() {
    * Turn your camera on.
    *
    * Same trick as the screen, into the other slot: the transceiver was negotiated empty
-   * when the peer connection was built, so this is a `replaceTrack` and nothing more —
-   * no offer, no answer, no renegotiation storm across every peer at the instant you
-   * click the button.
+   * when the peer connection was built, so this is a `replaceTrack` into a slot already
+   * there — followed by one renegotiation so the far end knows the slot went live (without
+   * it the picture never actually reaches them; see renegotiate).
    *
    * Capped well below what a webcam will happily hand you. This is a mesh: your camera
    * goes up your (thin, asymmetric) upload pipe once *per person in the call*, so a 720p
@@ -937,7 +1001,11 @@ export function useVoice() {
     cameraTrack.onended = () => { void stopCamera() }
 
     await Promise.all([...handles.values()].map(async (handle) => {
-      const sender = handle.cameraTransceiver.sender
+      const transceiver = handle.cameraTransceiver
+      if (!transceiver) return
+
+      if (transceiver.direction !== 'sendrecv') transceiver.direction = 'sendrecv'
+      const sender = transceiver.sender
       await sender.replaceTrack(cameraTrack)
 
       const params = sender.getParameters()
@@ -945,6 +1013,7 @@ export function useVoice() {
       params.encodings[0]!.maxBitrate = CAMERA_MAX_BITRATE
       await sender.setParameters(params).catch(() => {})
     }))
+    await renegotiateAll()
 
     cameraStream.value = markRaw(capture)
     await publishState()
@@ -954,8 +1023,9 @@ export function useVoice() {
     if (!isCameraOn.value) return
 
     await Promise.all(
-      [...handles.values()].map(handle => handle.cameraTransceiver.sender.replaceTrack(null)),
+      [...handles.values()].map(handle => handle.cameraTransceiver?.sender.replaceTrack(null)),
     )
+    await renegotiateAll()
 
     // Stopping the track is what turns the little green light off. Leaving it running and
     // merely un-sent is the thing people (rightly) do not forgive.
@@ -970,10 +1040,52 @@ export function useVoice() {
     return isCameraOn.value ? stopCamera() : startCamera()
   }
 
+  // --- moderation ---
+  //
+  // Only an owner may do this, and it's the *server* that decides so — these just ask, and
+  // a 403 comes back to anyone who shouldn't have had the button in the first place. The
+  // person on the receiving end isn't torn down from here: the server deletes their seat
+  // and tells their own browser to hang up (see useUserStream), which drops them from the
+  // presence channel, which is how everyone else — us included — sees them go.
+
+  /** Disconnect one person from this call. */
+  async function disconnectUser(userId: number) {
+    if (!channelId.value) return
+    try {
+      await api(`/api/channels/${channelId.value}/voice/disconnect`, {
+        method: 'POST',
+        body: { user_id: userId },
+      })
+    } catch {
+      error.value = 'Couldn\'t disconnect that person.'
+    }
+  }
+
+  /** Clear the room: disconnect everyone except you. */
+  async function disconnectAll() {
+    if (!channelId.value) return
+    try {
+      await api(`/api/channels/${channelId.value}/voice/disconnect`, { method: 'POST' })
+    } catch {
+      error.value = 'Couldn\'t disconnect everyone.'
+    }
+  }
+
+  /**
+   * You were disconnected by a moderator. Tear the call down and leave a word behind —
+   * otherwise the audio just stops and the tiles vanish with nothing said about why.
+   */
+  async function disconnectedByModerator() {
+    await disconnect()
+    notice.value = 'You were disconnected from the call by a moderator.'
+    setTimeout(() => { notice.value = null }, 8000)
+  }
+
   return {
     channelId,
     status,
     error,
+    notice,
     peers,
     selfMuted,
     selfDeafened,
@@ -992,5 +1104,8 @@ export function useVoice() {
     setPeerVolume,
     toggleScreenShare,
     toggleCamera,
+    disconnectUser,
+    disconnectAll,
+    disconnectedByModerator,
   }
 }

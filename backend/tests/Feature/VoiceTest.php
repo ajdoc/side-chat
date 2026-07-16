@@ -1,5 +1,6 @@
 <?php
 
+use App\Events\VoiceParticipantDisconnected;
 use App\Events\VoiceStateUpdated;
 use App\Models\Channel;
 use App\Models\Message;
@@ -273,4 +274,91 @@ it('forbids non-members from joining or reading a call', function () {
     $this->postJson("/api/channels/{$channel->id}/voice/leave")->assertForbidden();
     $this->patchJson("/api/channels/{$channel->id}/voice/state", ['muted' => true])->assertForbidden();
     $this->getJson("/api/servers/{$server->id}/voice")->assertForbidden();
+});
+
+/*
+ * Moderation. Turning other people out of a call is an owner-only power, and the person on
+ * the receiving end has to be *told* — their browser is holding a live mesh open that the
+ * presence channel can't ask to hang up on itself.
+ */
+it('lets the owner disconnect one participant and tells that person', function () {
+    [$owner, $server, $channel] = ownerWithVoiceChannel();
+    $member = User::factory()->create();
+    $server->members()->attach($member->id, ['role' => 'member']);
+
+    foreach ([$owner, $member] as $user) {
+        Passport::actingAs($user);
+        $this->postJson("/api/channels/{$channel->id}/voice/join")->assertOk();
+    }
+
+    Event::fake([VoiceParticipantDisconnected::class]);
+
+    Passport::actingAs($owner);
+    $this->postJson("/api/channels/{$channel->id}/voice/disconnect", ['user_id' => $member->id])
+        ->assertOk()
+        ->assertJsonPath('disconnected', 1);
+
+    // The member's seat is gone; the owner keeps theirs.
+    expect(VoiceParticipant::where('channel_id', $channel->id)->pluck('user_id')->all())
+        ->toBe([$owner->id]);
+
+    Event::assertDispatched(
+        VoiceParticipantDisconnected::class,
+        fn (VoiceParticipantDisconnected $e) => $e->target->id === $member->id
+            && $e->channel->id === $channel->id,
+    );
+});
+
+it('lets the owner clear the room but keeps their own seat', function () {
+    [$owner, $server, $channel] = ownerWithVoiceChannel();
+    $members = User::factory()->count(3)->create();
+    $server->members()->attach($members->pluck('id'), ['role' => 'member']);
+
+    foreach ($members->push($owner) as $user) {
+        Passport::actingAs($user);
+        $this->postJson("/api/channels/{$channel->id}/voice/join")->assertOk();
+    }
+
+    Passport::actingAs($owner);
+    $this->postJson("/api/channels/{$channel->id}/voice/disconnect")
+        ->assertOk()
+        ->assertJsonPath('disconnected', 3);
+
+    expect(VoiceParticipant::where('channel_id', $channel->id)->pluck('user_id')->all())
+        ->toBe([$owner->id]);
+});
+
+it('forbids a non-owner member from disconnecting anyone', function () {
+    [$owner, $server, $channel] = ownerWithVoiceChannel();
+    $member = User::factory()->create();
+    $server->members()->attach($member->id, ['role' => 'member']);
+
+    foreach ([$owner, $member] as $user) {
+        Passport::actingAs($user);
+        $this->postJson("/api/channels/{$channel->id}/voice/join")->assertOk();
+    }
+
+    Passport::actingAs($member);
+    $this->postJson("/api/channels/{$channel->id}/voice/disconnect", ['user_id' => $owner->id])
+        ->assertForbidden();
+
+    // Nobody was moved.
+    expect(VoiceParticipant::where('channel_id', $channel->id)->count())->toBe(2);
+});
+
+it('has nobody who may disconnect people in a DM', function () {
+    [$a, $b, $conversation] = dmBetween();
+    $channel = $conversation->channel;
+
+    foreach ([$a, $b] as $user) {
+        Passport::actingAs($user);
+        $this->postJson("/api/channels/{$channel->id}/voice/join")->assertOk();
+    }
+
+    // A DM has no owner, so neither person may hang up on the other — they leave themselves.
+    Passport::actingAs($a);
+    $this->postJson("/api/channels/{$channel->id}/voice/disconnect", ['user_id' => $b->id])
+        ->assertForbidden();
+
+    expect(VoiceParticipant::where('channel_id', $channel->id)->count())->toBe(2);
 });

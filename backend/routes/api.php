@@ -104,6 +104,8 @@ Route::middleware('auth:api')->group(function () {
     Route::post('channels/{channel}/voice/leave', [VoiceController::class, 'leave']);
     Route::patch('channels/{channel}/voice/state', [VoiceController::class, 'updateState']);
     Route::post('channels/{channel}/voice/heartbeat', [VoiceController::class, 'heartbeat']);
+    // Owner-only: disconnect one participant (with user_id) or clear the room (without).
+    Route::post('channels/{channel}/voice/disconnect', [VoiceController::class, 'disconnect']);
 
     /*
      * DMs and group chats.

@@ -177,7 +177,7 @@ useHead({ title: computed(() => title.value) })
     <!-- The call stage, but quiet: a chat with nobody calling shows the conversation, not
          an empty room. Same component a voice channel uses — same mesh, same signalling. -->
     <template #call>
-      <VoiceChannel :channel="channel" quiet-when-empty join-label="Join call" />
+      <VoiceChannel :channel="channel" quiet-when-empty join-label="Join call" :can-moderate="isOwner" />
     </template>
 
     <template #empty>

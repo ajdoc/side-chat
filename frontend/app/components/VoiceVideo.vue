@@ -20,14 +20,29 @@ const props = defineProps<{
 
 const el = ref<HTMLVideoElement | null>(null)
 
-watchEffect(() => {
+/**
+ * Bind the stream to the element by hand — and do it on a schedule we control.
+ *
+ * The earlier version leaned on a `watchEffect` that read the template ref: null before
+ * mount, so it relied on the ref *populating* to re-run the effect and set `srcObject`
+ * for the first time. When that re-run doesn't land, nothing assigns the stream and the
+ * <video> sits there autoplaying nothing — a silent black rectangle, camera and screen
+ * share alike, including your own self-view, which never even goes near a peer connection.
+ *
+ * So bind explicitly instead: once on mount, when the element is guaranteed to exist, and
+ * again whenever the stream itself changes (camera toggled, a new peer's track arrives).
+ */
+function bind() {
   if (!el.value) return
 
   el.value.srcObject = props.stream
   // Autoplay is only permitted for muted video, and the audio is coming through its own
   // element anyway — playing it here as well would double every voice.
   el.value.play().catch(() => {})
-})
+}
+
+onMounted(bind)
+watch(() => props.stream, bind)
 </script>
 
 <template>

@@ -2,10 +2,12 @@
 
 namespace App\Http\Controllers;
 
+use App\Actions\Voice\DisconnectVoiceParticipantsAction;
 use App\Actions\Voice\JoinVoiceChannelAction;
 use App\Actions\Voice\LeaveVoiceChannelAction;
 use App\Actions\Voice\UpdateVoiceStateAction;
 use App\DTOs\Voice\UpdateVoiceStateData;
+use App\Http\Requests\Voice\DisconnectVoiceParticipantsRequest;
 use App\Http\Requests\Voice\IndexVoiceRequest;
 use App\Http\Requests\Voice\JoinVoiceChannelRequest;
 use App\Http\Requests\Voice\UpdateVoiceStateRequest;
@@ -88,5 +90,22 @@ class VoiceController extends Controller
         $action->handle($channel, $request->user(), UpdateVoiceStateData::fromArray([]));
 
         return response()->noContent();
+    }
+
+    /**
+     * Disconnect someone else from the call, or clear the whole room — an owner-only power
+     * (the request enforces that). With a `user_id`, that one person; without, everyone but
+     * you. Each removal takes the ordinary leave path, so a chat's call ends normally when
+     * the last person is turned out.
+     */
+    public function disconnect(DisconnectVoiceParticipantsRequest $request, Channel $channel, DisconnectVoiceParticipantsAction $action): JsonResponse
+    {
+        $count = $action->handle(
+            $channel,
+            $request->user(),
+            $request->filled('user_id') ? $request->integer('user_id') : null,
+        );
+
+        return response()->json(['disconnected' => $count]);
     }
 }

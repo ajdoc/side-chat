@@ -10,6 +10,7 @@ import {
   PhoneOff,
   ScreenShare,
   ScreenShareOff,
+  UserX,
   Video,
   VideoOff,
   Volume2,
@@ -38,9 +39,16 @@ const props = withDefaults(defineProps<{
   /** Render nothing at all when there's no call and you're not in one. */
   quietWhenEmpty?: boolean
   joinLabel?: string
+  /**
+   * You own the place this call lives in — a server, or a group chat — and so may turn
+   * other people out of it. The container knows this; a plain voice channel doesn't, which
+   * is why it's handed in rather than worked out here. A DM has no owner and never sets it.
+   */
+  canModerate?: boolean
 }>(), {
   quietWhenEmpty: false,
   joinLabel: 'Join voice',
+  canModerate: false,
 })
 
 const { user } = useAuth()
@@ -49,6 +57,7 @@ const {
   channelId,
   status,
   error,
+  notice,
   peers,
   selfMuted,
   selfDeafened,
@@ -65,6 +74,8 @@ const {
   setPeerVolume,
   toggleScreenShare,
   toggleCamera,
+  disconnectUser,
+  disconnectAll,
 } = useVoice()
 
 /** Are we in *this* channel's call? You can be in another one and just reading this one. */
@@ -223,9 +234,11 @@ function initials(name: string) {
             :muted="peer.muted"
             :sharing="peer.screenSharing"
             :watching="watching === peer.id"
+            :can-moderate="canModerate"
             @toggle-mute="togglePeerMute(peer.id)"
             @set-volume="setPeerVolume(peer.id, $event)"
             @watch="watching = peer.id"
+            @disconnect="disconnectUser(peer.id)"
           />
         </div>
       </div>
@@ -274,6 +287,20 @@ function initials(name: string) {
           {{ isSharing ? 'Stop sharing' : 'Share screen' }}
         </Button>
 
+        <!-- Owner only, and only when there's actually anyone to clear out. Turns everyone
+             but you out of the room; you keep your seat (use Leave for that). -->
+        <Button
+          v-if="canModerate && peers.length"
+          variant="secondary"
+          size="sm"
+          class="gap-2 text-destructive hover:bg-destructive hover:text-destructive-foreground"
+          title="Disconnect everyone else from the call"
+          @click="disconnectAll"
+        >
+          <UserX class="h-4 w-4" />
+          Disconnect all
+        </Button>
+
         <Button variant="destructive" size="icon" title="Leave the call" @click="disconnect">
           <PhoneOff class="h-4 w-4" />
         </Button>
@@ -282,6 +309,12 @@ function initials(name: string) {
 
     <p v-if="status === 'error' && error" class="border-t px-4 py-2 text-xs text-destructive">
       {{ error }}
+    </p>
+
+    <!-- Something that happened *to* you — being disconnected — which by nature shows up
+         after you've already left the call, so it can't live inside the in-call view. -->
+    <p v-if="notice" class="border-t px-4 py-2 text-xs text-muted-foreground">
+      {{ notice }}
     </p>
   </section>
 </template>

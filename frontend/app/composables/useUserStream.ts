@@ -21,7 +21,7 @@ export function useUserStream() {
   const { user } = useAuth()
   const { conversations, upsert, patch, forget, byChannel } = useConversations()
   const { incoming, ringingFor, stopRinging } = useCall()
-  const { channelId: callChannelId, disconnect } = useVoice()
+  const { channelId: callChannelId, disconnect, disconnectedByModerator } = useVoice()
 
   const subscribed = useState<number | null>('user-stream:id', () => null)
 
@@ -97,6 +97,14 @@ export function useUserStream() {
         if (p.user.id === user.value?.id && incoming.value?.conversation.id === p.conversation_id) {
           stopRinging()
         }
+      })
+
+      // An owner turned you out of a call. It arrives here, on your personal stream, rather
+      // than on the call itself, because a call outlives the page it began on — you might be
+      // reading a text channel with the mesh still up. Only hang up if it's the call you're
+      // actually in; a stale event for a room you already left is nothing to act on.
+      .listen('.VoiceParticipantDisconnected', (p: { channel_id: number }) => {
+        if (callChannelId.value === p.channel_id) disconnectedByModerator()
       })
   }
 

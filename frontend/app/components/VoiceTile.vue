@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { Loader2, MicOff, ScreenShare, Volume2, VolumeX, WifiOff } from 'lucide-vue-next'
+import { Loader2, MicOff, PhoneOff, ScreenShare, Volume2, VolumeX, WifiOff } from 'lucide-vue-next'
 import type { Peer } from '~/types'
 
 /**
@@ -19,12 +19,15 @@ const props = defineProps<{
   sharing?: boolean
   /** Set when this tile's screen is the one on the stage. */
   watching?: boolean
+  /** You own this room, so you may turn other people out of it. Never on your own tile. */
+  canModerate?: boolean
 }>()
 
 const emit = defineEmits<{
   toggleMute: []
   setVolume: [value: number]
   watch: []
+  disconnect: []
 }>()
 
 function initials(name: string) {
@@ -139,5 +142,20 @@ const volumeLabel = computed(() => `${Math.round(props.peer.volume * 100)}%`)
         {{ peer.localMuted ? 'off' : volumeLabel }}
       </span>
     </div>
+
+    <!--
+      An owner's power, and theirs alone. Unlike the volume and local-mute above — which
+      change only what *you* hear — this turns the person out of the call for everybody.
+    -->
+    <button
+      v-if="!self && canModerate"
+      type="button"
+      class="flex w-full items-center justify-center gap-1.5 rounded-md border border-destructive/30 px-2 py-1 text-xs font-medium text-destructive transition hover:bg-destructive hover:text-destructive-foreground"
+      :title="`Disconnect ${peer.name} from the call`"
+      @click="emit('disconnect')"
+    >
+      <PhoneOff class="h-3.5 w-3.5" />
+      Disconnect
+    </button>
   </div>
 </template>
