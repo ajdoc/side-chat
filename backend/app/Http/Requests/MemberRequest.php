@@ -7,6 +7,7 @@ use App\Models\Channel;
 use App\Models\Conversation;
 use App\Models\Message;
 use App\Models\Server;
+use App\Models\SideChat;
 use App\Models\Thread;
 use Illuminate\Foundation\Http\FormRequest;
 
@@ -57,6 +58,11 @@ abstract class MemberRequest extends FormRequest
         $thread = $this->route('thread');
         if ($thread instanceof Thread) {
             return $thread->loadMissing('channel')->channel->container();
+        }
+
+        $sideChat = $this->route('sideChat');
+        if ($sideChat instanceof SideChat) {
+            return $sideChat->loadMissing('channel')->channel->container();
         }
 
         $message = $this->route('message');

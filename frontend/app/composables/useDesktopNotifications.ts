@@ -11,7 +11,7 @@ export function useDesktopNotifications() {
 
   /** Ask once, the first time. A no-op if the user has already granted or blocked us. */
   async function ensurePermission(): Promise<boolean> {
-    console.log(supported);
+    
     if (!supported) return false
     if (Notification.permission === 'default') {
       try {

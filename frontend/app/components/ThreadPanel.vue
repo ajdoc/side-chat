@@ -200,7 +200,7 @@ onBeforeUnmount(teardown)
                 <DynamicScrollerItem
                   :item="item"
                   :active="active"
-                  :size-dependencies="[item.body, item.reply_to, item.edited, item.attachments, item.reactions, item.link_previews, item.pinned]"
+                  :size-dependencies="[item.body, item.reply_to, item.edited, item.attachments, item.reactions, item.comments, item.link_previews, item.pinned]"
                 >
                   <MessageItem
                     :message="item"

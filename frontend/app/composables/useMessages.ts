@@ -1,4 +1,4 @@
-import type { LinkPreview, Message, Reaction, StartedThread, Thread } from '~/types'
+import type { CommentSummary, LinkPreview, Message, Reaction, SideChat, StartedThread, Thread } from '~/types'
 
 // Messages for one text channel, plus the real-time Reverb subscription.
 export function useMessages() {
@@ -10,6 +10,8 @@ export function useMessages() {
   const loadingOlder = ref(false)
   // Shared with useThreads() so the Threads list stays in sync.
   const threads = useState<Thread[]>('channel:threads', () => [])
+  // Likewise for side chats — the list panel and the timeline cards read the same state.
+  const sideChats = useState<SideChat[]>('channel:sideChats', () => [])
   // Likewise for the Pinned tab: this composable owns the channel stream, so it's the one
   // that folds a pin toggle into the shared list. See usePins().
   const { toggle: togglePinRequest, apply: applyPin } = usePins()
@@ -41,6 +43,18 @@ export function useMessages() {
     if (idx !== -1) {
       threads.value.splice(idx, 1, { ...threads.value[idx]!, replies_count: repliesCount, ...(name ? { name } : {}) })
     }
+  }
+  /** Attach (or refresh) the living-object card on the message a side chat was spun off. */
+  function setStartedSideChat(messageId: number | null, sideChat: SideChat) {
+    if (!messageId) return
+    const idx = messages.value.findIndex(m => m.id === messageId)
+    if (idx !== -1) messages.value.splice(idx, 1, { ...messages.value[idx]!, started_side_chat: sideChat })
+  }
+  /** Keep the shared side-chats list in sync (upsert, newest first). */
+  function upsertSideChat(sideChat: SideChat) {
+    const idx = sideChats.value.findIndex(s => s.id === sideChat.id)
+    if (idx !== -1) sideChats.value.splice(idx, 1, { ...sideChats.value[idx]!, ...sideChat })
+    else sideChats.value = [sideChat, ...sideChats.value]
   }
 
   async function load(id: number) {
@@ -139,6 +153,11 @@ export function useMessages() {
       .listen('.ReactionToggled', (p: { message_id: number, reactions: Reaction[] }) => {
         patchMessage(p.message_id, { reactions: p.reactions })
       })
+      // A comment ("word-reaction") was posted or removed — refresh the chips. We receive
+      // our own broadcast too, so this is also how the actor's chips update.
+      .listen('.CommentPosted', (p: { message_id: number, comments: CommentSummary[] }) => {
+        patchMessage(p.message_id, { comments: p.comments })
+      })
       // A link finished unfurling on the queue — drop the card in under the message.
       .listen('.MessagePreviewsUpdated', (p: { message_id: number, link_previews: LinkPreview[] }) => {
         patchMessage(p.message_id, { link_previews: p.link_previews })
@@ -167,6 +186,16 @@ export function useMessages() {
       .listen('.ThreadDeleted', (a: { thread_id: number, message_id: number | null }) => {
         setStartedThread(a.message_id, null)
         threads.value = threads.value.filter(t => t.id !== a.thread_id)
+      })
+      // A side chat was spun up — drop its living-object card onto the origin message.
+      .listen('.SideChatCreated', (s: SideChat) => {
+        setStartedSideChat(s.message_id, s)
+        upsertSideChat(s)
+      })
+      // Its pulse changed (a message, a join, a decision) — refresh the card in place.
+      .listen('.SideChatActivity', (s: SideChat) => {
+        setStartedSideChat(s.message_id, s)
+        upsertSideChat(s)
       })
   }
 

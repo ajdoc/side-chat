@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { Info, LogOut, MessagesSquare, Pencil, Phone, UserPlus, Users } from 'lucide-vue-next'
+import { Info, LogOut, MessagesSquare, Pencil, Phone, Rocket, UserPlus, Users } from 'lucide-vue-next'
 import { Button } from '~/components/ui/button'
 import {
   DropdownMenu,
@@ -73,6 +73,9 @@ async function onCall() {
 
 function openThreadsList() {
   navigateTo({ path: route.path, query: { threads: '1' } })
+}
+function openSideChatsList() {
+  navigateTo({ path: route.path, query: { sidechats: '1' } })
 }
 function openInfo() {
   navigateTo({ path: route.path, query: { info: '1' } })
@@ -148,6 +151,9 @@ useHead({ title: computed(() => title.value) })
 
       <Button variant="ghost" size="sm" class="gap-2 text-muted-foreground" @click="openThreadsList">
         <MessagesSquare class="h-4 w-4" /> Threads
+      </Button>
+      <Button variant="ghost" size="sm" class="gap-2 text-muted-foreground" @click="openSideChatsList">
+        <Rocket class="h-4 w-4" /> Side Chats
       </Button>
       <Button variant="ghost" size="sm" class="gap-2 text-muted-foreground" @click="openInfo">
         <Info class="h-4 w-4" /> Info

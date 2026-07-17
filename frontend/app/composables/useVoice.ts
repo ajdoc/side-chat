@@ -140,6 +140,8 @@ interface JoinResponse {
 interface LocalPrefs {
   volume: number
   muted: boolean
+  /** How loud you like *their shared screen* — independent of their voice. */
+  screenVolume?: number
 }
 
 // Module scope, not component scope: one call, however many components are looking at it.
@@ -279,9 +281,10 @@ export function useVoice() {
     const muted = peer.localMuted || selfDeafened.value
     handle.audio.volume = peer.volume
     handle.audio.muted = muted
-    // The shared audio answers to the same knobs: mute someone and their screen goes quiet
-    // too, and deafening silences the lot.
-    handle.screenAudio.volume = peer.volume
+    // The shared audio still answers to *mute* and *deafen* — silencing someone silences
+    // their screen too — but rides its own volume so a loud shared clip can be turned down
+    // without quietening the person talking over it. See setPeerScreenVolume.
+    handle.screenAudio.volume = peer.screenVolume
     handle.screenAudio.muted = muted
   }
 
@@ -554,6 +557,7 @@ export function useVoice() {
       cameraOn: false,
       localMuted: pref?.muted ?? false,
       volume: pref?.volume ?? 1,
+      screenVolume: pref?.screenVolume ?? 1,
     }]
   }
 
@@ -928,7 +932,7 @@ export function useVoice() {
     const localMuted = !peer.localMuted
     patchPeer(id, { localMuted })
     applyAudio(id)
-    savePref(id, { volume: peer.volume, muted: localMuted })
+    savePref(id, { volume: peer.volume, muted: localMuted, screenVolume: peer.screenVolume })
   }
 
   /** Turn one person up or down, for you alone. `volume` is 0–1. */
@@ -939,7 +943,18 @@ export function useVoice() {
     const clamped = Math.min(1, Math.max(0, volume))
     patchPeer(id, { volume: clamped })
     applyAudio(id)
-    savePref(id, { volume: clamped, muted: peer.localMuted })
+    savePref(id, { volume: clamped, muted: peer.localMuted, screenVolume: peer.screenVolume })
+  }
+
+  /** Turn one person's *shared screen* up or down, for you alone. `volume` is 0–1. */
+  function setPeerScreenVolume(id: number, volume: number) {
+    const peer = peers.value.find(p => p.id === id)
+    if (!peer) return
+
+    const clamped = Math.min(1, Math.max(0, volume))
+    patchPeer(id, { screenVolume: clamped })
+    applyAudio(id)
+    savePref(id, { volume: peer.volume, muted: peer.localMuted, screenVolume: clamped })
   }
 
   // --- screen sharing ---
@@ -1171,6 +1186,7 @@ export function useVoice() {
     toggleDeafen,
     togglePeerMute,
     setPeerVolume,
+    setPeerScreenVolume,
     toggleScreenShare,
     toggleCamera,
     disconnectUser,

@@ -1,7 +1,13 @@
 <script setup lang="ts">
-import { CornerUpLeft, Info, MessageSquarePlus, MessagesSquare, Paperclip, Pencil, Pin, PinOff, Trash2, X } from 'lucide-vue-next'
+import { CheckCircle2, CornerUpLeft, Info, MessageSquarePlus, MessageSquareText, MessagesSquare, MoreHorizontal, Paperclip, Pencil, Pin, PinOff, Rocket, Trash2, X } from 'lucide-vue-next'
 import type { Message, User } from '~/types'
 import { Button } from '~/components/ui/button'
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from '~/components/ui/dropdown-menu'
 import {
   AlertDialog,
   AlertDialogAction,
@@ -17,6 +23,10 @@ const props = defineProps<{
   message: Message
   currentUserId: number | null
   threadActions?: boolean
+  /** Show side-chat affordances: the living-object card, and (when joined) the decision toggle. */
+  sideChatActions?: boolean
+  /** Whether the viewer has joined this side chat — gates the decision toggle. */
+  joined?: boolean
   highlighted?: boolean
   /** People whose read marker rests on *this* message — see useReads().readersByMessage. */
   readers?: User[]
@@ -28,6 +38,9 @@ const emit = defineEmits<{
   remove: [id: number]
   'create-thread': [messageId: number]
   'open-thread': [threadId: number]
+  'create-side-chat': [messageId: number]
+  'open-side-chat': [sideChatId: number]
+  'toggle-decision': [messageId: number]
   'jump-to-reply': [messageId: number]
   'toggle-reaction': [messageId: number, emoji: string]
   'toggle-pin': [messageId: number]
@@ -49,7 +62,9 @@ const removeIds = ref<number[]>([])
 const editFileInput = ref<HTMLInputElement | null>(null)
 const showDelete = ref(false)
 const showInfo = ref(false)
+const showComments = ref(false)
 const pickerOpen = ref(false)
+const menuOpen = ref(false)
 
 function initials(name: string) {
   return name.split(' ').map(w => w[0]).slice(0, 2).join('').toUpperCase()
@@ -124,6 +139,11 @@ function saveEdit() {
            the only way to know a message is pinned is to go looking for it. -->
       <p v-if="message.pinned" class="mb-0.5 flex items-center gap-1 text-xs font-medium text-primary">
         <Pin class="h-3 w-3 shrink-0" /> Pinned
+      </p>
+
+      <!-- Recorded as a decision (side chats only) — says so on the message, like a pin. -->
+      <p v-if="message.decided" class="mb-0.5 flex items-center gap-1 text-xs font-medium text-emerald-600 dark:text-emerald-400">
+        <CheckCircle2 class="h-3 w-3 shrink-0" /> Decision
       </p>
 
       <!-- reply reference: click to jump to the original message -->
@@ -201,6 +221,14 @@ function saveEdit() {
           @toggle="emit('toggle-reaction', message.id, $event)"
         />
 
+        <!-- "word-reactions": popular comment chips. Click one to co-sign it, or + to write. -->
+        <CommentBar
+          :message-id="message.id"
+          :comments="message.comments ?? []"
+          :current-user-id="currentUserId"
+          @open="showComments = true"
+        />
+
         <!-- thread indicator (channel timeline only) -->
         <button
           v-if="threadActions && message.started_thread"
@@ -214,6 +242,14 @@ function saveEdit() {
           </span>
         </button>
 
+        <!-- side chat living-object card (channel timeline only) -->
+        <SideChatCard
+          v-if="sideChatActions && message.started_side_chat"
+          :side-chat="message.started_side_chat"
+          :current-user-id="currentUserId"
+          @open="emit('open-side-chat', message.started_side_chat!.id)"
+        />
+
         <!-- who has read this far -->
         <SeenBy :readers="readers ?? []" />
       </template>
@@ -223,19 +259,35 @@ function saveEdit() {
     <div
       v-if="!editing"
       class="absolute right-2 top-1 items-center gap-1 rounded border bg-background p-0.5 shadow-sm"
-      :class="pickerOpen ? 'flex' : 'hidden group-hover:flex'"
+      :class="pickerOpen || menuOpen ? 'flex' : 'hidden group-hover:flex'"
     >
       <EmojiPicker v-model:open="pickerOpen" @select="emit('toggle-reaction', message.id, $event)" />
       <button class="rounded p-1 text-muted-foreground hover:text-foreground" title="Reply" @click="emit('reply', message)">
         <CornerUpLeft class="h-4 w-4" />
       </button>
+      <button class="rounded p-1 text-muted-foreground hover:text-foreground" title="Comment" @click="showComments = true">
+        <MessageSquareText class="h-4 w-4" />
+      </button>
+      <!-- Threads are the primary per-message follow-up: a quick reply that stays attached
+           to this message. Starting a *side chat* — a room with its own roster — is a more
+           deliberate act, so it lives one level down, in the overflow menu below. -->
       <button
         v-if="threadActions"
         class="rounded p-1 text-muted-foreground hover:text-foreground"
-        title="Create thread"
+        title="Reply in thread"
         @click="emit('create-thread', message.id)"
       >
         <MessageSquarePlus class="h-4 w-4" />
+      </button>
+      <!-- Record / un-record a decision (inside a side chat, participants only). -->
+      <button
+        v-if="sideChatActions && joined"
+        class="rounded p-1 hover:text-foreground"
+        :class="message.decided ? 'text-emerald-600 dark:text-emerald-400' : 'text-muted-foreground'"
+        :title="message.decided ? 'Unmark decision' : 'Mark as decision'"
+        @click="emit('toggle-decision', message.id)"
+      >
+        <CheckCircle2 class="h-4 w-4" />
       </button>
       <!-- Any member may pin *or* unpin: a pin belongs to the channel, not to whoever
            happened to make it. -->
@@ -256,9 +308,26 @@ function saveEdit() {
       <button v-if="canModify" class="rounded p-1 text-muted-foreground hover:text-destructive" title="Delete" @click="showDelete = true">
         <Trash2 class="h-4 w-4" />
       </button>
+
+      <!-- Overflow: deliberate, less-frequent actions. Starting a side chat lives here so it
+           reads as "open a room about this", not as a second reply button. -->
+      <DropdownMenu v-if="threadActions" v-model:open="menuOpen">
+        <DropdownMenuTrigger as-child>
+          <button class="rounded p-1 text-muted-foreground hover:text-foreground" title="More actions" aria-label="More actions">
+            <MoreHorizontal class="h-4 w-4" />
+          </button>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="end">
+          <DropdownMenuItem @click="emit('create-side-chat', message.id)">
+            <Rocket class="mr-2 h-4 w-4" /> Start a side chat…
+          </DropdownMenuItem>
+        </DropdownMenuContent>
+      </DropdownMenu>
     </div>
 
     <MessageInfoDialog v-if="showInfo" v-model:open="showInfo" :message="message" />
+
+    <CommentDialog v-if="showComments" v-model:open="showComments" :message="message" />
 
     <AlertDialog v-model:open="showDelete">
       <AlertDialogContent>

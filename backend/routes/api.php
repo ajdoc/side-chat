@@ -6,6 +6,7 @@ use App\Http\Controllers\Auth\SocialAuthController;
 use App\Http\Controllers\ChannelController;
 use App\Http\Controllers\ChannelLinkController;
 use App\Http\Controllers\ChannelMemberController;
+use App\Http\Controllers\CommentController;
 use App\Http\Controllers\ConversationController;
 use App\Http\Controllers\InviteController;
 use App\Http\Controllers\JoinRequestController;
@@ -16,6 +17,9 @@ use App\Http\Controllers\PreferencesController;
 use App\Http\Controllers\ReactionController;
 use App\Http\Controllers\ReadReceiptController;
 use App\Http\Controllers\ServerController;
+use App\Http\Controllers\SideChatController;
+use App\Http\Controllers\SideChatMessageController;
+use App\Http\Controllers\DecisionController;
 use App\Http\Controllers\ThreadController;
 use App\Http\Controllers\ThreadMessageController;
 use App\Http\Controllers\VoiceController;
@@ -76,6 +80,12 @@ Route::middleware('auth:api')->group(function () {
 
     // Reactions: any server member may react, on channel *and* thread messages.
     Route::post('messages/{message}/reactions', [ReactionController::class, 'toggle']);
+
+    // Comments ("word-reactions"): a short annotation on a message. Store toggles a phrase
+    // (co-sign / un-co-sign); index is the full list behind the chips; destroy removes one.
+    Route::get('messages/{message}/comments', [CommentController::class, 'index']);
+    Route::post('messages/{message}/comments', [CommentController::class, 'store']);
+    Route::delete('comments/{comment}', [CommentController::class, 'destroy']);
 
     // "Message info": who saw it, who hasn't, who reacted.
     Route::get('messages/{message}/info', [MessageInfoController::class, 'show']);
@@ -140,4 +150,24 @@ Route::middleware('auth:api')->group(function () {
     Route::get('threads/{thread}', [ThreadController::class, 'show']);
     Route::get('threads/{thread}/messages', [ThreadMessageController::class, 'index']);
     Route::post('threads/{thread}/messages', [ThreadMessageController::class, 'store']);
+
+    /*
+     * Side chats: a mini room spun off a message, with its own roster and timeline.
+     *
+     * Reading (index/show/messages index) needs only channel membership; taking part
+     * (posting, recording a decision) needs a place on the roster — that's what join buys.
+     */
+    Route::get('channels/{channel}/side-chats', [SideChatController::class, 'index']);
+    Route::post('channels/{channel}/side-chats', [SideChatController::class, 'store']);
+    Route::get('side-chats/{sideChat}', [SideChatController::class, 'show']);
+    // Standing highlights: the side chat's decisions and pinned messages (the panel's card).
+    Route::get('side-chats/{sideChat}/highlights', [SideChatController::class, 'highlights']);
+    Route::post('side-chats/{sideChat}/join', [SideChatController::class, 'join']);
+    Route::post('side-chats/{sideChat}/leave', [SideChatController::class, 'leave']);
+    // Add other channel members to the roster. Any participant may bring people in.
+    Route::post('side-chats/{sideChat}/participants', [SideChatController::class, 'addParticipants']);
+    Route::get('side-chats/{sideChat}/messages', [SideChatMessageController::class, 'index']);
+    Route::post('side-chats/{sideChat}/messages', [SideChatMessageController::class, 'store']);
+    // Record a message as a decision (the ✅ on a side chat's card), or take it back.
+    Route::post('messages/{message}/decision', [DecisionController::class, 'toggle']);
 });

@@ -1,4 +1,4 @@
-import type { LinkPreview, Message, Reaction, Thread } from '~/types'
+import type { CommentSummary, LinkPreview, Message, Reaction, Thread } from '~/types'
 
 // One thread: its metadata, messages, and the real-time subscription (thread.{id}).
 export function useThreadMessages() {
@@ -122,6 +122,9 @@ export function useThreadMessages() {
       .listen('.MessageDeleted', (p: { id: number }) => removeMessage(p.id))
       .listen('.ReactionToggled', (p: { message_id: number, reactions: Reaction[] }) => {
         patchMessage(p.message_id, { reactions: p.reactions })
+      })
+      .listen('.CommentPosted', (p: { message_id: number, comments: CommentSummary[] }) => {
+        patchMessage(p.message_id, { comments: p.comments })
       })
       .listen('.MessagePreviewsUpdated', (p: { message_id: number, link_previews: LinkPreview[] }) => {
         patchMessage(p.message_id, { link_previews: p.link_previews })

@@ -3,6 +3,7 @@
 use App\Models\Channel;
 use App\Models\Conversation;
 use App\Models\Server;
+use App\Models\SideChat;
 use App\Models\Thread;
 use App\Models\User;
 use Illuminate\Support\Facades\Broadcast;
@@ -59,6 +60,20 @@ Broadcast::channel('thread.{threadId}', function (User $user, int $threadId) {
     $thread = Thread::with('channel.server', 'channel.conversation')->find($threadId);
 
     return $thread !== null && $thread->channel->hasMember($user);
+});
+
+/**
+ * Side-chat streams.
+ *
+ * Gated by membership of the *channel's* container, not the side chat's own roster —
+ * anyone in the channel may watch a side chat live (read it, see its card update). The
+ * roster is the gate on *posting*, enforced in the request layer, not on subscribing;
+ * a non-participant subscribed here only ever receives, which is exactly reading.
+ */
+Broadcast::channel('sidechat.{sideChatId}', function (User $user, int $sideChatId) {
+    $sideChat = SideChat::with('channel.server', 'channel.conversation')->find($sideChatId);
+
+    return $sideChat !== null && $sideChat->channel->hasMember($user);
 });
 
 /**

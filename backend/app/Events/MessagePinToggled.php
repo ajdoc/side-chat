@@ -41,8 +41,11 @@ class MessagePinToggled implements ShouldBroadcastNow
     {
         $channels = [new PrivateChannel('channel.'.$this->message->channel_id)];
 
+        // Also to the branch it lives in, so an open thread/side-chat panel sees the pin too.
         if ($this->message->thread_id) {
             $channels[] = new PrivateChannel('thread.'.$this->message->thread_id);
+        } elseif ($this->message->side_chat_id) {
+            $channels[] = new PrivateChannel('sidechat.'.$this->message->side_chat_id);
         }
 
         return $channels;

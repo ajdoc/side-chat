@@ -55,6 +55,7 @@ provide(mentionNamesKey, mentionNames)
 const channelId = computed(() => props.channel.id)
 
 const threadPanelOpen = computed(() => !!(route.query.thread || route.query.threads))
+const sideChatPanelOpen = computed(() => !!(route.query.sidechat || route.query.sidechats))
 const infoPanelOpen = computed(() => route.query.info === '1')
 
 const sending = ref(false)
@@ -90,19 +91,29 @@ function onScroll() {
  *
  * A single pass lands short: DynamicScroller measures item heights lazily, so at the
  * moment we ask, `scrollHeight` still reflects estimates for everything below the fold and
- * the channel opens a screen or two above the newest message. Nudging across a few frames
- * lets each freshly-measured row correct the target until it settles at the true bottom.
+ * the channel opens a screen or two above the newest message. Nudging across frames lets
+ * each freshly-measured row correct the target until it settles at the true bottom.
+ *
+ * A fixed handful of frames used to land short on longer or slower channels — the rows were
+ * still measuring when we stopped pushing. So instead of counting frames, we keep pinning
+ * until `scrollHeight` holds steady for a few frames running (measurement has settled), with
+ * a generous ceiling only as a backstop against a channel that somehow never quiets down.
  */
 function scrollToBottom() {
-  const step = (remaining: number) => {
+  let lastHeight = -1
+  let steady = 0
+  const step = (budget: number) => {
     const el = scrollEl()
     if (!el) return
     el.scrollTop = el.scrollHeight
     atBottom.value = true
     hasNewBelow.value = false
-    if (remaining > 0) requestAnimationFrame(() => step(remaining - 1))
+
+    steady = el.scrollHeight === lastHeight ? steady + 1 : 0
+    lastHeight = el.scrollHeight
+    if (budget > 0 && steady < 3) requestAnimationFrame(() => step(budget - 1))
   }
-  nextTick(() => step(6))
+  nextTick(() => step(60))
 }
 
 function jumpToLatest() {
@@ -126,6 +137,12 @@ function onCreateThread(messageId: number) {
 }
 function onOpenThread(id: number) {
   navigateTo({ path: route.path, query: { thread: String(id) } })
+}
+function onCreateSideChat(messageId: number) {
+  navigateTo({ path: route.path, query: { sidechat: 'new', from: String(messageId) } })
+}
+function onOpenSideChat(id: number) {
+  navigateTo({ path: route.path, query: { sidechat: String(id) } })
 }
 
 async function onScrollStart() {
@@ -266,14 +283,15 @@ onBeforeUnmount(() => {
                 :item="item"
                 :active="active"
                 :size-dependencies="[
-                  item.body, item.reply_to, item.started_thread, item.edited, item.attachments,
-                  item.reactions, item.link_previews, item.pinned, readersByMessage[item.id],
+                  item.body, item.reply_to, item.started_thread, item.started_side_chat, item.edited, item.attachments,
+                  item.reactions, item.comments, item.link_previews, item.pinned, readersByMessage[item.id],
                 ]"
               >
                 <MessageItem
                   :message="item"
                   :current-user-id="user?.id ?? null"
                   thread-actions
+                  side-chat-actions
                   :highlighted="item.id === highlightedMessageId"
                   :readers="readersByMessage[item.id]"
                   @reply="replyingTo = $event"
@@ -281,6 +299,8 @@ onBeforeUnmount(() => {
                   @remove="remove"
                   @create-thread="onCreateThread"
                   @open-thread="onOpenThread"
+                  @create-side-chat="onCreateSideChat"
+                  @open-side-chat="onOpenSideChat"
                   @jump-to-reply="onJumpToReply"
                   @toggle-reaction="toggleReaction"
                   @toggle-pin="togglePin"
@@ -328,6 +348,7 @@ onBeforeUnmount(() => {
     </div>
 
     <ThreadPanel v-if="threadPanelOpen" :channel-id="channelId" />
+    <SideChatPanel v-else-if="sideChatPanelOpen" :channel-id="channelId" />
     <!-- Reuses the reply-jump: page older history in, scroll to it, flash a highlight. -->
     <ChannelInfoPanel v-else-if="infoPanelOpen" :channel-id="channelId" @jump="onJumpToReply" />
   </div>

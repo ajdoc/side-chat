@@ -133,6 +133,30 @@ export interface Reaction {
   users: { id: number, name: string }[]
 }
 
+/**
+ * A "popular comment" chip: one phrase, everyone who left it, and the count. Like Reaction,
+ * the API doesn't say whether *you* left it — the same payload is broadcast to everyone — so
+ * the UI works that out by looking for itself in `users`. `key` is a stable id for the phrase
+ * (normalized body + emoji), used both for :key and to re-post the exact phrase on a toggle.
+ */
+export interface CommentSummary {
+  key: string
+  body: string
+  emoji: string | null
+  count: number
+  users: { id: number, name: string }[]
+}
+
+/** One comment as it appears in the full list behind the chips. */
+export interface Comment {
+  id: number
+  message_id: number
+  body: string
+  emoji: string | null
+  user: User
+  created_at: string
+}
+
 export interface LinkPreview {
   id: number
   url: string
@@ -148,20 +172,27 @@ export interface Message {
   id: number
   channel_id: number
   thread_id: number | null
+  side_chat_id: number | null
   body: string | null
   type: 'user' | 'system'
   edited: boolean
   pinned: boolean
   pinned_at: string | null
+  /** Marked as a recorded decision (side-chat messages only). */
+  decided?: boolean
   /** Who pinned it. Only sent where it's shown — the Pinned tab, not the timeline. */
   pinned_by?: string | null
   user: User
   attachments?: Attachment[]
   reactions?: Reaction[]
+  /** Aggregated "popular comment" chips. Absent until the message carries any. */
+  comments?: CommentSummary[]
   /** Arrives empty and fills in over the websocket once the unfurl job finishes. */
   link_previews?: LinkPreview[]
   reply_to?: ReplyRef | null
   started_thread?: StartedThread | null
+  /** The living-object card for a side chat spun off this message (channel timeline only). */
+  started_side_chat?: SideChat | null
   created_at: string
 }
 
@@ -201,6 +232,35 @@ export interface Thread {
   replies_count?: number
   creator?: User
   parent_message?: Message | null
+  created_at: string
+}
+
+/**
+ * A side chat: a mini room spun off a message, with its own roster and timeline. The
+ * "living object" — its card in the main timeline carries the counts that keep it alive
+ * (members, messages, pinned, decisions, last-active).
+ *
+ * `participant_ids` ships on every payload (unlike the full `participants`, which is only
+ * loaded for the panel) so the client can decide, viewer by viewer, whether to show [Join]
+ * or [Open] — the resource is broadcast to everyone, so a baked-in `joined` flag couldn't be.
+ */
+export interface SideChat {
+  id: number
+  channel_id: number
+  message_id: number | null
+  name: string
+  creator?: User
+  parent_message?: Message | null
+  /** Frozen snapshot of the origin message, so "Started from" survives its deletion. */
+  origin_author?: string | null
+  origin_excerpt?: string | null
+  participants?: User[]
+  participant_ids?: number[]
+  participants_count?: number
+  messages_count?: number
+  pinned_count?: number
+  decisions_count?: number
+  last_active_at: string
   created_at: string
 }
 
@@ -259,8 +319,13 @@ export interface Peer {
   screenSharing: boolean
   cameraOn: boolean
   localMuted: boolean
-  /** 0–1, applied to their audio element alone. */
+  /** 0–1, applied to their microphone audio element alone. */
   volume: number
+  /**
+   * 0–1, applied to the audio *of what they're sharing* — kept apart from `volume` so a
+   * loud shared video can be turned down without also quietening the person talking over it.
+   */
+  screenVolume: number
 }
 
 export interface ServerJoinRequest {

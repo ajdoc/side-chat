@@ -16,12 +16,13 @@ class MessageDeleted implements ShouldBroadcastNow
         public int $id,
         public int $channelId,
         public ?int $threadId,
+        public ?int $sideChatId = null,
     ) {}
 
     /** @return array<int, PrivateChannel> */
     public function broadcastOn(): array
     {
-        $name = $this->threadId ? 'thread.'.$this->threadId : 'channel.'.$this->channelId;
+        $name = \App\Models\Message::streamNameFor($this->channelId, $this->threadId, $this->sideChatId);
 
         return [new PrivateChannel($name)];
     }
@@ -34,6 +35,11 @@ class MessageDeleted implements ShouldBroadcastNow
     /** @return array<string, mixed> */
     public function broadcastWith(): array
     {
-        return ['id' => $this->id, 'channel_id' => $this->channelId, 'thread_id' => $this->threadId];
+        return [
+            'id' => $this->id,
+            'channel_id' => $this->channelId,
+            'thread_id' => $this->threadId,
+            'side_chat_id' => $this->sideChatId,
+        ];
     }
 }

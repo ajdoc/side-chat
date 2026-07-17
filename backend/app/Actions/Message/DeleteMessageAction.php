@@ -23,6 +23,7 @@ final class DeleteMessageAction
 
         $channelId = $message->channel_id;
         $threadId = $message->thread_id;
+        $sideChatId = $message->side_chat_id;
         $messageId = $message->id;
         $startedThread = $message->startedThread;
         $startedThreadId = $startedThread?->id;
@@ -47,6 +48,6 @@ final class DeleteMessageAction
             broadcast(new ThreadDeleted($startedThreadId, $channelId, $messageId));
         }
 
-        broadcast(new MessageDeleted($messageId, $channelId, $threadId));
+        broadcast(new MessageDeleted($messageId, $channelId, $threadId, $sideChatId));
     }
 }

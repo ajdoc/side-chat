@@ -2,6 +2,7 @@
 
 namespace App\Http\Resources;
 
+use App\Services\CommentService;
 use App\Services\ReactionService;
 use Illuminate\Http\Request;
 use Illuminate\Http\Resources\Json\JsonResource;
@@ -17,11 +18,14 @@ class MessageResource extends JsonResource
             'id' => $this->id,
             'channel_id' => $this->channel_id,
             'thread_id' => $this->thread_id,
+            'side_chat_id' => $this->side_chat_id,
             'body' => $this->body,
             'type' => $this->type,
             'edited' => $this->edited_at !== null,
             'pinned' => $this->pinned_at !== null,
             'pinned_at' => $this->pinned_at,
+            // Marked as a recorded decision (side-chat messages only).
+            'decided' => $this->decided_at !== null,
             // Only loaded where it's shown (the Pinned tab); absent on the timeline, which
             // renders a pin icon and nothing else.
             'pinned_by' => $this->whenLoaded('pinner', fn () => $this->pinner?->name),
@@ -29,6 +33,9 @@ class MessageResource extends JsonResource
             'attachments' => AttachmentResource::collection($this->whenLoaded('attachments')),
             // Grouped per emoji, carrying who reacted — the client works out which are its own.
             'reactions' => $this->whenLoaded('reactions', fn () => app(ReactionService::class)->summarize($this->resource)),
+            // Aggregated "popular comments" chips, grouped by phrase. Same viewer-agnostic
+            // shape as reactions: it ships who left each phrase, not an "is this mine" flag.
+            'comments' => $this->whenLoaded('comments', fn () => app(CommentService::class)->summarize($this->resource)),
             // Only successful unfurls are worth rendering; pending/failed ones show nothing.
             'link_previews' => $this->whenLoaded(
                 'linkPreviews',
@@ -49,6 +56,11 @@ class MessageResource extends JsonResource
                     'name' => $this->startedThread->name,
                     'replies_count' => $this->startedThread->messages_count ?? 0,
                 ]
+                : null),
+            // The living-object card for a side chat spun off this message (channel timeline
+            // only). Full card resource so the timeline renders it without a follow-up fetch.
+            'started_side_chat' => $this->whenLoaded('startedSideChat', fn () => $this->startedSideChat
+                ? (new SideChatResource($this->startedSideChat))->resolve()
                 : null),
             'created_at' => $this->created_at,
         ];

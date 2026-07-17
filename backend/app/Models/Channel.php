@@ -53,6 +53,11 @@ class Channel extends Model
         return $this->hasMany(Thread::class)->latest();
     }
 
+    public function sideChats(): HasMany
+    {
+        return $this->hasMany(SideChat::class)->latest();
+    }
+
     /** How far each member has read in this channel. */
     public function reads(): HasMany
     {

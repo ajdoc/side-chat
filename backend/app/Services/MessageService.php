@@ -3,6 +3,7 @@
 namespace App\Services;
 
 use App\Models\Channel;
+use App\Models\SideChat;
 use App\Models\Thread;
 use Illuminate\Support\Collection;
 
@@ -18,10 +19,12 @@ final class MessageService
     public function forChannel(Channel $channel, ?int $before = null): array
     {
         $query = $channel->messages()
-            ->whereNull('thread_id') // thread replies live in their thread
+            ->whereNull('thread_id')    // thread replies live in their thread
+            ->whereNull('side_chat_id') // side-chat messages live in their side chat
             ->with([
-                'user', 'replyTo.user', 'attachments', 'reactions.user', 'linkPreviews',
+                'user', 'replyTo.user', 'attachments', 'reactions.user', 'comments.user', 'linkPreviews',
                 'startedThread' => fn ($q) => $q->withCount('messages'),
+                'startedSideChat' => fn ($q) => app(SideChatService::class)->applyCardData($q),
             ])
             ->orderByDesc('id');
 
@@ -34,7 +37,22 @@ final class MessageService
     public function forThread(Thread $thread, ?int $before = null): array
     {
         $query = $thread->messages()
-            ->with(['user', 'replyTo.user', 'attachments', 'reactions.user', 'linkPreviews'])
+            ->with(['user', 'replyTo.user', 'attachments', 'reactions.user', 'comments.user', 'linkPreviews'])
+            ->orderByDesc('id');
+
+        return $this->keyset($query, $before);
+    }
+
+    /**
+     * A side chat's timeline. Same shape as a thread's — the only difference is which
+     * branch column addresses it.
+     *
+     * @return array{messages: Collection, has_more: bool}
+     */
+    public function forSideChat(SideChat $sideChat, ?int $before = null): array
+    {
+        $query = $sideChat->messages()
+            ->with(['user', 'replyTo.user', 'attachments', 'reactions.user', 'comments.user', 'linkPreviews'])
             ->orderByDesc('id');
 
         return $this->keyset($query, $before);

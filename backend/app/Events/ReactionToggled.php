@@ -26,11 +26,7 @@ class ReactionToggled implements ShouldBroadcastNow
      */
     public function broadcastOn(): array
     {
-        $name = $this->message->thread_id
-            ? 'thread.'.$this->message->thread_id
-            : 'channel.'.$this->message->channel_id;
-
-        return [new PrivateChannel($name)];
+        return [new PrivateChannel($this->message->streamName())];
     }
 
     public function broadcastAs(): string
