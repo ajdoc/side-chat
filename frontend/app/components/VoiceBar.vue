@@ -96,6 +96,8 @@ const link = computed(() => {
         <HeadphoneOff v-if="selfDeafened" class="h-4 w-4" />
         <Headphones v-else class="h-4 w-4" />
       </button>
+      <!-- Devices and screen-share quality — reachable wherever the call bar is. -->
+      <VoiceSettings />
       <button
         type="button"
         class="flex flex-1 items-center justify-center rounded p-1.5 text-muted-foreground transition hover:bg-destructive/10 hover:text-destructive"

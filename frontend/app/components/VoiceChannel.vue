@@ -79,6 +79,7 @@ const {
   togglePeerMute,
   setPeerVolume,
   setPeerScreenVolume,
+  setWatchedScreen,
   toggleScreenShare,
   toggleCamera,
   disconnectUser,
@@ -157,6 +158,10 @@ const sharers = computed(() => {
 })
 
 const stage = computed(() => sharers.value.find(s => s.key === watching.value) ?? null)
+
+// Keep the audio layer in step with the stage: only the screen you're actually watching
+// gets to make a sound, so "Stop watching" (watching → null) silences it too.
+watch(watching, key => setWatchedScreen(key), { immediate: true })
 
 /** Your own screen is never put on the stage — see the template — so this is only ever a
  *  real peer, which is exactly who the shared-screen volume slider needs to address. */

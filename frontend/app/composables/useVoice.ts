@@ -55,6 +55,45 @@ const HEARTBEAT_MS = 25_000
 const SCREEN_MAX_BITRATE = 2_500_000
 const CAMERA_MAX_BITRATE = 600_000
 
+/**
+ * Encoding is the other half of the cost, and it's the half that lags the *sharer*.
+ *
+ * A screen isn't sent once — in a mesh it's encoded separately for every peer, so the CPU
+ * bill scales with pixels × framerate × people. On a machine that's already busy driving a
+ * game or a video, that's exactly the load that stutters both the share and the game. So we
+ * cap the capture itself, and default it *below* 1080p: 720p reads a shared window fine and
+ * costs the encoder about half as many pixels. The chooser (see setScreenResolution) lets
+ * someone with headroom trade it back up. Past ~4K it's the encoder, not the network, that
+ * falls over, which is the whole reason the cap is on the capture and not just the bitrate.
+ */
+const SCREEN_RESOLUTIONS = [480, 720, 1080] as const
+type ScreenResolution = (typeof SCREEN_RESOLUTIONS)[number]
+const DEFAULT_SCREEN_RESOLUTION: ScreenResolution = 720
+const SCREEN_MAX_FRAMERATE = 30
+
+/**
+ * How a share is encoded, as a trade the sender picks:
+ *
+ * - `detail` — sharp text over smooth motion (code, docs): contentHint 'detail', and under
+ *   load keep the resolution and shed framerate so the text stays legible.
+ * - `motion` — smooth motion over sharpness (a game, a video): contentHint 'motion', and
+ *   under load keep the framerate and drop resolution so it doesn't judder.
+ * - `auto` — watch the picture and pick between the two as the content changes; see the
+ *   sampler in startScreenShare. The one that costs a trickle of CPU to guess right.
+ */
+type ScreenMode = 'auto' | 'detail' | 'motion'
+const DEFAULT_SCREEN_MODE: ScreenMode = 'auto'
+
+/** The concrete contentHint + degradation for a resolved (never 'auto') mode. */
+function screenModeSettings(mode: 'detail' | 'motion'): {
+  hint: 'detail' | 'motion'
+  degradation: RTCDegradationPreference
+} {
+  return mode === 'motion'
+    ? { hint: 'motion', degradation: 'maintain-framerate' }
+    : { hint: 'detail', degradation: 'maintain-resolution' }
+}
+
 interface PeerHandle {
   pc: RTCPeerConnection
   /**
@@ -66,6 +105,12 @@ interface PeerHandle {
    * element is also what per-peer volume and per-peer mute actually *are* — see setVolume.
    */
   audio: HTMLAudioElement
+  /**
+   * The sender carrying *your* microphone to this peer. Held onto so switching input devices
+   * is a `replaceTrack` into a slot already there — no renegotiation, and it lets us tell the
+   * mic sender apart from the screen-audio one, which is the other audio sender on the pc.
+   */
+  micSender: RTCRtpSender | null
   /** Their microphone. Kept alone, because it's the only thing the <audio> should sink. */
   audioStream: MediaStream
   /**
@@ -157,9 +202,25 @@ let iceServers: IceServer[] = []
 let presence: any = null
 let audioCtx: AudioContext | null = null
 let localAnalyser: AnalyserNode | null = null
+// The WebAudio node feeding the speaking indicator from your mic. Kept in module scope so a
+// mid-call microphone swap can unhook the old capture and hook the new one. See setMicDevice.
+let localSource: MediaStreamAudioSourceNode | null = null
 let heartbeatTimer: ReturnType<typeof setInterval> | undefined
 let speakingFrame: number | undefined
 let leaveOnUnload: (() => void) | undefined
+// Kept so it can be removed on leave — an anonymous listener would leak one per call.
+let deviceChangeHandler: (() => void) | undefined
+
+// --- adaptive screen-share sampling (mode 'auto'; see startScreenShare) ---
+// A hidden <video> playing the shared track and a tiny canvas we down-sample it into, so the
+// motion check compares a few hundred pixels a second rather than a whole screen. `prev` is
+// the last down-sampled frame; `resolved` is the detail/motion we last actually applied, so
+// we only touch the encoder when the guess flips.
+let sampleTimer: ReturnType<typeof setInterval> | undefined
+let sampleVideo: HTMLVideoElement | null = null
+let sampleCanvas: HTMLCanvasElement | null = null
+let samplePrev: Uint8ClampedArray | null = null
+let resolvedScreenMode: 'detail' | 'motion' = 'detail'
 
 /**
  * Where the call's audio elements live: a container hung off <body>, outside the Vue tree.
@@ -234,6 +295,27 @@ export function useVoice() {
   const selfSpeaking = useState<boolean>('voice:selfSpeaking', () => false)
   const screenStream = useState<MediaStream | null>('voice:screenStream', () => null)
   const cameraStream = useState<MediaStream | null>('voice:cameraStream', () => null)
+  /**
+   * Which shared screen is on the stage right now — a peer id, `'self'`, or null when you're
+   * watching nobody. Only this screen's audio is allowed to play (see applyAudio); the stage
+   * UI keeps it in step via setWatchedScreen.
+   */
+  const watchedScreen = useState<number | 'self' | null>('voice:watchedScreen', () => null)
+
+  // --- device & quality settings (yours, remembered across calls) ---
+
+  /** The audio devices the browser will show you — refreshed on demand and on hot-plug. */
+  const inputDevices = useState<MediaDeviceInfo[]>('voice:inputDevices', () => [])
+  const outputDevices = useState<MediaDeviceInfo[]>('voice:outputDevices', () => [])
+  /** Chosen device ids — null means "let the browser pick its default". */
+  const micId = useState<string | null>('voice:micId', () => loadSettings().micId)
+  const speakerId = useState<string | null>('voice:speakerId', () => loadSettings().speakerId)
+  const screenResolution = useState<ScreenResolution>('voice:screenResolution', () => loadSettings().resolution)
+  const screenMode = useState<ScreenMode>('voice:screenMode', () => loadSettings().mode)
+  /** Whether this browser can even honour an output-device choice (Chromium can; Firefox not). */
+  const canPickSpeaker = computed(() =>
+    typeof HTMLMediaElement !== 'undefined' && 'setSinkId' in HTMLMediaElement.prototype,
+  )
 
   const inCall = computed(() => status.value === 'connected' || status.value === 'connecting')
   const isSharing = computed(() => screenStream.value !== null)
@@ -256,6 +338,52 @@ export function useVoice() {
     const prefs = loadPrefs()
     prefs[userId] = pref
     localStorage.setItem('voice:prefs', JSON.stringify(prefs))
+  }
+
+  // --- device & quality settings storage ---
+
+  /**
+   * Read the remembered device & quality choices, healing anything unexpected.
+   *
+   * These are read at composable setup to seed the reactive state, so they run on the server
+   * too — hence the localStorage guard — and they must never throw on a hand-edited or
+   * half-written blob: an unknown resolution or mode falls back to its default rather than
+   * poisoning every future call.
+   */
+  function loadSettings(): {
+    micId: string | null
+    speakerId: string | null
+    resolution: ScreenResolution
+    mode: ScreenMode
+  } {
+    const fallback = {
+      micId: null,
+      speakerId: null,
+      resolution: DEFAULT_SCREEN_RESOLUTION,
+      mode: DEFAULT_SCREEN_MODE,
+    }
+    if (typeof localStorage === 'undefined') return fallback
+    try {
+      const saved = JSON.parse(localStorage.getItem('voice:settings') ?? '{}')
+      return {
+        micId: typeof saved.micId === 'string' ? saved.micId : null,
+        speakerId: typeof saved.speakerId === 'string' ? saved.speakerId : null,
+        resolution: SCREEN_RESOLUTIONS.includes(saved.resolution) ? saved.resolution : DEFAULT_SCREEN_RESOLUTION,
+        mode: (['auto', 'detail', 'motion'] as const).includes(saved.mode) ? saved.mode : DEFAULT_SCREEN_MODE,
+      }
+    } catch {
+      return fallback
+    }
+  }
+
+  function saveSettings() {
+    if (typeof localStorage === 'undefined') return
+    localStorage.setItem('voice:settings', JSON.stringify({
+      micId: micId.value,
+      speakerId: speakerId.value,
+      resolution: screenResolution.value,
+      mode: screenMode.value,
+    }))
   }
 
   // --- peer state helpers ---
@@ -284,8 +412,13 @@ export function useVoice() {
     // The shared audio still answers to *mute* and *deafen* — silencing someone silences
     // their screen too — but rides its own volume so a loud shared clip can be turned down
     // without quietening the person talking over it. See setPeerScreenVolume.
+    //
+    // It also plays *only while you're watching that screen*: clicking "Stop watching" (or
+    // switching the stage to someone else) hides the picture, and this is what stops the
+    // sound coming with it — otherwise a screen you'd closed kept playing audio out of a
+    // stream you couldn't see. See setWatchedScreen.
     handle.screenAudio.volume = peer.screenVolume
-    handle.screenAudio.muted = muted
+    handle.screenAudio.muted = muted || watchedScreen.value !== id
   }
 
   // --- signalling ---
@@ -375,6 +508,7 @@ export function useVoice() {
     const handle: PeerHandle = {
       pc,
       audio,
+      micSender: null,
       audioStream,
       screenAudio,
       screenAudioStream,
@@ -394,7 +528,15 @@ export function useVoice() {
     }
 
     for (const track of localStream.getAudioTracks()) {
-      pc.addTrack(track, localStream)
+      handle.micSender = pc.addTrack(track, localStream)
+    }
+
+    // If a speaker was chosen, route this peer's two audio elements to it as they're born —
+    // otherwise a device picked before someone joined wouldn't reach the people who arrive
+    // after. Best-effort: setSinkId is Chromium-only and rejects if the id has gone stale.
+    if (speakerId.value) {
+      void applySinkId(audio, speakerId.value)
+      void applySinkId(screenAudio, speakerId.value)
     }
 
     /**
@@ -743,9 +885,16 @@ export function useVoice() {
 
     try {
       // Ask for the microphone *first*: no point taking a seat in the room, telling
-      // everybody, and then discovering the browser won't give us a microphone.
+      // everybody, and then discovering the browser won't give us a microphone. Prefer the
+      // remembered device with `ideal`, not `exact`, so a since-unplugged mic falls back to a
+      // working one rather than failing the whole join.
       localStream = await navigator.mediaDevices.getUserMedia({
-        audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+        audio: {
+          ...(micId.value ? { deviceId: { ideal: micId.value } } : {}),
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true,
+        },
         video: false,
       })
     } catch {
@@ -770,10 +919,16 @@ export function useVoice() {
 
     audioCtx = new AudioContext()
     await audioCtx.resume()
-    const localSource = audioCtx.createMediaStreamSource(localStream)
+    localSource = audioCtx.createMediaStreamSource(localStream)
     localAnalyser = audioCtx.createAnalyser()
     localAnalyser.fftSize = 512
     localSource.connect(localAnalyser)
+
+    // Now that the site holds mic permission, the device labels are readable — populate the
+    // picker, and keep it current as headsets are plugged and pulled for the call's lifetime.
+    void refreshDevices()
+    deviceChangeHandler = () => { void refreshDevices() }
+    navigator.mediaDevices?.addEventListener?.('devicechange', deviceChangeHandler)
 
     // Everyone already in the room, and what they're doing — so a tile can be drawn with
     // the right icons on it before a single packet of audio has arrived.
@@ -837,6 +992,13 @@ export function useVoice() {
   }
 
   function teardownMedia() {
+    stopScreenSampler()
+
+    if (deviceChangeHandler) {
+      navigator.mediaDevices?.removeEventListener?.('devicechange', deviceChangeHandler)
+      deviceChangeHandler = undefined
+    }
+
     for (const id of [...handles.keys()]) destroyPeer(id)
 
     localStream?.getTracks().forEach(track => track.stop())
@@ -855,6 +1017,8 @@ export function useVoice() {
     cameraTrack = null
     cameraStream.value = null
 
+    localSource?.disconnect()
+    localSource = null
     localAnalyser?.disconnect()
     localAnalyser = null
     void audioCtx?.close()
@@ -957,6 +1121,106 @@ export function useVoice() {
     savePref(id, { volume: peer.volume, muted: peer.localMuted, screenVolume: clamped })
   }
 
+  /**
+   * Follow the stage: remember which screen you're watching so only its audio plays.
+   *
+   * The stage UI owns the choice of *which* screen is up; this is how that choice reaches the
+   * audio, which lives one layer down per peer. Re-applying every peer settles both sides of
+   * a switch in one pass — the screen you left goes quiet, the one you moved to speaks up.
+   */
+  function setWatchedScreen(key: number | 'self' | null) {
+    watchedScreen.value = key
+    for (const id of handles.keys()) applyAudio(id)
+  }
+
+  // --- devices: which microphone in, which speaker out ---
+
+  /**
+   * Ask the browser what audio devices exist and remember them for the picker.
+   *
+   * Labels ("Jabra Elite", "MacBook Pro Speakers") only come through once the site has been
+   * granted mic access, which is why the list is worth refreshing right after connect and
+   * again whenever a device is plugged or unplugged — before that they're blank strings the
+   * UI has to paper over with a generic name.
+   */
+  async function refreshDevices() {
+    if (typeof navigator === 'undefined' || !navigator.mediaDevices?.enumerateDevices) return
+    try {
+      const devices = await navigator.mediaDevices.enumerateDevices()
+      inputDevices.value = devices.filter(d => d.kind === 'audioinput')
+      outputDevices.value = devices.filter(d => d.kind === 'audiooutput')
+    } catch {
+      // A picker that can't populate just shows the current device; not worth surfacing.
+    }
+  }
+
+  /** Point one audio element at a chosen speaker, tolerating browsers/ids that can't. */
+  async function applySinkId(el: HTMLMediaElement, deviceId: string) {
+    const sinkable = el as HTMLMediaElement & { setSinkId?: (id: string) => Promise<void> }
+    if (!sinkable.setSinkId) return
+    try {
+      await sinkable.setSinkId(deviceId)
+    } catch {
+      // The device was unplugged, or the id is stale — the element keeps its old sink.
+    }
+  }
+
+  /**
+   * Switch your microphone mid-call.
+   *
+   * Open the new device, then `replaceTrack` it into every peer's mic sender — same-kind
+   * swap, so no renegotiation and no gap the far end can hear. The catch is everything
+   * *else* pointed at the old track: the speaking meter is re-hooked to the new capture, and
+   * the new track inherits your current mute state so switching devices can't quietly unmute
+   * you. The old capture is stopped last, once nothing depends on it.
+   */
+  async function setMicDevice(deviceId: string) {
+    micId.value = deviceId
+    saveSettings()
+    if (!inCall.value) return
+
+    let stream: MediaStream
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({
+        audio: { deviceId: { exact: deviceId }, echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+        video: false,
+      })
+    } catch {
+      return // device vanished or was denied; the current mic keeps working
+    }
+
+    const track = stream.getAudioTracks()[0]
+    if (!track) return
+
+    // Carry mute across the swap — a fresh capture starts enabled, which would un-mute you.
+    track.enabled = !selfMuted.value
+
+    await Promise.all([...handles.values()].map(h => h.micSender?.replaceTrack(track)))
+
+    const old = localStream
+    localStream = stream
+
+    // Re-point the speaking meter at the new capture.
+    if (audioCtx) {
+      localSource?.disconnect()
+      localSource = audioCtx.createMediaStreamSource(stream)
+      if (localAnalyser) localSource.connect(localAnalyser)
+    }
+
+    old?.getTracks().forEach(t => t.stop())
+    void refreshDevices() // labels firm up once a device is actually in use
+  }
+
+  /** Switch which speaker the call plays out of — every peer's voice and every shared screen. */
+  async function setSpeaker(deviceId: string) {
+    speakerId.value = deviceId
+    saveSettings()
+    await Promise.all([...handles.values()].flatMap(h => [
+      applySinkId(h.audio, deviceId),
+      applySinkId(h.screenAudio, deviceId),
+    ]))
+  }
+
   // --- screen sharing ---
 
   async function startScreenShare() {
@@ -965,7 +1229,14 @@ export function useVoice() {
     let display: MediaStream
     try {
       display = await navigator.mediaDevices.getDisplayMedia({
-        video: { frameRate: 30 },
+        // Cap what we capture, not just what we send: a 1440p/4K desktop encoded once per
+        // peer is what stutters a machine that's also gaming. The browser downscales to the
+        // chosen height (default 720p), which is what actually cuts the encode load — see
+        // setScreenResolution for changing it live.
+        video: {
+          frameRate: { ideal: SCREEN_MAX_FRAMERATE, max: SCREEN_MAX_FRAMERATE },
+          height: { ideal: screenResolution.value, max: screenResolution.value },
+        },
         // Ask for the tab/system audio too — sharing a video with no sound is half a share.
         // It's the browser's "Share tab audio" tick, so it's opt-in and often simply absent
         // (a whole-screen share on many platforms has none), which the code below tolerates.
@@ -982,9 +1253,12 @@ export function useVoice() {
     // The audio track only exists if the source had sound and the user ticked "share audio".
     screenAudioTrack = display.getAudioTracks()[0] ?? null
 
-    // Tells the encoder to favour sharp text over smooth motion — the difference between
-    // readable code and a blurry smear.
-    screenTrack.contentHint = 'detail'
+    // Resolve the content mode for the first frames. 'auto' opens as 'detail' and the sampler
+    // (started below) corrects it within a second or two once it can see what's on screen.
+    const initialMode = screenMode.value === 'auto' ? 'detail' : screenMode.value
+    resolvedScreenMode = initialMode
+    const { hint, degradation } = screenModeSettings(initialMode)
+    screenTrack.contentHint = hint
 
     // The browser's own "Stop sharing" bar bypasses our button entirely. Either track ending
     // (the user stops the video, or just the audio) tears the whole share down.
@@ -1004,6 +1278,11 @@ export function useVoice() {
         const params = video.sender.getParameters()
         params.encodings = params.encodings?.length ? params.encodings : [{}]
         params.encodings[0]!.maxBitrate = SCREEN_MAX_BITRATE
+        params.encodings[0]!.maxFramerate = SCREEN_MAX_FRAMERATE
+        // Under CPU/upload pressure, degrade the axis the mode says matters less — for
+        // 'detail' shed framerate and keep the text sharp, for 'motion' the reverse. Not
+        // every engine honours it, hence the tolerant set. See screenModeSettings.
+        params.degradationPreference = degradation
         await video.sender.setParameters(params).catch(() => {})
       }
 
@@ -1016,11 +1295,14 @@ export function useVoice() {
     await renegotiateAll()
 
     screenStream.value = markRaw(display)
+    startScreenSampler() // a no-op unless the mode is 'auto'
     await publishState()
   }
 
   async function stopScreenShare() {
     if (!isSharing.value) return
+
+    stopScreenSampler()
 
     await Promise.all(
       [...handles.values()].map(async (handle) => {
@@ -1041,6 +1323,122 @@ export function useVoice() {
 
   function toggleScreenShare() {
     return isSharing.value ? stopScreenShare() : startScreenShare()
+  }
+
+  /**
+   * Change the capture resolution — live if a share is already up, remembered either way.
+   *
+   * The browser re-scales the *same* capture to the new height, so there's no second picker
+   * and no gap; the far end just sees the picture sharpen or soften. This is the real lever
+   * on encode cost, so it's also the first thing to reach for when a share is stuttering.
+   */
+  async function setScreenResolution(resolution: ScreenResolution) {
+    screenResolution.value = resolution
+    saveSettings()
+    if (!screenTrack) return
+    await screenTrack.applyConstraints({
+      height: { ideal: resolution, max: resolution },
+      frameRate: { ideal: SCREEN_MAX_FRAMERATE, max: SCREEN_MAX_FRAMERATE },
+    }).catch(() => {})
+  }
+
+  /**
+   * Choose how a share is encoded — 'auto', 'detail', or 'motion'.
+   *
+   * A fixed choice stops the sampler and applies straight away. 'auto' (re)starts the sampler
+   * and lets it decide; whatever's applied right now stays until the first sample lands, so
+   * flipping to auto never blanks the picture.
+   */
+  function setScreenMode(mode: ScreenMode) {
+    screenMode.value = mode
+    saveSettings()
+    if (mode === 'auto') {
+      startScreenSampler()
+    } else {
+      stopScreenSampler()
+      void applyScreenMode(mode)
+    }
+  }
+
+  /** Push a resolved detail/motion decision onto the live share: contentHint + degradation. */
+  async function applyScreenMode(resolved: 'detail' | 'motion') {
+    resolvedScreenMode = resolved
+    if (!screenTrack) return
+
+    const { hint, degradation } = screenModeSettings(resolved)
+    screenTrack.contentHint = hint
+
+    await Promise.all([...handles.values()].map(async (handle) => {
+      const sender = handle.screenTransceiver?.sender
+      if (!sender) return
+      const params = sender.getParameters()
+      if (!params.encodings?.length) return
+      params.degradationPreference = degradation
+      await sender.setParameters(params).catch(() => {})
+    }))
+  }
+
+  /**
+   * Start the adaptive sampler that guesses detail vs motion from the picture itself.
+   *
+   * Only meaningful while a screen is up and the mode is 'auto'. It draws the shared track
+   * into a 32×32 canvas about once a second and measures how much the pixels moved: a lot
+   * (a game, a video) tips it to 'motion', near-stillness (a code editor) back to 'detail'.
+   * That's ~1000 pixels a second to read — nothing beside the encode it's tuning — and it
+   * only touches the encoder when the guess actually flips.
+   */
+  function startScreenSampler() {
+    stopScreenSampler()
+    if (screenMode.value !== 'auto' || !screenStream.value || typeof document === 'undefined') return
+
+    sampleVideo = document.createElement('video')
+    sampleVideo.muted = true
+    sampleVideo.srcObject = screenStream.value
+    void sampleVideo.play().catch(() => {})
+
+    sampleCanvas = document.createElement('canvas')
+    sampleCanvas.width = 32
+    sampleCanvas.height = 32
+    samplePrev = null
+
+    sampleTimer = setInterval(sampleScreen, 1000)
+  }
+
+  function stopScreenSampler() {
+    clearInterval(sampleTimer)
+    sampleTimer = undefined
+    if (sampleVideo) {
+      sampleVideo.srcObject = null
+      sampleVideo = null
+    }
+    sampleCanvas = null
+    samplePrev = null
+  }
+
+  function sampleScreen() {
+    if (!sampleVideo || !sampleCanvas || !sampleVideo.videoWidth) return
+    const ctx = sampleCanvas.getContext('2d', { willReadFrequently: true })
+    if (!ctx) return
+
+    ctx.drawImage(sampleVideo, 0, 0, 32, 32)
+    const { data } = ctx.getImageData(0, 0, 32, 32)
+
+    if (samplePrev) {
+      let diff = 0
+      for (let i = 0; i < data.length; i += 4) {
+        diff += Math.abs(data[i]! - samplePrev[i]!)
+          + Math.abs(data[i + 1]! - samplePrev[i + 1]!)
+          + Math.abs(data[i + 2]! - samplePrev[i + 2]!)
+      }
+      // Mean per-channel change across the frame, 0–255. Video and games sit well above the
+      // threshold; a mostly static editor barely moves. Kept generous so a blinking cursor or
+      // a line of scrolling text isn't mistaken for motion.
+      const meanChange = diff / ((data.length / 4) * 3)
+      const guess: 'detail' | 'motion' = meanChange > 8 ? 'motion' : 'detail'
+      if (guess !== resolvedScreenMode) void applyScreenMode(guess)
+    }
+
+    samplePrev = data
   }
 
   // --- camera ---
@@ -1187,6 +1585,20 @@ export function useVoice() {
     togglePeerMute,
     setPeerVolume,
     setPeerScreenVolume,
+    setWatchedScreen,
+    inputDevices,
+    outputDevices,
+    micId,
+    speakerId,
+    screenResolution,
+    screenMode,
+    canPickSpeaker,
+    screenResolutions: SCREEN_RESOLUTIONS,
+    refreshDevices,
+    setMicDevice,
+    setSpeaker,
+    setScreenResolution,
+    setScreenMode,
     toggleScreenShare,
     toggleCamera,
     disconnectUser,
