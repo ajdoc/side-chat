@@ -10,6 +10,8 @@ use App\Models\Message;
 use App\Models\User;
 use App\Services\AttachmentService;
 use App\Services\LinkPreviewService;
+use App\Services\Widgets\WidgetService;
+use App\Support\Commands\CommandParser;
 use App\Support\MentionParser;
 
 final class SendMessageAction
@@ -17,11 +19,20 @@ final class SendMessageAction
     public function __construct(
         private readonly AttachmentService $attachments,
         private readonly LinkPreviewService $links,
+        private readonly CommandParser $commands,
+        private readonly WidgetService $widgets,
     ) {}
 
     /** @param  array<int, \Illuminate\Http\UploadedFile>  $files */
     public function handle(Channel $channel, User $user, SendMessageData $data, array $files = []): Message
     {
+        // A message that's really a widget command (`m!p …`, `k!add …`) never lands as chat:
+        // it drives the channel's music player or board instead. Only a text-only send can be
+        // a command — anything with an attachment is a plain message. See WidgetService.
+        if ($files === [] && ($command = $this->commands->parse($data->body)) !== null) {
+            return $this->widgets->handleCommand($channel, $user, $command);
+        }
+
         $message = $channel->messages()->create([
             'user_id' => $user->id,
             'body' => $data->body,

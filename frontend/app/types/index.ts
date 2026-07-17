@@ -174,7 +174,7 @@ export interface Message {
   thread_id: number | null
   side_chat_id: number | null
   body: string | null
-  type: 'user' | 'system'
+  type: 'user' | 'system' | 'widget'
   edited: boolean
   pinned: boolean
   pinned_at: string | null
@@ -193,7 +193,74 @@ export interface Message {
   started_thread?: StartedThread | null
   /** The living-object card for a side chat spun off this message (channel timeline only). */
   started_side_chat?: SideChat | null
+  /** The interactive widget this message renders — only present on `type: 'widget'` cards. */
+  widget?: Widget | null
   created_at: string
+}
+
+/**
+ * An interactive, channel-shared widget — the music player, the kanban board — rendered
+ * as a live card in the timeline and kept in sync over the channel's Reverb stream.
+ * `state` is discriminated by `type`; the matching card component owns its shape.
+ */
+export interface Widget {
+  id: number
+  channel_id: number
+  type: 'music' | 'kanban'
+  state: MusicState | KanbanState
+  created_at: string
+}
+
+export interface MusicTrack {
+  id: string
+  /** Null for a Spotify shell until it's resolved to a YouTube video (lazily, when it plays). */
+  videoId: string | null
+  title: string
+  artist: string | null
+  /** Length in seconds — may be null until a client backfills it from its player. */
+  duration: number | null
+  thumbnail: string | null
+  /** Where the link came from (playback is always YouTube). */
+  source: 'youtube' | 'spotify' | 'soundcloud' | 'deezer'
+  /** Set when a shell couldn't be matched on YouTube — shown greyed out, skipped on play. */
+  unresolved?: boolean
+  addedBy: string
+}
+
+/** The search picker: top matches awaiting a choice, shown in the card. */
+export interface MusicSearch {
+  query: string
+  by: string
+  results: MusicTrack[]
+}
+
+export interface MusicState {
+  status: 'idle' | 'playing' | 'paused'
+  queue: MusicTrack[]
+  /** Index into `queue` of the current track, or null when idle. */
+  currentIndex: number | null
+  /** Seconds into the current track at `updated_at` — clients extrapolate from here (× speed). */
+  position: number
+  updated_at: string
+  loop: 'off' | 'track' | 'queue'
+  /** Playback rate, 0.5–2. Shared, so everyone stays in sync; >1 is the "nightcore" effect. */
+  speed: number
+  /** Radio mode: keep going with a related track when the queue empties. */
+  autoplay: boolean
+  pendingSearch: MusicSearch | null
+}
+
+export interface KanbanCard {
+  id: number
+  text: string
+  column: 'todo' | 'doing' | 'done'
+  assignee: { id: number, name: string } | null
+  addedBy: string
+}
+
+export interface KanbanState {
+  seq: number
+  cards: KanbanCard[]
 }
 
 /** A link as it appears in the channel Info panel's Links tab. */

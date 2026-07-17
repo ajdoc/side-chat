@@ -58,6 +58,12 @@ class Channel extends Model
         return $this->hasMany(SideChat::class)->latest();
     }
 
+    /** The channel's interactive widgets — its music player, its kanban board. */
+    public function widgets(): HasMany
+    {
+        return $this->hasMany(Widget::class);
+    }
+
     /** How far each member has read in this channel. */
     public function reads(): HasMany
     {

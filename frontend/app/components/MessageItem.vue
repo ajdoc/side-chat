@@ -47,6 +47,9 @@ const emit = defineEmits<{
 }>()
 
 const isSystem = computed(() => props.message.type === 'system')
+// A widget card is authored by whoever ran the command, so it's editable/deletable by the
+// usual rules — but "editing" it would mean typing a body onto a player, which is nonsense.
+const isWidget = computed(() => props.message.type === 'widget')
 // System messages (e.g. "X joined the server") are generated — nobody may edit them.
 const canModify = computed(() =>
   !isSystem.value && props.currentUserId != null && props.message.user.id === props.currentUserId,
@@ -210,6 +213,9 @@ function saveEdit() {
       <template v-else>
         <MarkdownBody v-if="message.body" :source="message.body" :edited="message.edited" />
 
+        <!-- interactive widget card (music player / kanban board) — kept live over the stream -->
+        <WidgetCard v-if="message.type === 'widget' && message.widget" :widget="message.widget" />
+
         <AttachmentList :attachments="attachments" />
 
         <!-- unfurled links: empty at first, filled in over the websocket -->
@@ -302,7 +308,7 @@ function saveEdit() {
       <button class="rounded p-1 text-muted-foreground hover:text-foreground" title="Message info" @click="showInfo = true">
         <Info class="h-4 w-4" />
       </button>
-      <button v-if="canModify" class="rounded p-1 text-muted-foreground hover:text-foreground" title="Edit" @click="startEdit">
+      <button v-if="canModify && !isWidget" class="rounded p-1 text-muted-foreground hover:text-foreground" title="Edit" @click="startEdit">
         <Pencil class="h-4 w-4" />
       </button>
       <button v-if="canModify" class="rounded p-1 text-muted-foreground hover:text-destructive" title="Delete" @click="showDelete = true">

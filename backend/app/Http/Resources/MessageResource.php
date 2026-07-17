@@ -62,6 +62,11 @@ class MessageResource extends JsonResource
             'started_side_chat' => $this->whenLoaded('startedSideChat', fn () => $this->startedSideChat
                 ? (new SideChatResource($this->startedSideChat))->resolve()
                 : null),
+            // The interactive widget this message renders (only on `type: widget` cards) —
+            // the whole live state, so the card draws itself with no follow-up fetch.
+            'widget' => $this->whenLoaded('widget', fn () => $this->widget
+                ? (new WidgetResource($this->widget))->resolve()
+                : null),
             'created_at' => $this->created_at,
         ];
     }

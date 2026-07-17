@@ -25,6 +25,7 @@ final class MessageService
                 'user', 'replyTo.user', 'attachments', 'reactions.user', 'comments.user', 'linkPreviews',
                 'startedThread' => fn ($q) => $q->withCount('messages'),
                 'startedSideChat' => fn ($q) => app(SideChatService::class)->applyCardData($q),
+                'widget',
             ])
             ->orderByDesc('id');
 

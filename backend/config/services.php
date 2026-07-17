@@ -47,4 +47,21 @@ return [
         'redirect' => env('FACEBOOK_REDIRECT_URI'),
     ],
 
+    // YouTube Data API key — powers the music widget's playlist expansion and search
+    // (`m!p <playlist>` / `m!p <spotify track>` / `m!p <words>`). Optional: without it,
+    // plain YouTube *video* links still queue fine; anything needing a lookup replies
+    // with a nudge to paste a video link. See App\Services\Widgets\YouTubeResolver.
+    'youtube' => [
+        'key' => env('YOUTUBE_API_KEY'),
+    ],
+
+    // Spotify no longer needs credentials here: the music widget reads tracks, playlists
+    // and albums from their public embed pages (the Web API stopped serving playlist tracks
+    // to ordinary apps in Nov 2024). These are kept only in case a future path wants the
+    // official API with extended access. See App\Services\Widgets\SpotifyClient.
+    'spotify' => [
+        'client_id' => env('SPOTIFY_CLIENT_ID'),
+        'client_secret' => env('SPOTIFY_CLIENT_SECRET'),
+    ],
+
 ];

@@ -1,4 +1,4 @@
-import type { CommentSummary, LinkPreview, Message, Reaction, SideChat, StartedThread, Thread } from '~/types'
+import type { CommentSummary, LinkPreview, Message, Reaction, SideChat, StartedThread, Thread, Widget } from '~/types'
 
 // Messages for one text channel, plus the real-time Reverb subscription.
 export function useMessages() {
@@ -32,6 +32,16 @@ export function useMessages() {
   function patchMessage(id: number, patch: Partial<Message>) {
     const idx = messages.value.findIndex(m => m.id === id)
     if (idx !== -1) messages.value.splice(idx, 1, { ...messages.value[idx]!, ...patch })
+  }
+  /**
+   * A widget's state moved — refresh every card rendering it. One widget can have several
+   * cards in the timeline (each `m!queue`/`k!list` drops a fresh one); they all show the
+   * same live state, so we patch all of them by matching `widget.id`.
+   */
+  function patchWidget(widget: Widget) {
+    messages.value = messages.value.map(m =>
+      m.widget?.id === widget.id ? { ...m, widget } : m,
+    )
   }
   function setStartedThread(messageId: number | null, summary: StartedThread | null) {
     if (!messageId) return
@@ -162,6 +172,8 @@ export function useMessages() {
       .listen('.MessagePreviewsUpdated', (p: { message_id: number, link_previews: LinkPreview[] }) => {
         patchMessage(p.message_id, { link_previews: p.link_previews })
       })
+      // A widget moved (track changed, card crossed a column). Re-sync every card of it.
+      .listen('.WidgetUpdated', (w: Widget) => patchWidget(w))
       // Someone pinned or unpinned something. Patch the timeline (the pin icon) and the
       // Pinned tab. The message may live in a thread we've never opened, which is why the
       // event carries the whole thing rather than an id — patchMessage simply won't match.

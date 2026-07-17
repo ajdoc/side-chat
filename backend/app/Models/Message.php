@@ -16,7 +16,7 @@ class Message extends Model
     /** @use HasFactory<MessageFactory> */
     use HasFactory;
 
-    protected $fillable = ['channel_id', 'thread_id', 'side_chat_id', 'user_id', 'body', 'type', 'reply_to_id', 'edited_at', 'pinned_at', 'pinned_by', 'decided_at', 'decided_by'];
+    protected $fillable = ['channel_id', 'thread_id', 'side_chat_id', 'widget_id', 'user_id', 'body', 'type', 'reply_to_id', 'edited_at', 'pinned_at', 'pinned_by', 'decided_at', 'decided_by'];
 
     protected function casts(): array
     {
@@ -26,6 +26,11 @@ class Message extends Model
     public function isSystem(): bool
     {
         return $this->type === 'system';
+    }
+
+    public function isWidget(): bool
+    {
+        return $this->type === 'widget';
     }
 
     /**
@@ -123,6 +128,12 @@ class Message extends Model
     public function startedSideChat(): HasOne
     {
         return $this->hasOne(SideChat::class, 'message_id');
+    }
+
+    /** The widget this message renders as a card (only set when `type` is 'widget'). */
+    public function widget(): BelongsTo
+    {
+        return $this->belongsTo(Widget::class);
     }
 
     /** @return HasMany<Attachment> */

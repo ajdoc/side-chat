@@ -23,6 +23,7 @@ use App\Http\Controllers\DecisionController;
 use App\Http\Controllers\ThreadController;
 use App\Http\Controllers\ThreadMessageController;
 use App\Http\Controllers\VoiceController;
+use App\Http\Controllers\WidgetController;
 use Illuminate\Support\Facades\Route;
 
 Route::get('/ping', fn () => response()->json([
@@ -89,6 +90,11 @@ Route::middleware('auth:api')->group(function () {
 
     // "Message info": who saw it, who hasn't, who reacted.
     Route::get('messages/{message}/info', [MessageInfoController::class, 'show']);
+
+    // Widgets: the music player and kanban board are created by chat commands (m!/k!),
+    // so there's no "create" here — only the card's own buttons/drags, which run through
+    // one free-form action endpoint and broadcast their result as WidgetUpdated.
+    Route::post('widgets/{widget}/action', [WidgetController::class, 'action']);
 
     // Pins: any member may pin or unpin, on channel *and* thread messages.
     Route::get('channels/{channel}/pins', [PinController::class, 'index']);
