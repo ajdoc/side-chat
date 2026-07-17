@@ -45,6 +45,54 @@ md.renderer.rules.link_open = (tokens, i, options, env, self) => {
   return defaultLink(tokens, i, options, env, self)
 }
 
+/* --------------------------------------------------------------- mentions */
+
+/**
+ * `@all` and `@Display Name` become chips.
+ *
+ * Matched against the channel's actual roster (passed in as `env.mentionNames`) rather than
+ * a blanket `@word`, so a name with a space survives whole and a stray `@` — in an email, in
+ * prose — is left as plain text. `@all` is always a candidate, so it lights up even in the
+ * one-line previews that render without a roster. This is the display half of the same
+ * parse the server runs to decide whose sidebar to badge (see MentionParser.php).
+ */
+const isWord = (ch: string | undefined) => !!ch && /\w/.test(ch)
+
+md.inline.ruler.before('emphasis', 'mention', (state, silent) => {
+  const src = state.src
+  const start = state.pos
+  if (src[start] !== '@') return false
+
+  // Not part of a word or an address: `foo@all` and `a@b` are not mentions.
+  if (isWord(src[start - 1]) || src[start - 1] === '@') return false
+
+  const names: string[] = state.env?.mentionNames ?? []
+  // Longest first, so "@Ada Lovelace" wins over a member who is also just "@Ada".
+  const candidates = ['all', ...names].sort((a, b) => b.length - a.length)
+
+  const rest = src.slice(start + 1)
+  const restLower = rest.toLowerCase()
+  const match = candidates.find((name) => {
+    if (!name || !restLower.startsWith(name.toLowerCase())) return false
+    return !isWord(rest[name.length]) // a boundary must follow — no `@all` inside `@allan`
+  })
+  if (!match) return false
+
+  if (!silent) {
+    const token = state.push('mention', 'span', 0)
+    token.content = rest.slice(0, match.length) // keep the user's own casing
+    token.meta = { all: match.toLowerCase() === 'all' }
+  }
+  state.pos = start + 1 + match.length
+  return true
+})
+
+md.renderer.rules.mention = (tokens, i) => {
+  const token = tokens[i]!
+  const cls = token.meta?.all ? 'md-mention md-mention-all' : 'md-mention'
+  return `<span class="${cls}">@${md.utils.escapeHtml(token.content)}</span>`
+}
+
 /**
  * Flatten markdown to a single line of readable text — for the one-line previews
  * (reply references, thread parents) where rendering formatting would be noise
@@ -66,8 +114,9 @@ export function stripMarkdown(source: string): string {
 
 export function useMarkdown() {
   return {
-    render: (source: string) => md.render(source),
-    renderInline: (source: string) => md.renderInline(source),
+    // `mentionNames` is the channel roster, so `@Name` chips resolve; `@all` needs no roster.
+    render: (source: string, mentionNames: string[] = []) => md.render(source, { mentionNames }),
+    renderInline: (source: string, mentionNames: string[] = []) => md.renderInline(source, { mentionNames }),
     stripMarkdown,
   }
 }

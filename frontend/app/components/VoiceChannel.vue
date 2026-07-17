@@ -5,6 +5,8 @@ import {
   Headphones,
   HeadphoneOff,
   Loader2,
+  Maximize,
+  Minimize,
   Mic,
   MicOff,
   PhoneOff,
@@ -39,16 +41,9 @@ const props = withDefaults(defineProps<{
   /** Render nothing at all when there's no call and you're not in one. */
   quietWhenEmpty?: boolean
   joinLabel?: string
-  /**
-   * You own the place this call lives in — a server, or a group chat — and so may turn
-   * other people out of it. The container knows this; a plain voice channel doesn't, which
-   * is why it's handed in rather than worked out here. A DM has no owner and never sets it.
-   */
-  canModerate?: boolean
 }>(), {
   quietWhenEmpty: false,
   joinLabel: 'Join voice',
-  canModerate: false,
 })
 
 const { user } = useAuth()
@@ -127,13 +122,47 @@ const sharers = computed(() => {
 
 const stage = computed(() => sharers.value.find(s => s.key === watching.value) ?? null)
 
-// Follow whoever starts sharing, and step off the stage when they stop. A screen going up
-// is also the one moment the call is worth more room than the chat.
-watch(sharers, (list) => {
-  if (list.length) collapsed.value = false
-  if (watching.value !== null && list.some(s => s.key === watching.value)) return
-  watching.value = list[0]?.key ?? null
+/**
+ * The set of people sharing, as a stable string.
+ *
+ * `sharers` is rebuilt from `peers` on every roster tick — and `peers` is patched
+ * constantly (the speaking rings alone repaint it many times a second). Watching `sharers`
+ * directly therefore fires continuously, which is what made "Hide" spring straight back
+ * open: the watcher kept re-running and kept forcing the pane visible. Reducing it to the
+ * keys means the watcher only wakes when someone actually starts or stops sharing.
+ */
+const sharerKeys = computed(() => sharers.value.map(s => String(s.key)).join('|'))
+
+watch(sharerKeys, (keys, prev) => {
+  const current = keys ? keys.split('|') : []
+  const previous = prev ? prev.split('|') : []
+
+  // Auto-expand only for a *newly* started screen, so you can hide the pane afterwards and
+  // it stays hidden. A screen going up is the one moment the call earns room over the chat.
+  if (current.some(k => !previous.includes(k))) collapsed.value = false
+
+  // Keep the stage on a screen that's still up; otherwise follow the first, or clear it.
+  if (watching.value !== null && current.includes(String(watching.value))) return
+  watching.value = sharers.value[0]?.key ?? null
 }, { immediate: true })
+
+// --- fullscreen ---
+
+const stageEl = ref<HTMLElement | null>(null)
+const isFullscreen = ref(false)
+
+function toggleFullscreen() {
+  if (document.fullscreenElement) void document.exitFullscreen()
+  else void stageEl.value?.requestFullscreen()
+}
+
+// Track it rather than assume: the user can leave fullscreen with Esc, and the browser's
+// own controls, without ever touching our button.
+function onFullscreenChange() {
+  isFullscreen.value = document.fullscreenElement === stageEl.value
+}
+onMounted(() => document.addEventListener('fullscreenchange', onFullscreenChange))
+onUnmounted(() => document.removeEventListener('fullscreenchange', onFullscreenChange))
 
 function initials(name: string) {
   return name.split(' ').map(w => w[0]).slice(0, 2).join('').toUpperCase()
@@ -195,8 +224,22 @@ function initials(name: string) {
       <div v-if="!collapsed" class="flex flex-col gap-3 px-4 pb-3">
         <!-- Someone's screen, if anyone is sharing one. -->
         <section v-if="stage" class="flex flex-col gap-1.5">
-          <div class="aspect-video max-h-[45vh] overflow-hidden rounded-lg border bg-black">
+          <div
+            ref="stageEl"
+            class="group relative overflow-hidden bg-black"
+            :class="isFullscreen ? 'h-screen w-screen' : 'aspect-video max-h-[45vh] rounded-lg border'"
+          >
             <VoiceVideo :stream="stage.stream" />
+            <!-- Fullscreen toggle: appears on hover, and works while fullscreen too. -->
+            <button
+              type="button"
+              class="absolute right-2 top-2 grid h-8 w-8 place-items-center rounded-md bg-black/50 text-white opacity-0 transition hover:bg-black/70 focus:opacity-100 group-hover:opacity-100"
+              :title="isFullscreen ? 'Exit fullscreen' : 'Fullscreen'"
+              @click="toggleFullscreen"
+            >
+              <Minimize v-if="isFullscreen" class="h-4 w-4" />
+              <Maximize v-else class="h-4 w-4" />
+            </button>
           </div>
           <div class="flex items-center gap-2">
             <span class="text-xs text-muted-foreground">{{ stage.name }}</span>
@@ -234,7 +277,6 @@ function initials(name: string) {
             :muted="peer.muted"
             :sharing="peer.screenSharing"
             :watching="watching === peer.id"
-            :can-moderate="canModerate"
             @toggle-mute="togglePeerMute(peer.id)"
             @set-volume="setPeerVolume(peer.id, $event)"
             @watch="watching = peer.id"
@@ -287,10 +329,10 @@ function initials(name: string) {
           {{ isSharing ? 'Stop sharing' : 'Share screen' }}
         </Button>
 
-        <!-- Owner only, and only when there's actually anyone to clear out. Turns everyone
-             but you out of the room; you keep your seat (use Leave for that). -->
+        <!-- Only when there's actually anyone to clear out. Turns everyone but you out of
+             the room; you keep your seat (use Leave for that). -->
         <Button
-          v-if="canModerate && peers.length"
+          v-if="peers.length"
           variant="secondary"
           size="sm"
           class="gap-2 text-destructive hover:bg-destructive hover:text-destructive-foreground"

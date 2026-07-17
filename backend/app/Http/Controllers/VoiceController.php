@@ -93,10 +93,10 @@ class VoiceController extends Controller
     }
 
     /**
-     * Disconnect someone else from the call, or clear the whole room — an owner-only power
-     * (the request enforces that). With a `user_id`, that one person; without, everyone but
-     * you. Each removal takes the ordinary leave path, so a chat's call ends normally when
-     * the last person is turned out.
+     * Disconnect someone else from the call, or clear the whole room — open to any member of
+     * the channel. With a `user_id`, that one person; without, everyone but you. Each removal
+     * takes the ordinary leave path, so a chat's call ends normally when the last person is
+     * turned out.
      */
     public function disconnect(DisconnectVoiceParticipantsRequest $request, Channel $channel, DisconnectVoiceParticipantsAction $action): JsonResponse
     {

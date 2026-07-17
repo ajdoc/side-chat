@@ -50,7 +50,7 @@ export function useConversation() {
 
   /** Opening a chat is reading it — the badge goes, here and in the sidebar. */
   function clearUnread(id: number) {
-    patch(id, { unread_count: 0 })
+    patch(id, { unread_count: 0, mention: false })
   }
 
   return { conversation, openConversation, closeConversation, clearUnread }

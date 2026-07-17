@@ -4,6 +4,7 @@ namespace App\Contracts;
 
 use App\Models\User;
 use Illuminate\Broadcasting\PrivateChannel;
+use Illuminate\Database\Eloquent\Relations\BelongsToMany;
 
 /**
  * A place channels live in: a Server, or a Conversation (a DM or a group chat).
@@ -23,6 +24,16 @@ use Illuminate\Broadcasting\PrivateChannel;
 interface MessageContainer
 {
     public function hasMember(User $user): bool;
+
+    /**
+     * Everyone who belongs here — the people a message can be addressed to.
+     *
+     * Shared by the @mention autocomplete and by mention resolution on send, so a name in a
+     * message body can be turned back into the member it names, in a server or a chat alike.
+     *
+     * @return BelongsToMany<User, \Illuminate\Database\Eloquent\Model>
+     */
+    public function members(): BelongsToMany;
 
     /**
      * The room's own stream, for people who currently have it open.

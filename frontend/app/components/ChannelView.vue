@@ -1,7 +1,8 @@
 <script setup lang="ts">
-import { Loader2, X } from 'lucide-vue-next'
+import { ArrowDown, Loader2, X } from 'lucide-vue-next'
 import type { Channel, Message } from '~/types'
 import { Button } from '~/components/ui/button'
+import { mentionNamesKey, useChannelMembers } from '~/composables/useChannelMembers'
 
 /**
  * A channel's timeline: the messages, the composer, threads, pins, read receipts, typing.
@@ -46,6 +47,11 @@ const {
   unsubscribe: unsubscribeTyping,
 } = useTyping()
 
+const { members: mentionMembers, names: mentionNames, load: loadMembers } = useChannelMembers()
+// So a message body deep in the virtual list can render `@Name` as a chip without each
+// MessageItem having to be handed the roster. See MarkdownBody / useChannelMembers.
+provide(mentionNamesKey, mentionNames)
+
 const channelId = computed(() => props.channel.id)
 
 const threadPanelOpen = computed(() => !!(route.query.thread || route.query.threads))
@@ -57,8 +63,50 @@ const scroller = ref<any>(null)
 const highlightedMessageId = ref<number | null>(null)
 let highlightTimer: ReturnType<typeof setTimeout> | undefined
 
+// Whether the timeline is resting at (or very near) its foot, and whether messages have
+// landed below the fold since we last were. Together they drive the "jump to latest"
+// pill and decide whether an incoming message should pull the view down or stay put.
+const atBottom = ref(true)
+const hasNewBelow = ref(false)
+
+/** The scrolling element itself — DynamicScroller's root *is* the scroll container. */
+function scrollEl(): HTMLElement | null {
+  return (scroller.value?.$el as HTMLElement | undefined) ?? null
+}
+
+function nearBottom(el: HTMLElement, threshold = 120) {
+  return el.scrollHeight - el.scrollTop - el.clientHeight <= threshold
+}
+
+function onScroll() {
+  const el = scrollEl()
+  if (!el) return
+  atBottom.value = nearBottom(el)
+  if (atBottom.value) hasNewBelow.value = false
+}
+
+/**
+ * Pin the view to the foot of the timeline.
+ *
+ * A single pass lands short: DynamicScroller measures item heights lazily, so at the
+ * moment we ask, `scrollHeight` still reflects estimates for everything below the fold and
+ * the channel opens a screen or two above the newest message. Nudging across a few frames
+ * lets each freshly-measured row correct the target until it settles at the true bottom.
+ */
 function scrollToBottom() {
-  nextTick(() => scroller.value?.scrollToItem(messages.value.length - 1))
+  const step = (remaining: number) => {
+    const el = scrollEl()
+    if (!el) return
+    el.scrollTop = el.scrollHeight
+    atBottom.value = true
+    hasNewBelow.value = false
+    if (remaining > 0) requestAnimationFrame(() => step(remaining - 1))
+  }
+  nextTick(() => step(6))
+}
+
+function jumpToLatest() {
+  scrollToBottom()
 }
 
 // Jump to a message referenced by a reply, paging in older history first if needed.
@@ -92,6 +140,7 @@ async function onScrollStart() {
 
 async function openChannel(id: number) {
   replyingTo.value = null
+  loadMembers(id) // for @mention autocomplete + chips; not worth blocking the timeline on
   await Promise.all([load(id), loadReads(id)])
   subscribe(id)
   subscribeReads(id)
@@ -121,7 +170,13 @@ async function onSend(body: string, files: File[]) {
 }
 
 watch(() => messages.value.at(-1)?.id, (nid, oid) => {
-  if (nid && oid && nid > oid) scrollToBottom()
+  // Follow the conversation only while you're already at the foot of it; if you've scrolled
+  // up to read history, a new message reveals the "jump to latest" pill instead of yanking
+  // you away. (Your own sends scroll you down explicitly, from onSend.)
+  if (nid && oid && nid > oid) {
+    if (atBottom.value) scrollToBottom()
+    else hasNewBelow.value = true
+  }
   // Anything that arrives while you're looking at the channel is, by definition, read.
   markReadIfVisible(messages.value)
   emit('read')
@@ -203,6 +258,7 @@ onBeforeUnmount(() => {
             :items="messages"
             :min-item-size="52"
             key-field="id"
+            @scroll.passive="onScroll"
             @scroll-start="hasMore && onScrollStart()"
           >
             <template #default="{ item, active }">
@@ -233,6 +289,26 @@ onBeforeUnmount(() => {
             </template>
           </DynamicScroller>
         </ClientOnly>
+
+        <!-- Jump to latest: only while you're reading history, so it never covers the newest
+             message. Carries a dot when something arrived below you while you were up here. -->
+        <Transition
+          enter-active-class="transition duration-150"
+          leave-active-class="transition duration-150"
+          enter-from-class="translate-y-2 opacity-0"
+          leave-to-class="translate-y-2 opacity-0"
+        >
+          <button
+            v-if="!atBottom"
+            type="button"
+            class="absolute bottom-3 right-4 z-10 flex items-center gap-1.5 rounded-full border bg-background px-3 py-1.5 text-xs font-medium shadow-md hover:bg-muted"
+            @click="jumpToLatest"
+          >
+            <span v-if="hasNewBelow" class="h-2 w-2 shrink-0 rounded-full bg-primary" />
+            {{ hasNewBelow ? 'New messages' : 'Jump to latest' }}
+            <ArrowDown class="h-3.5 w-3.5" />
+          </button>
+        </Transition>
       </div>
 
       <div class="shrink-0 border-t">
@@ -244,6 +320,7 @@ onBeforeUnmount(() => {
         <MessageComposer
           :placeholder="`Message ${prefix ?? ''}${title}`"
           :sending="sending"
+          :mention-members="mentionMembers"
           @submit="onSend"
           @typing="notifyTyping"
         />

@@ -32,7 +32,16 @@ export interface Channel {
   position: number
   /** Messages from other people you haven't read. Only present on the channel list. */
   unread_count?: number
+  /** An unread here named you (by @you or @all) — badge it louder than a plain unread. */
+  mention?: boolean
   created_at: string
+}
+
+/** A member who can be @mentioned in a channel — the shape the composer autocomplete needs. */
+export interface ChannelMember {
+  id: number
+  name: string
+  avatar: string | null
 }
 
 export type ConversationType = 'dm' | 'group'
@@ -62,6 +71,8 @@ export interface Conversation {
   call_started_at: string | null
   call_started_by: number | null
   unread_count?: number
+  /** An unread here named you (by @you or @all). */
+  mention?: boolean
   last_message_at?: string | null
   created_at: string
 }

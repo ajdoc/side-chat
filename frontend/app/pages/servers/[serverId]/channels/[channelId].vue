@@ -13,7 +13,7 @@ definePageMeta({ middleware: 'auth', layout: 'app' })
  * has that a chat doesn't: a `#`, a Threads button, and the voice stage.
  */
 const route = useRoute()
-const { channels, server } = useServer()
+const { channels } = useServer()
 
 const channelId = computed(() => Number(route.params.channelId))
 const channel = computed(() => channels.value.find(c => c.id === channelId.value) ?? null)
@@ -52,7 +52,7 @@ function openInfo() {
     <!-- Text-in-voice: the call sits on top of the very same timeline every other channel
          has, and everything below it is unaware it's in a voice channel. -->
     <template v-if="isVoice" #call>
-      <VoiceChannel :channel="channel" :can-moderate="server?.is_owner ?? false" />
+      <VoiceChannel :channel="channel" />
     </template>
   </ChannelView>
 </template>

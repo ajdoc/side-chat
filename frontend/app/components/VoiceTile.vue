@@ -19,8 +19,6 @@ const props = defineProps<{
   sharing?: boolean
   /** Set when this tile's screen is the one on the stage. */
   watching?: boolean
-  /** You own this room, so you may turn other people out of it. Never on your own tile. */
-  canModerate?: boolean
 }>()
 
 const emit = defineEmits<{
@@ -144,11 +142,11 @@ const volumeLabel = computed(() => `${Math.round(props.peer.volume * 100)}%`)
     </div>
 
     <!--
-      An owner's power, and theirs alone. Unlike the volume and local-mute above — which
-      change only what *you* hear — this turns the person out of the call for everybody.
+      Unlike the volume and local-mute above — which change only what *you* hear — this
+      turns the person out of the call for everybody.
     -->
     <button
-      v-if="!self && canModerate"
+      v-if="!self"
       type="button"
       class="flex w-full items-center justify-center gap-1.5 rounded-md border border-destructive/30 px-2 py-1 text-xs font-medium text-destructive transition hover:bg-destructive hover:text-destructive-foreground"
       :title="`Disconnect ${peer.name} from the call`"

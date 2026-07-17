@@ -68,6 +68,16 @@ interface PeerHandle {
   audio: HTMLAudioElement
   /** Their microphone. Kept alone, because it's the only thing the <audio> should sink. */
   audioStream: MediaStream
+  /**
+   * The audio *of* what they're sharing — a video playing in the tab, say — kept on its own
+   * element and its own transceiver, deliberately apart from the microphone. Mixing the two
+   * would let a screen mute silence a voice, run the shared audio through the mic's echo
+   * cancellation, and set the speaking ring flickering to a YouTube clip. One <audio> each
+   * keeps per-peer volume and mute honest for both.
+   */
+  screenAudio: HTMLAudioElement
+  screenAudioStream: MediaStream
+  screenAudioTransceiver: RTCRtpTransceiver | null
   /** Their face, and the thing they're presenting. Separate — see the two slots below. */
   cameraStream: MediaStream
   screenStream: MediaStream
@@ -139,6 +149,7 @@ interface LocalPrefs {
 const handles = new Map<number, PeerHandle>()
 let localStream: MediaStream | null = null
 let screenTrack: MediaStreamTrack | null = null
+let screenAudioTrack: MediaStreamTrack | null = null
 let cameraTrack: MediaStreamTrack | null = null
 let iceServers: IceServer[] = []
 let presence: any = null
@@ -265,8 +276,13 @@ export function useVoice() {
     const peer = peers.value.find(p => p.id === id)
     if (!handle || !peer) return
 
+    const muted = peer.localMuted || selfDeafened.value
     handle.audio.volume = peer.volume
-    handle.audio.muted = peer.localMuted || selfDeafened.value
+    handle.audio.muted = muted
+    // The shared audio answers to the same knobs: mute someone and their screen goes quiet
+    // too, and deafening silences the lot.
+    handle.screenAudio.volume = peer.volume
+    handle.screenAudio.muted = muted
   }
 
   // --- signalling ---
@@ -326,6 +342,7 @@ export function useVoice() {
 
     const pc = new RTCPeerConnection({ iceServers })
     const audioStream = new MediaStream()
+    const screenAudioStream = new MediaStream()
     const cameraStream = new MediaStream()
     const screenStream = new MediaStream()
 
@@ -333,6 +350,13 @@ export function useVoice() {
     audio.autoplay = true
     audio.srcObject = audioStream
     audioRoot().appendChild(audio)
+
+    // A second element for the shared tab/system audio, so it plays independently of the
+    // microphone and answers to the same per-peer volume and mute (see applyAudio).
+    const screenAudio = new Audio()
+    screenAudio.autoplay = true
+    screenAudio.srcObject = screenAudioStream
+    audioRoot().appendChild(screenAudio)
 
     /**
      * Perfect negotiation (the WebRTC spec's own pattern).
@@ -349,6 +373,8 @@ export function useVoice() {
       pc,
       audio,
       audioStream,
+      screenAudio,
+      screenAudioStream,
       cameraStream,
       screenStream,
       polite: user.value.id < id,
@@ -359,6 +385,7 @@ export function useVoice() {
       analyser: null,
       speakingUntil: 0,
       // The impolite peer fills these in just below; the polite peer adopts them in ontrack.
+      screenAudioTransceiver: null,
       cameraTransceiver: null,
       screenTransceiver: null,
     }
@@ -393,9 +420,14 @@ export function useVoice() {
      * larger SDP well under the wire limit.
      */
     if (!handle.polite) {
+      // A third slot beside the two video ones, for the shared audio. Created first so the
+      // m-lines are [mic, screen-audio, camera, screen] on both ends; the polite peer adopts
+      // them in that order (see ontrack).
+      handle.screenAudioTransceiver = pc.addTransceiver('audio', { direction: 'sendrecv' })
       handle.cameraTransceiver = pc.addTransceiver('video', { direction: 'sendrecv' })
       handle.screenTransceiver = pc.addTransceiver('video', { direction: 'sendrecv' })
 
+      if (screenAudioTrack) void handle.screenAudioTransceiver.sender.replaceTrack(screenAudioTrack)
       if (cameraTrack) void handle.cameraTransceiver.sender.replaceTrack(cameraTrack)
       if (screenTrack) void handle.screenTransceiver.sender.replaceTrack(screenTrack)
     }
@@ -460,6 +492,23 @@ export function useVoice() {
      */
     pc.ontrack = ({ track, transceiver }) => {
       if (track.kind === 'audio') {
+        // Mic, or the shared tab/system audio? The impolite peer created a dedicated slot
+        // and knows it by identity. The polite peer adopts it: its own microphone slot has a
+        // local send-track (the mic it added), whereas the screen-audio slot it merely
+        // received into does not — so the empty one is the screen's.
+        const isScreenAudio = handle.screenAudioTransceiver
+          ? transceiver === handle.screenAudioTransceiver
+          : !transceiver.sender.track
+
+        if (isScreenAudio) {
+          if (!handle.screenAudioTransceiver) handle.screenAudioTransceiver = transceiver
+
+          handle.screenAudioStream.addTrack(track)
+          handle.screenAudio.play().catch(() => {})
+          applyAudio(id)
+          return
+        }
+
         audioStream.addTrack(track)
 
         audio.play().catch(() => {
@@ -520,6 +569,8 @@ export function useVoice() {
 
     handle.audio.srcObject = null
     handle.audio.remove()
+    handle.screenAudio.srcObject = null
+    handle.screenAudio.remove()
     handle.analyser?.disconnect()
 
     handles.delete(id)
@@ -792,6 +843,8 @@ export function useVoice() {
     // ended is the one bug in here that people would be right never to forgive.
     screenTrack?.stop()
     screenTrack = null
+    screenAudioTrack?.stop()
+    screenAudioTrack = null
     screenStream.value = null
 
     cameraTrack?.stop()
@@ -898,10 +951,11 @@ export function useVoice() {
     try {
       display = await navigator.mediaDevices.getDisplayMedia({
         video: { frameRate: 30 },
-        // Some browsers can capture system/tab audio too. We only want the picture — the
-        // conversation is already going the other way round, and mixing the two is how you
-        // get an echo.
-        audio: false,
+        // Ask for the tab/system audio too — sharing a video with no sound is half a share.
+        // It's the browser's "Share tab audio" tick, so it's opt-in and often simply absent
+        // (a whole-screen share on many platforms has none), which the code below tolerates.
+        // No echo risk: this is the source's own audio, captured directly, never the mic.
+        audio: true,
       })
     } catch {
       return // the user changed their mind at the picker; that isn't an error
@@ -910,29 +964,39 @@ export function useVoice() {
     screenTrack = display.getVideoTracks()[0] ?? null
     if (!screenTrack) return
 
+    // The audio track only exists if the source had sound and the user ticked "share audio".
+    screenAudioTrack = display.getAudioTracks()[0] ?? null
+
     // Tells the encoder to favour sharp text over smooth motion — the difference between
     // readable code and a blurry smear.
     screenTrack.contentHint = 'detail'
 
-    // The browser's own "Stop sharing" bar bypasses our button entirely.
+    // The browser's own "Stop sharing" bar bypasses our button entirely. Either track ending
+    // (the user stops the video, or just the audio) tears the whole share down.
     screenTrack.onended = () => { void stopScreenShare() }
+    if (screenAudioTrack) screenAudioTrack.onended = () => { void stopScreenShare() }
 
-    // Slot it into each peer's screen transceiver, then tell them the slot is live — see
-    // renegotiate() for why the second half isn't optional. The direction bump matters for
-    // the polite peer, whose adopted slot came up recvonly: without flipping it to sendrecv
-    // it can receive a screen but never send one.
+    // Slot the picture into each peer's screen transceiver, and the sound into the audio one,
+    // then tell them the slots are live — see renegotiate() for why the second half isn't
+    // optional. The direction bump matters for the polite peer, whose adopted slots came up
+    // recvonly: without flipping to sendrecv it can receive a screen but never send one.
     await Promise.all([...handles.values()].map(async (handle) => {
-      const transceiver = handle.screenTransceiver
-      if (!transceiver) return
+      const video = handle.screenTransceiver
+      if (video) {
+        if (video.direction !== 'sendrecv') video.direction = 'sendrecv'
+        await video.sender.replaceTrack(screenTrack)
 
-      if (transceiver.direction !== 'sendrecv') transceiver.direction = 'sendrecv'
-      const sender = transceiver.sender
-      await sender.replaceTrack(screenTrack)
+        const params = video.sender.getParameters()
+        params.encodings = params.encodings?.length ? params.encodings : [{}]
+        params.encodings[0]!.maxBitrate = SCREEN_MAX_BITRATE
+        await video.sender.setParameters(params).catch(() => {})
+      }
 
-      const params = sender.getParameters()
-      params.encodings = params.encodings?.length ? params.encodings : [{}]
-      params.encodings[0]!.maxBitrate = SCREEN_MAX_BITRATE
-      await sender.setParameters(params).catch(() => {})
+      const sound = handle.screenAudioTransceiver
+      if (sound && screenAudioTrack) {
+        if (sound.direction !== 'sendrecv') sound.direction = 'sendrecv'
+        await sound.sender.replaceTrack(screenAudioTrack)
+      }
     }))
     await renegotiateAll()
 
@@ -944,12 +1008,17 @@ export function useVoice() {
     if (!isSharing.value) return
 
     await Promise.all(
-      [...handles.values()].map(handle => handle.screenTransceiver?.sender.replaceTrack(null)),
+      [...handles.values()].map(async (handle) => {
+        await handle.screenTransceiver?.sender.replaceTrack(null)
+        await handle.screenAudioTransceiver?.sender.replaceTrack(null)
+      }),
     )
     await renegotiateAll()
 
     screenTrack?.stop()
     screenTrack = null
+    screenAudioTrack?.stop()
+    screenAudioTrack = null
     screenStream.value = null
 
     await publishState()
@@ -1042,11 +1111,11 @@ export function useVoice() {
 
   // --- moderation ---
   //
-  // Only an owner may do this, and it's the *server* that decides so — these just ask, and
-  // a 403 comes back to anyone who shouldn't have had the button in the first place. The
-  // person on the receiving end isn't torn down from here: the server deletes their seat
-  // and tells their own browser to hang up (see useUserStream), which drops them from the
-  // presence channel, which is how everyone else — us included — sees them go.
+  // Anyone in the call may do this — these just ask the server, which enforces channel
+  // membership and nothing more. The person on the receiving end isn't torn down from here:
+  // the server deletes their seat and tells their own browser to hang up (see useUserStream),
+  // which drops them from the presence channel, which is how everyone else — us included —
+  // sees them go.
 
   /** Disconnect one person from this call. */
   async function disconnectUser(userId: number) {
@@ -1072,12 +1141,12 @@ export function useVoice() {
   }
 
   /**
-   * You were disconnected by a moderator. Tear the call down and leave a word behind —
+   * Someone in the call turned you out of it. Tear the call down and leave a word behind —
    * otherwise the audio just stops and the tiles vanish with nothing said about why.
    */
   async function disconnectedByModerator() {
     await disconnect()
-    notice.value = 'You were disconnected from the call by a moderator.'
+    notice.value = 'You were disconnected from the call.'
     setTimeout(() => { notice.value = null }, 8000)
   }
 

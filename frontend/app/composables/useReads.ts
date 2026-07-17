@@ -81,7 +81,7 @@ export function useReads() {
 
   function clearUnread(id: number) {
     const idx = channels.value.findIndex(c => c.id === id)
-    if (idx !== -1) channels.value.splice(idx, 1, { ...channels.value[idx]!, unread_count: 0 })
+    if (idx !== -1) channels.value.splice(idx, 1, { ...channels.value[idx]!, unread_count: 0, mention: false })
   }
 
   function subscribe(id: number) {

@@ -328,7 +328,7 @@ it('lets the owner clear the room but keeps their own seat', function () {
         ->toBe([$owner->id]);
 });
 
-it('forbids a non-owner member from disconnecting anyone', function () {
+it('lets a non-owner member disconnect anyone', function () {
     [$owner, $server, $channel] = ownerWithVoiceChannel();
     $member = User::factory()->create();
     $server->members()->attach($member->id, ['role' => 'member']);
@@ -338,15 +338,17 @@ it('forbids a non-owner member from disconnecting anyone', function () {
         $this->postJson("/api/channels/{$channel->id}/voice/join")->assertOk();
     }
 
+    // Disconnecting is open to any member, so a plain member can turn out the owner.
     Passport::actingAs($member);
     $this->postJson("/api/channels/{$channel->id}/voice/disconnect", ['user_id' => $owner->id])
-        ->assertForbidden();
+        ->assertOk()
+        ->assertJsonPath('disconnected', 1);
 
-    // Nobody was moved.
-    expect(VoiceParticipant::where('channel_id', $channel->id)->count())->toBe(2);
+    expect(VoiceParticipant::where('channel_id', $channel->id)->pluck('user_id')->all())
+        ->toBe([$member->id]);
 });
 
-it('has nobody who may disconnect people in a DM', function () {
+it('lets either person disconnect the other in a DM', function () {
     [$a, $b, $conversation] = dmBetween();
     $channel = $conversation->channel;
 
@@ -355,10 +357,12 @@ it('has nobody who may disconnect people in a DM', function () {
         $this->postJson("/api/channels/{$channel->id}/voice/join")->assertOk();
     }
 
-    // A DM has no owner, so neither person may hang up on the other — they leave themselves.
+    // A DM has no owner, but disconnecting only asks for membership — so either person may.
     Passport::actingAs($a);
     $this->postJson("/api/channels/{$channel->id}/voice/disconnect", ['user_id' => $b->id])
-        ->assertForbidden();
+        ->assertOk()
+        ->assertJsonPath('disconnected', 1);
 
-    expect(VoiceParticipant::where('channel_id', $channel->id)->count())->toBe(2);
+    expect(VoiceParticipant::where('channel_id', $channel->id)->pluck('user_id')->all())
+        ->toBe([$a->id]);
 });

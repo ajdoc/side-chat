@@ -24,8 +24,15 @@ class ChannelActivity implements ShouldBroadcastNow
 {
     use Dispatchable, InteractsWithSockets, SerializesModels;
 
-    public function __construct(public Message $message)
-    {
+    /**
+     * @param  array<int, int>  $mentionedUserIds  Members this message named, minus its author.
+     * @param  bool  $mentionsAll  Whether it said @all — a mention for every recipient at once.
+     */
+    public function __construct(
+        public Message $message,
+        public array $mentionedUserIds = [],
+        public bool $mentionsAll = false,
+    ) {
         $this->message->loadMissing('channel.server', 'channel.conversation');
     }
 
@@ -53,6 +60,9 @@ class ChannelActivity implements ShouldBroadcastNow
             'conversation_id' => $this->message->channel->conversation_id,
             'message_id' => $this->message->id,
             'user_id' => $this->message->user_id, // so a client can ignore its own messages
+            // A badge that says "you were named here", not just "something happened here".
+            'mentioned_user_ids' => $this->mentionedUserIds,
+            'mentions_all' => $this->mentionsAll,
         ];
     }
 }

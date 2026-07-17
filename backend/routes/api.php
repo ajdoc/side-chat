@@ -5,6 +5,7 @@ use App\Http\Controllers\AttachmentController;
 use App\Http\Controllers\Auth\SocialAuthController;
 use App\Http\Controllers\ChannelController;
 use App\Http\Controllers\ChannelLinkController;
+use App\Http\Controllers\ChannelMemberController;
 use App\Http\Controllers\ConversationController;
 use App\Http\Controllers\InviteController;
 use App\Http\Controllers\JoinRequestController;
@@ -67,6 +68,8 @@ Route::middleware('auth:api')->group(function () {
 
     Route::get('channels/{channel}/messages', [MessageController::class, 'index']);
     Route::post('channels/{channel}/messages', [MessageController::class, 'store']);
+    // Who can be @mentioned here — powers the composer's autocomplete.
+    Route::get('channels/{channel}/members', [ChannelMemberController::class, 'index']);
     // Edit/delete works for both channel and thread messages (sender-only).
     Route::patch('messages/{message}', [MessageController::class, 'update']);
     Route::delete('messages/{message}', [MessageController::class, 'destroy']);
@@ -104,7 +107,7 @@ Route::middleware('auth:api')->group(function () {
     Route::post('channels/{channel}/voice/leave', [VoiceController::class, 'leave']);
     Route::patch('channels/{channel}/voice/state', [VoiceController::class, 'updateState']);
     Route::post('channels/{channel}/voice/heartbeat', [VoiceController::class, 'heartbeat']);
-    // Owner-only: disconnect one participant (with user_id) or clear the room (without).
+    // Any member: disconnect one participant (with user_id) or clear the room (without).
     Route::post('channels/{channel}/voice/disconnect', [VoiceController::class, 'disconnect']);
 
     /*

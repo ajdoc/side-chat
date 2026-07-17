@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { Bold, Code, Eye, Italic, Link2, List, SquareCode, Strikethrough, TextQuote } from 'lucide-vue-next'
+import { AtSign, Bold, Code, Eye, Italic, Link2, List, SquareCode, Strikethrough, TextQuote } from 'lucide-vue-next'
+import type { ChannelMember } from '~/types'
 
 const props = withDefaults(defineProps<{
   modelValue: string
@@ -8,9 +9,12 @@ const props = withDefaults(defineProps<{
   disabled?: boolean
   /** Cap on how tall the textarea grows before it starts scrolling. */
   maxHeight?: number
+  /** Roster for the `@` autocomplete. Empty is fine — `@all` is always offered. */
+  mentionMembers?: ChannelMember[]
 }>(), {
   placeholder: 'Message',
   maxHeight: 220,
+  mentionMembers: () => [],
 })
 
 const emit = defineEmits<{
@@ -148,9 +152,105 @@ const tools = [
   { icon: TextQuote, title: 'Quote', run: () => prefixLines('> ') },
 ]
 
+/* ------------------------------------------------------- @mention autocomplete */
+
+interface MentionOption {
+  /** -1 marks the synthetic "all"; otherwise a real member id. */
+  id: number
+  name: string
+  hint: string
+}
+
+const menuOpen = ref(false)
+const mentionQuery = ref('')
+const mentionStart = ref(0) // index of the `@` in the draft
+const activeIndex = ref(0)
+
+const options = computed<MentionOption[]>(() => {
+  const q = mentionQuery.value.toLowerCase()
+  const all: MentionOption = { id: -1, name: 'all', hint: 'Notify everyone here' }
+  const members: MentionOption[] = props.mentionMembers.map(m => ({ id: m.id, name: m.name, hint: '' }))
+  return [all, ...members]
+    .filter(o => o.name.toLowerCase().includes(q))
+    .slice(0, 8)
+})
+
+const showMenu = computed(() => menuOpen.value && options.value.length > 0)
+
+/**
+ * Is the caret sitting in an `@…` token? If so, arm the menu and remember where the token
+ * starts. The `@` must open the token — start of line or after whitespace — and the query
+ * runs to the caret with no space in it, so "@" in an email never trips it.
+ */
+function detectMention() {
+  const el = textarea.value
+  if (!el || props.disabled) return closeMenu()
+
+  const pos = el.selectionStart ?? 0
+  const match = /(?:^|\s)@([^\s@]*)$/.exec(props.modelValue.slice(0, pos))
+  if (!match) return closeMenu()
+
+  mentionQuery.value = match[1] ?? ''
+  mentionStart.value = pos - mentionQuery.value.length - 1
+  menuOpen.value = true
+}
+
+function closeMenu() {
+  menuOpen.value = false
+  mentionQuery.value = ''
+}
+
+/** Swap the half-typed `@query` for the chosen name and drop the caret after it. */
+function selectMention(option: MentionOption) {
+  const el = textarea.value
+  const caretNow = el?.selectionStart ?? props.modelValue.length
+  const before = props.modelValue.slice(0, mentionStart.value)
+  const after = props.modelValue.slice(caretNow)
+  const inserted = `@${option.name} `
+
+  draft.value = before + inserted + after
+  closeMenu()
+
+  nextTick(() => {
+    if (!el) return
+    const caret = before.length + inserted.length
+    el.focus()
+    el.setSelectionRange(caret, caret)
+    resize()
+  })
+}
+
+// A fresh query is a fresh list — start the highlight at the top.
+watch(mentionQuery, () => { activeIndex.value = 0 })
+
 /* -------------------------------------------------------------- keyboard */
 
 function onKeydown(event: KeyboardEvent) {
+  // While the mention menu is up it owns the arrow keys, Enter/Tab and Escape — so none of
+  // them reach the "send" / "cancel" handlers below.
+  if (showMenu.value) {
+    if (event.key === 'ArrowDown') {
+      event.preventDefault()
+      activeIndex.value = (activeIndex.value + 1) % options.value.length
+      return
+    }
+    if (event.key === 'ArrowUp') {
+      event.preventDefault()
+      activeIndex.value = (activeIndex.value - 1 + options.value.length) % options.value.length
+      return
+    }
+    if (event.key === 'Enter' || event.key === 'Tab') {
+      event.preventDefault()
+      selectMention(options.value[activeIndex.value]!)
+      return
+    }
+    if (event.key === 'Escape') {
+      event.preventDefault()
+      closeMenu()
+      return
+    }
+  }
+
   if (event.key === 'Escape') {
     emit('cancel')
     return
@@ -223,18 +323,42 @@ defineExpose({ focus: () => textarea.value?.focus() })
       <p v-else class="text-sm text-muted-foreground">Nothing to preview.</p>
     </div>
 
-    <textarea
-      v-else
-      ref="textarea"
-      v-model="draft"
-      rows="1"
-      :placeholder="placeholder"
-      :autofocus="autofocus"
-      :disabled="disabled"
-      class="block w-full resize-none bg-transparent px-3 py-2 text-base outline-none placeholder:text-muted-foreground selection:bg-primary selection:text-primary-foreground disabled:cursor-not-allowed disabled:opacity-50 md:text-sm"
-      @keydown="onKeydown"
-      @paste="emit('paste', $event)"
-    />
+    <div v-else class="relative">
+      <textarea
+        ref="textarea"
+        v-model="draft"
+        rows="1"
+        :placeholder="placeholder"
+        :autofocus="autofocus"
+        :disabled="disabled"
+        class="block w-full resize-none bg-transparent px-3 py-2 text-base outline-none placeholder:text-muted-foreground selection:bg-primary selection:text-primary-foreground disabled:cursor-not-allowed disabled:opacity-50 md:text-sm"
+        @keydown="onKeydown"
+        @keyup="detectMention()"
+        @click="detectMention()"
+        @blur="closeMenu()"
+        @paste="emit('paste', $event)"
+      />
+
+      <!-- @mention picker: floats just above the caret's line. Mousedown (not click) so it
+           fires before the textarea's blur tears the menu down. -->
+      <ul
+        v-if="showMenu"
+        class="absolute bottom-full left-2 z-20 mb-1 max-h-56 w-64 overflow-y-auto rounded-md border bg-popover p-1 text-popover-foreground shadow-md"
+      >
+        <li
+          v-for="(option, i) in options"
+          :key="option.id"
+          class="flex cursor-pointer items-center gap-2 rounded px-2 py-1.5 text-sm"
+          :class="i === activeIndex ? 'bg-accent text-accent-foreground' : ''"
+          @mouseenter="activeIndex = i"
+          @mousedown.prevent="selectMention(option)"
+        >
+          <AtSign class="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+          <span class="truncate font-medium">{{ option.name }}</span>
+          <span v-if="option.hint" class="ml-auto truncate text-xs text-muted-foreground">{{ option.hint }}</span>
+        </li>
+      </ul>
+    </div>
 
     <slot name="footer" />
   </div>

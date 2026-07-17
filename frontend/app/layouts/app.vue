@@ -4,6 +4,7 @@ import {
   Monitor, Moon, Pencil, Phone, Plus, ScreenShare, Sun, Trash2, User, UserPlus, Users, Volume2,
 } from 'lucide-vue-next'
 import type { Channel, Conversation, Server, ThemeColor, ThemeMode } from '~/types'
+import { useDesktopNotifications } from '~/composables/useDesktopNotifications'
 import { Button } from '~/components/ui/button'
 import {
   DropdownMenu,
@@ -52,6 +53,7 @@ const { user, logout } = useAuth()
 const { mode, color, setMode, setColor } = useTheme()
 const { participantsIn } = useVoiceRoster()
 const userStream = useUserStream()
+const { ensurePermission: ensureNotifyPermission } = useDesktopNotifications()
 
 const modes: { value: ThemeMode, label: string, icon: any }[] = [
   { value: 'light', label: 'Light', icon: Sun },
@@ -291,6 +293,9 @@ onMounted(async () => {
   // it's what makes a DM appear, a badge move, and a phone ring. Everything else is scoped
   // to a place you happen to be standing.
   userStream.subscribe()
+  // Ask once, so a mention can reach you while you're in another tab. Declined is fine —
+  // the sidebar badge still does its job.
+  ensureNotifyPermission()
 
   await Promise.all([fetchServers(), fetchConversations()])
   await syncServer()
@@ -377,8 +382,9 @@ onBeforeUnmount(() => userStream.unsubscribe())
                   <span
                     v-else-if="item.conversation.unread_count"
                     class="ml-auto shrink-0 rounded-full bg-primary px-1.5 py-0.5 text-[10px] font-semibold tabular-nums text-primary-foreground"
-                    :title="`${item.conversation.unread_count} unread`"
-                  >{{ item.conversation.unread_count > 99 ? '99+' : item.conversation.unread_count }}</span>
+                    :class="item.conversation.mention ? 'ring-2 ring-primary/30' : ''"
+                    :title="item.conversation.mention ? 'You were mentioned' : `${item.conversation.unread_count} unread`"
+                  ><span v-if="item.conversation.mention" aria-hidden="true">@</span>{{ item.conversation.unread_count > 99 ? '99+' : item.conversation.unread_count }}</span>
                 </NuxtLink>
 
                 <button
@@ -478,8 +484,9 @@ onBeforeUnmount(() => userStream.unsubscribe())
                       <span
                         v-if="item.channel.unread_count"
                         class="ml-auto shrink-0 rounded-full bg-primary px-1.5 py-0.5 text-[10px] font-semibold tabular-nums text-primary-foreground"
-                        :title="`${item.channel.unread_count} unread`"
-                      >{{ item.channel.unread_count > 99 ? '99+' : item.channel.unread_count }}</span>
+                        :class="item.channel.mention ? 'ring-2 ring-primary/30' : ''"
+                        :title="item.channel.mention ? 'You were mentioned' : `${item.channel.unread_count} unread`"
+                      ><span v-if="item.channel.mention" aria-hidden="true">@</span>{{ item.channel.unread_count > 99 ? '99+' : item.channel.unread_count }}</span>
                       <span
                         v-else-if="item.voice.length"
                         class="ml-auto shrink-0 text-[10px] tabular-nums text-muted-foreground"

@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import { mentionNamesKey } from '~/composables/useChannelMembers'
+
 const props = defineProps<{
   source: string
   edited?: boolean
@@ -6,8 +8,13 @@ const props = defineProps<{
 
 const { render } = useMarkdown()
 
+// The channel timeline provides its roster so `@Name` chips resolve; elsewhere (thread
+// previews, the composer preview) there's none, and only `@all` lights up. Read once as a
+// plain value — a message body doesn't outlive the roster it renders against.
+const mentionNames = inject(mentionNamesKey, () => ref<string[]>([]), true)
+
 const html = computed(() => {
-  const out = render(props.source)
+  const out = render(props.source, unref(mentionNames))
   if (!props.edited) return out
 
   // Keep "(edited)" on the same line as the text it belongs to. If the message
@@ -105,6 +112,19 @@ const html = computed(() => {
 
 .md :deep(li > p) {
   display: inline; /* tight list items — no paragraph break after the bullet */
+}
+
+/* @mentions — a tinted pill in the accent, a touch bolder for @all. */
+.md :deep(.md-mention) {
+  border-radius: calc(var(--radius) - 4px);
+  background-color: color-mix(in oklab, var(--primary) 15%, transparent);
+  padding: 0.05rem 0.25rem;
+  font-weight: 500;
+  color: var(--primary);
+}
+
+.md :deep(.md-mention-all) {
+  font-weight: 600;
 }
 
 .md :deep(.md-edited) {

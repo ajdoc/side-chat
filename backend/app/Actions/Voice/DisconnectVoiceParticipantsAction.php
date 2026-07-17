@@ -14,7 +14,7 @@ final class DisconnectVoiceParticipantsAction
 
     /**
      * Turf people out of a call. With a target, that one person; without, everyone in the
-     * room but the moderator doing it — who keeps their seat, because leaving is its own
+     * room but the person doing it — who keeps their seat, because leaving is its own
      * separate button.
      *
      * Each removal reuses the ordinary leave path, so a chat's call still ends and writes

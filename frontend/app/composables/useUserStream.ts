@@ -1,4 +1,5 @@
 import type { Conversation, IncomingCall, User } from '~/types'
+import { useDesktopNotifications } from '~/composables/useDesktopNotifications'
 
 /**
  * Your own stream — the one subscription that isn't about a place.
@@ -21,6 +22,7 @@ export function useUserStream() {
   const { user } = useAuth()
   const { conversations, upsert, patch, forget, byChannel } = useConversations()
   const { incoming, ringingFor, stopRinging } = useCall()
+  const { notify } = useDesktopNotifications()
   const { channelId: callChannelId, disconnect, disconnectedByModerator } = useVoice()
 
   const subscribed = useState<number | null>('user-stream:id', () => null)
@@ -28,7 +30,7 @@ export function useUserStream() {
   /** The conversation you're looking at right now, if you're looking at one. */
   const openConversationId = computed(() => Number(route.params.conversationId) || null)
 
-  function bumpUnread(conversationId: number) {
+  function bumpUnread(conversationId: number, mention = false) {
     const conversation = conversations.value.find(c => c.id === conversationId)
     if (!conversation) return
 
@@ -38,7 +40,10 @@ export function useUserStream() {
     const looking = conversationId === openConversationId.value && document.visibilityState === 'visible'
     if (looking) return
 
-    patch(conversationId, { unread_count: (conversation.unread_count ?? 0) + 1 })
+    patch(conversationId, {
+      unread_count: (conversation.unread_count ?? 0) + 1,
+      mention: conversation.mention || mention,
+    })
   }
 
   function subscribe() {
@@ -66,10 +71,29 @@ export function useUserStream() {
         upsert(conversation)
       })
       // A message landed in a chat you aren't looking at.
-      .listen('.ChannelActivity', (a: { channel_id: number, conversation_id: number | null, user_id: number }) => {
+      .listen('.ChannelActivity', (a: {
+        channel_id: number
+        conversation_id: number | null
+        user_id: number
+        mentioned_user_ids?: number[]
+        mentions_all?: boolean
+      }) => {
         if (a.user_id === user.value?.id || !a.conversation_id) return
 
-        bumpUnread(a.conversation_id)
+        const mentionsMe = !!a.mentions_all || !!a.mentioned_user_ids?.includes(user.value?.id ?? -1)
+        bumpUnread(a.conversation_id, mentionsMe)
+
+        if (mentionsMe) {
+          const conversation = conversations.value.find(c => c.id === a.conversation_id)
+          if (conversation) {
+            notify({
+              title: conversationTitle(conversation, user.value),
+              body: 'You were mentioned',
+              tag: `mention-chat-${conversation.id}`,
+              to: `/chats/${conversation.id}`,
+            })
+          }
+        }
       })
 
       // --- the ringing phone ---

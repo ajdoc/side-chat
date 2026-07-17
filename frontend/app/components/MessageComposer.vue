@@ -1,11 +1,14 @@
 <script setup lang="ts">
 import { Paperclip, SendHorizontal, X } from 'lucide-vue-next'
+import type { ChannelMember } from '~/types'
 import { Button } from '~/components/ui/button'
 
 const props = defineProps<{
   placeholder?: string
   sending?: boolean
   maxFiles?: number
+  /** Roster for the `@` autocomplete — passed straight through to the editor. */
+  mentionMembers?: ChannelMember[]
 }>()
 
 const emit = defineEmits<{
@@ -114,6 +117,7 @@ onBeforeUnmount(() => {
       <MarkdownEditor
         v-model="draft"
         :placeholder="placeholder ?? 'Message'"
+        :mention-members="mentionMembers"
         @submit="submit"
         @paste="onPaste"
       >

@@ -1,3 +1,5 @@
+import { useDesktopNotifications } from '~/composables/useDesktopNotifications'
+
 /**
  * Live unread badges in the channel sidebar.
  *
@@ -11,22 +13,33 @@ export function useUnread() {
   const route = useRoute()
   const { user } = useAuth()
   const { channels } = useServer()
+  const { notify } = useDesktopNotifications()
 
   const activeChannelId = computed(() => Number(route.params.channelId) || null)
 
-  function bump(channelId: number) {
+  function bump(channelId: number, mention = false) {
     const idx = channels.value.findIndex(c => c.id === channelId)
     if (idx === -1) return
 
     const channel = channels.value[idx]!
-    channels.value.splice(idx, 1, { ...channel, unread_count: (channel.unread_count ?? 0) + 1 })
+    channels.value.splice(idx, 1, {
+      ...channel,
+      unread_count: (channel.unread_count ?? 0) + 1,
+      // Sticky: once a channel holds a mention, it keeps the louder badge until you read it.
+      mention: channel.mention || mention,
+    })
   }
 
   function subscribe(serverId: number) {
     if (!echo) return
 
     echo.private(`server.${serverId}`)
-      .listen('.ChannelActivity', (a: { channel_id: number, user_id: number }) => {
+      .listen('.ChannelActivity', (a: {
+        channel_id: number
+        user_id: number
+        mentioned_user_ids?: number[]
+        mentions_all?: boolean
+      }) => {
         if (a.user_id === user.value?.id) return
 
         // The channel open *in front of you* is about to be marked read, so badging it
@@ -35,7 +48,22 @@ export function useUnread() {
         const looking = a.channel_id === activeChannelId.value && document.visibilityState === 'visible'
         if (looking) return
 
-        bump(a.channel_id)
+        const mentionsMe = !!a.mentions_all || !!a.mentioned_user_ids?.includes(user.value?.id ?? -1)
+        bump(a.channel_id, mentionsMe)
+
+        // A mention in a channel you're not reading is worth a system notification (notify()
+        // itself stays quiet unless the tab is in the background).
+        if (mentionsMe) {
+          const channel = channels.value.find(c => c.id === a.channel_id)
+          if (channel) {
+            notify({
+              title: `#${channel.name}`,
+              body: 'You were mentioned',
+              tag: `mention-channel-${channel.id}`,
+              to: `/servers/${channel.server_id}/channels/${channel.id}`,
+            })
+          }
+        }
       })
   }
 
