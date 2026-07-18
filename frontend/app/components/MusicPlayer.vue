@@ -65,8 +65,13 @@ const muted = ref(false)
 // --- engine selection ---------------------------------------------------
 // Spotify's SDK reported this account can't stream (not Premium) — stop offering it.
 const spAccountError = ref(false)
+// The account *can* stream, but its token can't — the SDK rejected auth, or a playback call
+// came back 401/403. Almost always a stale link: the token was minted before the current
+// scope set, so a full re-consent (reconnect) is what fixes it. Fall back to YouTube and
+// surface a "Reconnect Spotify" prompt until they do.
+const spAuthError = ref(false)
 const spotifyEligible = computed(() =>
-  canUseSpotify.value && !spAccountError.value && !!current.value?.spotifyUri && (state.value.speed ?? 1) === 1,
+  canUseSpotify.value && !spAccountError.value && !spAuthError.value && !!current.value?.spotifyUri && (state.value.speed ?? 1) === 1,
 )
 // Which engine actually plays for *this* viewer right now.
 const engine = computed<'spotify' | 'youtube'>(() => (spotifyEligible.value && joined.value ? 'spotify' : 'youtube'))
@@ -184,7 +189,8 @@ async function ensureSpotifyPlayer() {
   })
   // The decisive "you can't stream" signal — free accounts land here. Fall back for good.
   sp.addListener('account_error', () => { spAccountError.value = true; idleSpotify(true); sync() })
-  sp.addListener('authentication_error', () => { spReady = false })
+  // The token was rejected outright — needs a fresh consent, not a refresh. Prompt reconnect.
+  sp.addListener('authentication_error', () => { spReady = false; spAuthError.value = true })
   sp.connect()
 }
 
@@ -199,7 +205,9 @@ async function startSpotifyTrack(uri: string, posSec: number) {
   })
   try {
     await play()
-  } catch {
+  } catch (err) {
+    // A rejected token (stale scopes) — fall back and prompt a reconnect, don't retry.
+    if (isAuthError(err)) { spAuthError.value = true; loadedUri = null; return }
     // A just-`ready` SDK device is registered but not yet the *active* device, so the first
     // /play can 404 ("Device not found") — deployed latency loses the race localhost wins.
     // Activate it with a transfer, then retry once. If that still fails, let the next sync try.
@@ -211,9 +219,20 @@ async function startSpotifyTrack(uri: string, posSec: number) {
       })
       await new Promise(r => setTimeout(r, 400))
       await play()
-    } catch { loadedUri = null; return }
+    } catch (err2) {
+      if (isAuthError(err2)) spAuthError.value = true
+      loadedUri = null
+      return
+    }
   }
   if (!isPlaying.value) setTimeout(() => sp?.pause?.(), 300)
+}
+
+// 401 (token expired/invalid) or 403 (insufficient scope) from a playback call — the link
+// is there but the token can't act. ofetch surfaces the code on the thrown error.
+function isAuthError(err: any): boolean {
+  const status = err?.status ?? err?.statusCode ?? err?.response?.status
+  return status === 401 || status === 403
 }
 
 async function cachedSpotifyToken(): Promise<string | null> {
@@ -327,6 +346,23 @@ async function onConnectSpotify() {
   linkingSpotify.value = true
   try { await connectSpotify() }
   finally { linkingSpotify.value = false }
+}
+
+// Re-consent a stale link (see spAuthError). connect() re-runs the OAuth popup, minting a
+// token with today's scopes; then we tear down the errored player so a fresh token and
+// device register cleanly, and hand playback back to Spotify.
+const reconnecting = ref(false)
+async function onReconnectSpotify() {
+  if (reconnecting.value) return
+  reconnecting.value = true
+  try {
+    await connectSpotify()
+    spAuthError.value = false
+    try { sp?.disconnect?.() } catch { /* already gone */ }
+    sp = null; spReady = false; spDeviceId = null; loadedUri = null; spTokenCache = null
+    if (joined.value) { await ensureSpotifyPlayer(); sync() }
+  }
+  finally { reconnecting.value = false }
 }
 
 function toggleMute() { muted.value = !muted.value; applyVolume() }
@@ -478,9 +514,19 @@ onBeforeUnmount(() => {
           <Play class="h-3.5 w-3.5" /> Listen along
         </Button>
 
+        <!-- Stale link: the account can stream but the token can't. A reconnect re-consents. -->
+        <button
+          v-if="spAuthError"
+          class="mt-2 w-full rounded-md border border-amber-500/30 bg-amber-500/10 px-2 py-1 text-[11px] font-medium text-amber-700 hover:bg-amber-500/20 disabled:opacity-60 dark:text-amber-400"
+          :disabled="reconnecting"
+          @click="onReconnectSpotify"
+        >
+          {{ reconnecting ? 'Reconnecting…' : 'Spotify needs reconnecting — click to fix' }}
+        </button>
+
         <!-- Real-Spotify nudge for a Spotify track this viewer can't play natively yet. -->
         <button
-          v-if="spotifyOffer === 'connect'"
+          v-else-if="spotifyOffer === 'connect'"
           class="mt-2 w-full rounded-md border border-green-500/30 bg-green-500/10 px-2 py-1 text-[11px] font-medium text-green-700 hover:bg-green-500/20 disabled:opacity-60 dark:text-green-400"
           :disabled="linkingSpotify"
           @click="onConnectSpotify"
