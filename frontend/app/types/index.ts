@@ -215,6 +215,8 @@ export interface MusicTrack {
   id: string
   /** Null for a Spotify shell until it's resolved to a YouTube video (lazily, when it plays). */
   videoId: string | null
+  /** `spotify:track:…` for Spotify-sourced tracks — Premium listeners play this directly. */
+  spotifyUri?: string | null
   title: string
   artist: string | null
   /** Length in seconds — may be null until a client backfills it from its player. */

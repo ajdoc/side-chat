@@ -19,6 +19,7 @@ use App\Http\Controllers\ReadReceiptController;
 use App\Http\Controllers\ServerController;
 use App\Http\Controllers\SideChatController;
 use App\Http\Controllers\SideChatMessageController;
+use App\Http\Controllers\SpotifyController;
 use App\Http\Controllers\DecisionController;
 use App\Http\Controllers\ThreadController;
 use App\Http\Controllers\ThreadMessageController;
@@ -30,6 +31,10 @@ Route::get('/ping', fn () => response()->json([
     'app' => config('app.name'),
     'status' => 'ok',
 ]));
+
+// Public: Spotify sends the browser here after a user authorises the account link. It
+// carries no Bearer token — the caller is identified by the encrypted OAuth `state`.
+Route::get('spotify/callback', [SpotifyController::class, 'callback']);
 
 Route::prefix('auth')->group(function () {
     Route::post('register', [AuthController::class, 'register']);
@@ -50,6 +55,12 @@ Route::prefix('auth')->group(function () {
 
 Route::middleware('auth:api')->group(function () {
     Route::patch('preferences', [PreferencesController::class, 'update']);
+
+    // Spotify account linking, for real Premium playback in the music widget.
+    Route::get('spotify/connect', [SpotifyController::class, 'connect']);
+    Route::get('spotify/status', [SpotifyController::class, 'status']);
+    Route::get('spotify/token', [SpotifyController::class, 'token']);
+    Route::post('spotify/disconnect', [SpotifyController::class, 'disconnect']);
 });
 
 // Servers, channels, and messages.

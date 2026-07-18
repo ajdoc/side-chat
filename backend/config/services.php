@@ -62,6 +62,9 @@ return [
     'spotify' => [
         'client_id' => env('SPOTIFY_CLIENT_ID'),
         'client_secret' => env('SPOTIFY_CLIENT_SECRET'),
+        // OAuth redirect for *user* account linking (real Premium playback). Must match a
+        // Redirect URI registered in the Spotify app dashboard. See App\Services\SpotifyOAuth.
+        'redirect' => env('SPOTIFY_REDIRECT_URI', 'http://localhost:8000/api/spotify/callback'),
     ],
 
 ];

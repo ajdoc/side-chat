@@ -243,6 +243,8 @@ final class MusicWidget implements WidgetHandler
             'id' => (string) Str::uuid(),
             // Null for a Spotify shell — filled in by resolveAt when it's about to play.
             'videoId' => $track['videoId'] ?? null,
+            // Present for Spotify tracks — Premium listeners play this instead of YouTube.
+            'spotifyUri' => $track['spotifyUri'] ?? null,
             'title' => $track['title'] ?? 'Unknown',
             'artist' => $track['artist'] ?? null,
             'duration' => $track['duration'] ?? null,

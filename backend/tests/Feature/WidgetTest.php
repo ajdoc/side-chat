@@ -159,6 +159,7 @@ it('expands a Spotify playlist from its embed page, resolving only the first tra
         ->and($state['queue'][0]['duration'])->toBe(200)
         ->and($state['queue'][0]['thumbnail'])->toBe('https://img/cover.jpg')
         ->and($state['queue'][0]['source'])->toBe('spotify')
+        ->and($state['queue'][0]['spotifyUri'])->toBe('spotify:track:a') // real URI kept for Premium playback
         ->and($state['queue'][1]['artist'])->toBe('Artist B, Guest')
         ->and($state['status'])->toBe('playing');
 

@@ -13,7 +13,7 @@ use Illuminate\Foundation\Auth\User as Authenticatable;
 use Illuminate\Notifications\Notifiable;
 use Laravel\Passport\HasApiTokens;
 
-#[Fillable(['name', 'email', 'password', 'avatar', 'provider', 'provider_id', 'theme_mode', 'theme_color'])]
+#[Fillable(['name', 'email', 'password', 'avatar', 'provider', 'provider_id', 'theme_mode', 'theme_color', 'spotify_id', 'spotify_access_token', 'spotify_refresh_token', 'spotify_token_expires_at', 'spotify_product'])]
 #[Hidden(['password', 'remember_token'])]
 class User extends Authenticatable
 {
@@ -40,7 +40,17 @@ class User extends Authenticatable
         return [
             'email_verified_at' => 'datetime',
             'password' => 'hashed',
+            // Third-party OAuth credentials — encrypted at rest.
+            'spotify_access_token' => 'encrypted',
+            'spotify_refresh_token' => 'encrypted',
+            'spotify_token_expires_at' => 'datetime',
         ];
+    }
+
+    /** Whether this user has linked Spotify and can drive the Web Playback SDK. */
+    public function spotifyPremium(): bool
+    {
+        return $this->spotify_refresh_token !== null && $this->spotify_product === 'premium';
     }
 
     /**

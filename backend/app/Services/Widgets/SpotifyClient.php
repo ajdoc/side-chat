@@ -22,7 +22,7 @@ use Illuminate\Support\Facades\Http;
  * The obvious fragility: it depends on Spotify's page markup, so a redesign there could
  * break it (same risk as any scraper). Nothing here throws — a miss returns a friendly error.
  *
- * @phpstan-type Shell array{videoId: null, title: string, artist: string|null, duration: int|null, thumbnail: string|null, source: string, query: string}
+ * @phpstan-type Shell array{videoId: null, spotifyUri: string|null, title: string, artist: string|null, duration: int|null, thumbnail: string|null, source: string, query: string}
  * @phpstan-type Result array{tracks: array<int, Shell>, error: string|null}
  */
 final class SpotifyClient
@@ -111,7 +111,7 @@ final class SpotifyClient
         }
         $artist = $this->clean($item['subtitle'] ?? null);
 
-        return $this->shell($title, $artist, $item['duration'] ?? null, $cover);
+        return $this->shell($title, $artist, $item['duration'] ?? null, $cover, $item['uri'] ?? null);
     }
 
     /**
@@ -129,16 +129,19 @@ final class SpotifyClient
         $names = array_filter(array_map(fn ($a) => $a['name'] ?? null, $entity['artists'] ?? []));
         $artist = $this->clean($names === [] ? null : implode(', ', $names));
 
-        return $this->shell($title, $artist, $entity['duration'] ?? null, $cover);
+        return $this->shell($title, $artist, $entity['duration'] ?? null, $cover, $entity['uri'] ?? null);
     }
 
     /**
      * @return Shell
      */
-    private function shell(string $title, ?string $artist, mixed $durationMs, ?string $cover): array
+    private function shell(string $title, ?string $artist, mixed $durationMs, ?string $cover, mixed $uri): array
     {
         return [
             'videoId' => null,
+            // The real Spotify track URI — Premium listeners play this directly; everyone
+            // else gets `videoId` resolved lazily from YouTube. See MusicWidget/MusicPlayer.
+            'spotifyUri' => is_string($uri) && str_starts_with($uri, 'spotify:track:') ? $uri : null,
             'title' => $title,
             'artist' => $artist,
             'duration' => is_numeric($durationMs) ? (int) round($durationMs / 1000) : null,
