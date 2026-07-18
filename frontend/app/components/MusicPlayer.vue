@@ -191,14 +191,29 @@ async function ensureSpotifyPlayer() {
 async function startSpotifyTrack(uri: string, posSec: number) {
   const token = await cachedSpotifyToken()
   if (!token || !spDeviceId) return
+  const auth = { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }
+  const play = () => $fetch(`https://api.spotify.com/v1/me/player/play?device_id=${spDeviceId}`, {
+    method: 'PUT',
+    headers: auth,
+    body: { uris: [uri], position_ms: Math.round(posSec * 1000) },
+  })
   try {
-    await $fetch(`https://api.spotify.com/v1/me/player/play?device_id=${spDeviceId}`, {
-      method: 'PUT',
-      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-      body: { uris: [uri], position_ms: Math.round(posSec * 1000) },
-    })
-    if (!isPlaying.value) setTimeout(() => sp?.pause?.(), 300)
-  } catch { /* device not ready yet; the next sync retries */ loadedUri = null }
+    await play()
+  } catch {
+    // A just-`ready` SDK device is registered but not yet the *active* device, so the first
+    // /play can 404 ("Device not found") — deployed latency loses the race localhost wins.
+    // Activate it with a transfer, then retry once. If that still fails, let the next sync try.
+    try {
+      await $fetch('https://api.spotify.com/v1/me/player', {
+        method: 'PUT',
+        headers: auth,
+        body: { device_ids: [spDeviceId], play: false },
+      })
+      await new Promise(r => setTimeout(r, 400))
+      await play()
+    } catch { loadedUri = null; return }
+  }
+  if (!isPlaying.value) setTimeout(() => sp?.pause?.(), 300)
 }
 
 async function cachedSpotifyToken(): Promise<string | null> {
