@@ -6,14 +6,16 @@ namespace App\Support\Commands;
  * Turns a message body into a {@see ParsedCommand}, or nothing.
  *
  * A command is a single line beginning `<x>!<verb>` where `<x>` is a known widget prefix
- * — `m` for music, `k` for kanban. Anything else (including a stray "hey!" or a message
+ * — `m` for music, `k` for kanban, `g` for the co-op shooter, `r` for the co-op racer.
+ * Anything else (including a
+ * stray "hey!" or a message
  * that merely mentions `k!add` mid-sentence) is left alone: the parser anchors to the
  * start and requires a recognised namespace, so ordinary chat never trips it.
  */
 final class CommandParser
 {
     /** Prefix letter → widget type. The set of things `<x>!…` is allowed to be. */
-    public const NAMESPACES = ['m' => 'music', 'k' => 'kanban'];
+    public const NAMESPACES = ['m' => 'music', 'k' => 'kanban', 'g' => 'shooter', 'r' => 'racing'];
 
     public function parse(?string $body): ?ParsedCommand
     {

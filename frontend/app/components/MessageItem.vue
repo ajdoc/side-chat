@@ -1,13 +1,7 @@
 <script setup lang="ts">
-import { CheckCircle2, CornerUpLeft, Info, MessageSquarePlus, MessageSquareText, MessagesSquare, MoreHorizontal, Paperclip, Pencil, Pin, PinOff, Rocket, Trash2, X } from 'lucide-vue-next'
+import { CheckCircle2, CornerUpLeft, Info, MessageSquarePlus, MessageSquareText, MessagesSquare, Paperclip, Pencil, Pin, PinOff, Rocket, Trash2, X } from 'lucide-vue-next'
 import type { Message, User } from '~/types'
 import { Button } from '~/components/ui/button'
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger,
-} from '~/components/ui/dropdown-menu'
 import {
   AlertDialog,
   AlertDialogAction,
@@ -23,6 +17,11 @@ const props = defineProps<{
   message: Message
   currentUserId: number | null
   threadActions?: boolean
+  /**
+   * Show the "Start a side chat off this message" button. Separate from threadActions so a
+   * message *inside* a side chat can still start a thread without offering a nested side chat.
+   */
+  sideChatCreate?: boolean
   /** Show side-chat affordances: the living-object card, and (when joined) the decision toggle. */
   sideChatActions?: boolean
   /** Whether the viewer has joined this side chat — gates the decision toggle. */
@@ -67,7 +66,6 @@ const showDelete = ref(false)
 const showInfo = ref(false)
 const showComments = ref(false)
 const pickerOpen = ref(false)
-const menuOpen = ref(false)
 
 function initials(name: string) {
   return name.split(' ').map(w => w[0]).slice(0, 2).join('').toUpperCase()
@@ -265,8 +263,20 @@ function saveEdit() {
     <div
       v-if="!editing"
       class="absolute right-2 top-1 items-center gap-1 rounded border bg-background p-0.5 shadow-sm"
-      :class="pickerOpen || menuOpen ? 'flex' : 'hidden group-hover:flex'"
+      :class="pickerOpen ? 'flex' : 'hidden group-hover:flex'"
     >
+      <!-- Start a side chat off this message — the app's signature move, so it leads the
+           action bar as a labeled, primary-tinted affordance rather than hiding in an
+           overflow menu. A side chat is a room with its own roster; spinning one up from the
+           message that prompted it is the gesture the whole app is built around. -->
+      <button
+        v-if="sideChatCreate"
+        class="flex items-center gap-1 rounded bg-primary/10 px-1.5 py-1 text-xs font-medium text-primary hover:bg-primary/20"
+        title="Start a side chat off this message"
+        @click="emit('create-side-chat', message.id)"
+      >
+        <Rocket class="h-4 w-4" /> Side chat
+      </button>
       <EmojiPicker v-model:open="pickerOpen" @select="emit('toggle-reaction', message.id, $event)" />
       <button class="rounded p-1 text-muted-foreground hover:text-foreground" title="Reply" @click="emit('reply', message)">
         <CornerUpLeft class="h-4 w-4" />
@@ -274,9 +284,8 @@ function saveEdit() {
       <button class="rounded p-1 text-muted-foreground hover:text-foreground" title="Comment" @click="showComments = true">
         <MessageSquareText class="h-4 w-4" />
       </button>
-      <!-- Threads are the primary per-message follow-up: a quick reply that stays attached
-           to this message. Starting a *side chat* — a room with its own roster — is a more
-           deliberate act, so it lives one level down, in the overflow menu below. -->
+      <!-- Threads are the quick, inline per-message follow-up: a reply that stays attached to
+           this message, no roster of its own. Side chats (above) are the deliberate room. -->
       <button
         v-if="threadActions"
         class="rounded p-1 text-muted-foreground hover:text-foreground"
@@ -314,21 +323,6 @@ function saveEdit() {
       <button v-if="canModify" class="rounded p-1 text-muted-foreground hover:text-destructive" title="Delete" @click="showDelete = true">
         <Trash2 class="h-4 w-4" />
       </button>
-
-      <!-- Overflow: deliberate, less-frequent actions. Starting a side chat lives here so it
-           reads as "open a room about this", not as a second reply button. -->
-      <DropdownMenu v-if="threadActions" v-model:open="menuOpen">
-        <DropdownMenuTrigger as-child>
-          <button class="rounded p-1 text-muted-foreground hover:text-foreground" title="More actions" aria-label="More actions">
-            <MoreHorizontal class="h-4 w-4" />
-          </button>
-        </DropdownMenuTrigger>
-        <DropdownMenuContent align="end">
-          <DropdownMenuItem @click="emit('create-side-chat', message.id)">
-            <Rocket class="mr-2 h-4 w-4" /> Start a side chat…
-          </DropdownMenuItem>
-        </DropdownMenuContent>
-      </DropdownMenu>
     </div>
 
     <MessageInfoDialog v-if="showInfo" v-model:open="showInfo" :message="message" />

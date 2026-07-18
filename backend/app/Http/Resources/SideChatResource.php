@@ -36,6 +36,7 @@ class SideChatResource extends JsonResource
             // The living-object counters: 👥 💬 📌 ✅
             'participants_count' => $this->whenCounted('participants'),
             'messages_count' => $this->whenCounted('messages'),
+            'threads_count' => $this->whenCounted('threads'),
             'pinned_count' => $this->when(isset($this->pinned_count), fn () => (int) $this->pinned_count),
             'decisions_count' => $this->when(isset($this->decisions_count), fn () => (int) $this->decisions_count),
             // "Last active 5m ago" — the newest message's timestamp, or the side chat's own

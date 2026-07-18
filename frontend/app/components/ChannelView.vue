@@ -48,6 +48,9 @@ const {
 } = useTyping()
 
 const { members: mentionMembers, names: mentionNames, load: loadMembers } = useChannelMembers()
+// The header's Side Chats button reads this shared count; load it per channel so the badge
+// is live from the moment you land, then keep it fresh over the channel stream.
+const { sideChats, loadSideChats } = useSideChats()
 // So a message body deep in the virtual list can render `@Name` as a chip without each
 // MessageItem having to be handed the roster. See MarkdownBody / useChannelMembers.
 provide(mentionNamesKey, mentionNames)
@@ -57,6 +60,13 @@ const channelId = computed(() => props.channel.id)
 const threadPanelOpen = computed(() => !!(route.query.thread || route.query.threads))
 const sideChatPanelOpen = computed(() => !!(route.query.sidechat || route.query.sidechats))
 const infoPanelOpen = computed(() => route.query.info === '1')
+const boardPanelOpen = computed(() => route.query.board === '1')
+// The open side chat's id, when one is in view mode — it scopes an alongside thread column
+// to that side chat rather than the channel.
+const activeSideChatId = computed(() => {
+  const s = route.query.sidechat
+  return typeof s === 'string' && s !== 'new' ? Number(s) : null
+})
 
 const sending = ref(false)
 const replyingTo = ref<Message | null>(null)
@@ -158,6 +168,7 @@ async function onScrollStart() {
 async function openChannel(id: number) {
   replyingTo.value = null
   loadMembers(id) // for @mention autocomplete + chips; not worth blocking the timeline on
+  loadSideChats(id) // for the header badge; also not worth blocking the timeline on
   await Promise.all([load(id), loadReads(id)])
   subscribe(id)
   subscribeReads(id)
@@ -168,6 +179,7 @@ async function openChannel(id: number) {
 }
 
 function closeChannel(id: number) {
+  sideChats.value = [] // drop the old channel's count so the badge never flashes stale
   unsubscribeTyping(`channel.${id}`)
   unsubscribeReads(id)
   unsubscribe(id)
@@ -291,6 +303,7 @@ onBeforeUnmount(() => {
                   :message="item"
                   :current-user-id="user?.id ?? null"
                   thread-actions
+                  side-chat-create
                   side-chat-actions
                   :highlighted="item.id === highlightedMessageId"
                   :readers="readersByMessage[item.id]"
@@ -347,9 +360,18 @@ onBeforeUnmount(() => {
       </div>
     </div>
 
-    <ThreadPanel v-if="threadPanelOpen" :channel-id="channelId" />
-    <SideChatPanel v-else-if="sideChatPanelOpen" :channel-id="channelId" />
+    <!-- The side chat workspace and a thread column can stand open together — the thread is
+         then scoped to the side chat. Side chat sits closest to the timeline; the thread it
+         spawned sits to its right. -->
+    <SideChatPanel v-if="sideChatPanelOpen" :channel-id="channelId" />
+    <ThreadPanel
+      v-if="threadPanelOpen"
+      :channel-id="channelId"
+      :side-chat-id="sideChatPanelOpen ? activeSideChatId : null"
+    />
     <!-- Reuses the reply-jump: page older history in, scroll to it, flash a highlight. -->
-    <ChannelInfoPanel v-else-if="infoPanelOpen" :channel-id="channelId" @jump="onJumpToReply" />
+    <ChannelInfoPanel v-else-if="infoPanelOpen && !sideChatPanelOpen" :channel-id="channelId" @jump="onJumpToReply" />
+    <!-- The channel's own shared whiteboard, beside the timeline. -->
+    <ChannelWhiteboardPanel v-else-if="boardPanelOpen && !sideChatPanelOpen" :channel-id="channelId" />
   </div>
 </template>

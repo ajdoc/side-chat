@@ -15,6 +15,7 @@ class ThreadResource extends JsonResource
         return [
             'id' => $this->id,
             'channel_id' => $this->channel_id,
+            'side_chat_id' => $this->side_chat_id,
             'message_id' => $this->message_id,
             'name' => $this->name,
             'replies_count' => $this->whenCounted('messages'),

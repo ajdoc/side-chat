@@ -14,4 +14,6 @@ defineProps<{ widget: Widget }>()
   <div v-if="!widget.state" class="h-16 animate-pulse rounded-lg bg-muted" />
   <MusicPlayer v-else-if="widget.type === 'music'" :widget="widget" />
   <KanbanBoard v-else-if="widget.type === 'kanban'" :widget="widget" />
+  <CoopShooter v-else-if="widget.type === 'shooter'" :widget="widget" />
+  <CoopRacer v-else-if="widget.type === 'racing'" :widget="widget" />
 </template>

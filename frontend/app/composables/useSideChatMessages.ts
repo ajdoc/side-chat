@@ -150,6 +150,15 @@ export function useSideChatMessages() {
       })
       // Roster/counts changed (someone joined, a decision was recorded) — refresh the header.
       .listen('.SideChatActivity', (s: SideChat) => { sideChat.value = s })
+      // A thread was started off one of this side chat's messages — drop its indicator on
+      // the message so the Chat tab shows "view thread" live, not only after a reload.
+      .listen('.ThreadCreated', (t: { id: number, message_id: number | null, name: string, replies_count?: number }) => {
+        if (t.message_id != null) {
+          patchMessage(t.message_id, { started_thread: { id: t.id, name: t.name, replies_count: t.replies_count ?? 0 } })
+        }
+        // Keep the workspace's Threads badge live without waiting for a reload.
+        if (sideChat.value) sideChat.value.threads_count = (sideChat.value.threads_count ?? 0) + 1
+      })
   }
 
   function unsubscribe(id: number) {

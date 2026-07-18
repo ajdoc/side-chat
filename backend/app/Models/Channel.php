@@ -64,6 +64,12 @@ class Channel extends Model
         return $this->hasMany(Widget::class);
     }
 
+    /** The channel's own shared whiteboard: every committed stroke, oldest first (paint order). */
+    public function whiteboardStrokes(): HasMany
+    {
+        return $this->hasMany(WhiteboardStroke::class)->orderBy('id');
+    }
+
     /** How far each member has read in this channel. */
     public function reads(): HasMany
     {

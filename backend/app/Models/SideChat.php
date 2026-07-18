@@ -37,6 +37,18 @@ class SideChat extends Model
         return $this->hasMany(Message::class);
     }
 
+    /** Threads spun off this side chat's messages — its own, kept out of the channel's list. */
+    public function threads(): HasMany
+    {
+        return $this->hasMany(Thread::class);
+    }
+
+    /** The shared whiteboard: every committed stroke, oldest first (paint order). */
+    public function whiteboardStrokes(): HasMany
+    {
+        return $this->hasMany(WhiteboardStroke::class)->orderBy('id');
+    }
+
     /** The roster — who has joined. Carries the pivot role and when they joined. */
     public function participants(): BelongsToMany
     {

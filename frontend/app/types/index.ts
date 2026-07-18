@@ -206,13 +206,13 @@ export interface Message {
 export interface Widget {
   id: number
   channel_id: number
-  type: 'music' | 'kanban'
+  type: 'music' | 'kanban' | 'shooter' | 'racing'
   /**
    * The live state — present on HTTP responses. Absent when the widget arrives as a
    * *reference* over the socket (WidgetUpdated / a MessageSent card): its full state is
    * too big for Pusher's 10KB event cap, so the client fetches it from `/api/widgets/{id}`.
    */
-  state?: MusicState | KanbanState
+  state?: MusicState | KanbanState | ShooterState | RacingState
   created_at?: string
 }
 
@@ -270,6 +270,87 @@ export interface KanbanState {
   cards: KanbanCard[]
 }
 
+/** One raider's spot on the Side Raid leaderboard, keyed by user id in `players`. */
+export interface ShooterPlayer {
+  name: string
+  kills: number
+}
+
+/**
+ * The persisted, shared half of the co-op DOOM-like shooter ("Side Raid"). The playable
+ * game is a client-side canvas raycaster (see CoopShooter + lib/raidEngine); this state is
+ * only what must survive a refresh and stay identical for everyone: the `seed` every client
+ * spawns waves from, the team's `wave` high-water mark, the shared `teamLives` pool, and the
+ * pooled `score` / per-player `kills`. Live teammate positions travel over whispers, not here.
+ */
+export interface ShooterState {
+  status: 'idle' | 'active' | 'lost'
+  wave: number
+  seed: number
+  score: number
+  teamLives: number
+  maxLives: number
+  players: Record<string, ShooterPlayer>
+  /** Recent events, newest last — the little raid feed on the card. */
+  log: string[]
+}
+
+/** One driver's spot on the Side Grand Prix leaderboard, keyed by user id in `players`. */
+export interface RacingPlayer {
+  name: string
+  /** Best lap in ms, or null until they've completed a lap. Only ever falls. */
+  bestLap: number | null
+  lapsDone: number
+  finished: boolean
+  /** Total race time in ms when they took the flag, if their client reported it. */
+  finishMs: number | null
+  /** Server-assigned finishing position (1 = first past the flag), or null until finished. */
+  place: number | null
+}
+
+/**
+ * The persisted, shared half of the co-op top-down racer ("Side Grand Prix"). The playable
+ * game is a client-side canvas racer (see CoopRacer + lib/raceEngine); this state is only
+ * what must survive a refresh and stay identical for everyone on the grid: the `seed` every
+ * client builds the same track from, the `laps` the race runs for, and the pooled
+ * leaderboard of best laps and finishing places. Live rival cars travel over whispers, not
+ * here.
+ */
+export interface RacingState {
+  status: 'idle' | 'racing' | 'finished'
+  seed: number
+  laps: number
+  /** How many drivers have taken the flag — the next place to hand out. */
+  finishers: number
+  players: Record<string, RacingPlayer>
+  /** Recent events, newest last — the little race feed on the card. */
+  log: string[]
+}
+
+/** A rival's whispered car position/state, as received off the channel's Reverb stream. */
+export interface RaceGhostMsg {
+  id: number
+  name: string
+  x: number
+  y: number
+  /** Heading in radians, for orienting the ghost car sprite. */
+  a: number
+  /** Which lap they're on, shown under their car. */
+  lap: number
+}
+
+/** A teammate's whispered position/state, as received off the channel's Reverb stream. */
+export interface RaidGhostMsg {
+  id: number
+  name: string
+  x: number
+  y: number
+  dir: number
+  hp: number
+  /** 1 in the frame they fired, for a muzzle flash on their sprite. */
+  f?: 0 | 1
+}
+
 /** A link as it appears in the channel Info panel's Links tab. */
 export interface ChannelLink extends LinkPreview {
   /** The message it was shared in — click through to jump to it. */
@@ -301,12 +382,49 @@ export interface ChannelRead {
 export interface Thread {
   id: number
   channel_id: number
+  /** Set when this thread belongs to a side chat's workspace rather than the channel at large. */
+  side_chat_id?: number | null
   message_id: number | null
   name: string
   replies_count?: number
   creator?: User
   parent_message?: Message | null
   created_at: string
+}
+
+/** The kinds of mark on a side chat's shared whiteboard. */
+export type WhiteboardStrokeKind = 'pen' | 'rect' | 'ellipse' | 'line' | 'arrow' | 'text' | 'note'
+
+/**
+ * The payload shape depends on `kind` and is the whiteboard engine's contract (see
+ * `app/lib/whiteboardEngine.ts`), not the API's — the server passes it straight through.
+ * All coordinates are in the board's logical space (fixed width, see `LOGICAL_WIDTH`).
+ */
+export interface WhiteboardStrokePayload {
+  color?: string
+  fill?: string
+  width?: number
+  text?: string
+  points?: { x: number, y: number }[]
+  x1?: number
+  y1?: number
+  x2?: number
+  y2?: number
+  x?: number
+  y?: number
+  /** Sticky-note side length (logical units). Absent = default size. */
+  w?: number
+}
+
+export interface WhiteboardStroke {
+  /** Server id once committed. Optimistic strokes carry a temporary negative id until then. */
+  id: number
+  kind: WhiteboardStrokeKind
+  payload: WhiteboardStrokePayload
+  /** The drawer's own id for this stroke, for reconciling the optimistic copy with the broadcast. */
+  client_id: string
+  user?: User
+  created_at?: string
 }
 
 /**
@@ -332,6 +450,7 @@ export interface SideChat {
   participant_ids?: number[]
   participants_count?: number
   messages_count?: number
+  threads_count?: number
   pinned_count?: number
   decisions_count?: number
   last_active_at: string

@@ -23,6 +23,7 @@ final class SideChatService
         return [
             'participants',
             'messages',
+            'threads',
             'messages as pinned_count' => fn (Builder $q) => $q->pinned(),
             'messages as decisions_count' => fn (Builder $q) => $q->decided(),
         ];

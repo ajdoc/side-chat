@@ -53,7 +53,13 @@ final class MessageService
     public function forSideChat(SideChat $sideChat, ?int $before = null): array
     {
         $query = $sideChat->messages()
-            ->with(['user', 'replyTo.user', 'attachments', 'reactions.user', 'comments.user', 'linkPreviews'])
+            ->with([
+                'user', 'replyTo.user', 'attachments', 'reactions.user', 'comments.user', 'linkPreviews',
+                // A side chat's messages can start threads of their own, so load the indicator
+                // the same way the channel timeline does — otherwise the thread never shows on
+                // the message it was branched from.
+                'startedThread' => fn ($q) => $q->withCount('messages'),
+            ])
             ->orderByDesc('id');
 
         return $this->keyset($query, $before);

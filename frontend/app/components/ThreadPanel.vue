@@ -4,11 +4,19 @@ import type { Message } from '~/types'
 import { Button } from '~/components/ui/button'
 import { Input } from '~/components/ui/input'
 
-const props = defineProps<{ channelId: number }>()
+/**
+ * `sideChatId` scopes the panel to a side chat's own threads: it opens as a *second* column
+ * beside the side chat workspace, lists/creates threads under `side-chats/{id}/threads`, and
+ * closing it returns to the side chat rather than clearing the whole workspace. Unset, it's
+ * the channel's Threads panel exactly as before.
+ */
+const props = defineProps<{ channelId: number, sideChatId?: number | null }>()
 const route = useRoute()
 const { user } = useAuth()
 
-const { threads, loadThreads, createThread } = useThreads()
+const { threads, sideChatThreads, loadThreads, createThread, loadSideChatThreads, createSideChatThread } = useThreads()
+const scoped = computed(() => props.sideChatId != null)
+const list = computed(() => (scoped.value ? sideChatThreads.value : threads.value))
 const { thread, messages, gone, hasMore, loadingOlder, loadThread, loadOlder, ensureLoaded, send, edit, remove, toggleReaction, togglePin, subscribe, unsubscribe } = useThreadMessages()
 const {
   label: typingLabel,
@@ -63,8 +71,23 @@ async function onScrollStart() {
 function goto(query: Record<string, string>) {
   navigateTo({ path: route.path, query })
 }
+/** Merge into the current query — used when scoped, so the side chat column stays open. */
+function setQuery(patch: Record<string, string | null>) {
+  const q: Record<string, string> = {}
+  for (const [k, v] of Object.entries(route.query)) if (typeof v === 'string') q[k] = v
+  for (const [k, v] of Object.entries(patch)) {
+    if (v === null) delete q[k]
+    else q[k] = v
+  }
+  navigateTo({ path: route.path, query: q })
+}
+/** Open a thread. Scoped: keep the side chat; unscoped: it's the only column. */
+function openThread(id: number) {
+  scoped.value ? setQuery({ thread: String(id), threads: null, from: null }) : goto({ thread: String(id) })
+}
 function close() {
-  navigateTo({ path: route.path, query: {} })
+  // Scoped: fall back to the side chat workspace; unscoped: clear the panel entirely.
+  scoped.value ? setQuery({ thread: null, threads: null, from: null }) : navigateTo({ path: route.path, query: {} })
 }
 
 async function submitCreate() {
@@ -72,9 +95,12 @@ async function submitCreate() {
   if (!name || creating.value) return
   creating.value = true
   try {
-    const t = await createThread(props.channelId, { name, message_id: fromMessageId.value ?? null })
+    const payload = { name, message_id: fromMessageId.value ?? null }
+    const t = scoped.value
+      ? await createSideChatThread(props.sideChatId!, payload)
+      : await createThread(props.channelId, payload)
     newName.value = ''
-    goto({ thread: String(t.id) })
+    openThread(t.id)
   } finally {
     creating.value = false
   }
@@ -103,12 +129,12 @@ function teardown() {
 }
 
 watch(
-  () => [mode.value, activeThreadId.value] as const,
+  () => [mode.value, activeThreadId.value, props.sideChatId] as const,
   async () => {
     teardown()
     replyingTo.value = null
     if (mode.value === 'list') {
-      await loadThreads(props.channelId)
+      scoped.value ? await loadSideChatThreads(props.sideChatId!) : await loadThreads(props.channelId)
     } else if (mode.value === 'view' && activeThreadId.value) {
       await loadThread(activeThreadId.value)
       subscribe(activeThreadId.value)
@@ -134,7 +160,7 @@ onBeforeUnmount(teardown)
     <header class="flex h-12 shrink-0 items-center justify-between border-b px-4">
       <div class="flex items-center gap-2 font-semibold">
         <MessagesSquare class="h-4 w-4 text-muted-foreground" />
-        <span v-if="mode === 'list'">Threads</span>
+        <span v-if="mode === 'list'">{{ scoped ? 'Side chat threads' : 'Threads' }}</span>
         <span v-else-if="mode === 'create'">New thread</span>
         <span v-else class="truncate">{{ thread?.name ?? 'Thread' }}</span>
       </div>
@@ -146,10 +172,10 @@ onBeforeUnmount(teardown)
     <!-- LIST -->
     <div v-if="mode === 'list'" class="flex-1 overflow-y-auto p-2">
       <button
-        v-for="t in threads"
+        v-for="t in list"
         :key="t.id"
         class="block w-full rounded p-2 text-left hover:bg-muted"
-        @click="goto({ thread: String(t.id) })"
+        @click="openThread(t.id)"
       >
         <div class="text-sm font-medium">{{ t.name }}</div>
         <div class="text-xs text-muted-foreground">
@@ -157,13 +183,16 @@ onBeforeUnmount(teardown)
           <template v-if="t.creator"> · started by {{ t.creator.name }}</template>
         </div>
       </button>
-      <p v-if="!threads.length" class="p-3 text-sm text-muted-foreground">No threads yet.</p>
+      <p v-if="!list.length" class="p-3 text-sm text-muted-foreground">
+        {{ scoped ? 'No threads in this side chat yet.' : 'No threads yet.' }}
+      </p>
     </div>
 
     <!-- CREATE -->
     <form v-else-if="mode === 'create'" class="space-y-3 p-4" @submit.prevent="submitCreate">
       <p class="text-sm text-muted-foreground">
-        {{ fromMessageId ? 'Start a thread from this message.' : 'Start a new thread in this channel.' }}
+        <template v-if="scoped">{{ fromMessageId ? 'Start a thread off this side chat message.' : 'Start a new thread in this side chat.' }}</template>
+        <template v-else>{{ fromMessageId ? 'Start a thread from this message.' : 'Start a new thread in this channel.' }}</template>
       </p>
       <Input v-model="newName" placeholder="Thread name" autofocus />
       <Button type="submit" class="w-full" :disabled="!newName.trim() || creating">

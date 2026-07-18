@@ -1,22 +1,28 @@
 <script setup lang="ts">
-import { CheckCircle2, Loader2, Pin, Plus, Rocket, UserPlus, Users, X } from 'lucide-vue-next'
+import { CheckCircle2, Info, Loader2, MessageSquare, MessagesSquare, PenTool, Pin, Plus, Rocket, UserPlus, Users, X } from 'lucide-vue-next'
 import type { Message } from '~/types'
 import { Button } from '~/components/ui/button'
 import { Input } from '~/components/ui/input'
 
 /**
- * The side chat slide-over — the right-hand panel that keeps the main chat visible while a
- * side chat runs alongside it. Three modes off the URL, exactly like ThreadPanel: the list
- * of the channel's side chats, the create form, and one open side chat.
+ * The side chat *workspace* — the right-hand panel that keeps the main chat visible while a
+ * side chat runs alongside it. The list and create modes are a thread panel's; the view
+ * mode is where a side chat pulls decisively ahead of a thread: it's a tabbed workspace, not
+ * just a timeline.
  *
- * The one thing a thread panel never has to reason about: a roster. You can read a side
- * chat you haven't joined, but the composer is a [Join] button until you do.
+ *   - **Chat** — the conversation, its roster, its decisions and pins.
+ *   - **Info** — the side chat about itself: who's here, where it came from, what it decided.
+ *   - **Whiteboard** — a shared, persistent, real-time board (see Whiteboard).
+ *
+ * And because a side chat can own threads of its own, opening one leaves this panel in place
+ * and adds a second column beside it — the ThreadPanel, scoped to this side chat. Which is
+ * why the query helpers here *merge* rather than replace: the two columns share the URL.
  */
 const props = defineProps<{ channelId: number }>()
 const route = useRoute()
 const { user } = useAuth()
 
-const { sideChats, loadSideChats, createSideChat, join } = useSideChats()
+const { sideChats, loadSideChats, createSideChat, join, leave } = useSideChats()
 const {
   sideChat, messages, highlights, hasMore, loadingOlder,
   loadSideChat, loadOlder, ensureLoaded,
@@ -40,6 +46,16 @@ const mode = computed<'list' | 'create' | 'view' | null>(() => {
 const activeId = computed(() => (mode.value === 'view' ? Number(route.query.sidechat) : null))
 const fromMessageId = computed(() => (route.query.from ? Number(route.query.from) : null))
 
+const TABS = [
+  { key: 'chat', label: 'Chat', icon: MessageSquare },
+  { key: 'info', label: 'Info', icon: Info },
+  { key: 'board', label: 'Board', icon: PenTool },
+] as const
+const sctab = computed<'chat' | 'info' | 'board'>(() => {
+  const t = route.query.sctab
+  return t === 'info' || t === 'board' ? t : 'chat'
+})
+
 const joined = computed(() =>
   !!user.value && (sideChat.value?.participant_ids?.includes(user.value.id) ?? false),
 )
@@ -59,6 +75,8 @@ function scrollBottom() {
 }
 
 async function onJumpToReply(id: number) {
+  // Jumping to a message always lands on the Chat tab.
+  if (sctab.value !== 'chat') setQuery({ sctab: null })
   const found = await ensureLoaded(id)
   if (!found) return
   const idx = messages.value.findIndex(m => m.id === id)
@@ -79,11 +97,33 @@ async function onScrollStart() {
   }
 }
 
+/** Replace the whole query — for entering/leaving the workspace outright. */
 function goto(query: Record<string, string>) {
   navigateTo({ path: route.path, query })
 }
+/** Merge into the current query — so a thread column can stay open alongside a tab switch. */
+function setQuery(patch: Record<string, string | null>) {
+  const q: Record<string, string> = {}
+  for (const [k, v] of Object.entries(route.query)) if (typeof v === 'string') q[k] = v
+  for (const [k, v] of Object.entries(patch)) {
+    if (v === null) delete q[k]
+    else q[k] = v
+  }
+  navigateTo({ path: route.path, query: q })
+}
 function close() {
   navigateTo({ path: route.path, query: {} })
+}
+
+// Threads live in a second column; opening one keeps this workspace open.
+function openThreads() {
+  setQuery({ threads: '1', thread: null, from: null })
+}
+function onCreateThread(messageId: number) {
+  setQuery({ threads: null, thread: 'new', from: String(messageId) })
+}
+function onOpenThread(id: number) {
+  setQuery({ threads: null, thread: String(id), from: null })
 }
 
 async function submitCreate() {
@@ -103,11 +143,15 @@ async function onJoin() {
   if (!activeId.value || joining.value) return
   joining.value = true
   try {
-    // The refreshed roster lands over the stream (SideChatActivity), flipping `joined`.
     await join(activeId.value)
   } finally {
     joining.value = false
   }
+}
+
+async function onLeave() {
+  if (!activeId.value) return
+  await leave(activeId.value)
 }
 
 async function onSend(body: string, files: File[]) {
@@ -167,7 +211,6 @@ function excerpt(body: string | null) {
   const text = (body ?? '').replace(/\s+/g, ' ').trim()
   return text.length > 80 ? `${text.slice(0, 80)}…` : text || '(no text)'
 }
-
 function relTime(iso: string) {
   const secs = Math.max(0, Math.round((Date.now() - new Date(iso).getTime()) / 1000))
   if (secs < 60) return 'just now'
@@ -179,7 +222,7 @@ function relTime(iso: string) {
 </script>
 
 <template>
-  <aside class="flex w-[360px] shrink-0 flex-col border-l">
+  <aside class="flex w-[380px] shrink-0 flex-col border-l">
     <header class="flex h-12 shrink-0 items-center justify-between border-b px-4">
       <div class="flex min-w-0 items-center gap-2 font-semibold">
         <Rocket class="h-4 w-4 text-muted-foreground" />
@@ -194,8 +237,6 @@ function relTime(iso: string) {
 
     <!-- LIST -->
     <div v-if="mode === 'list'" class="flex-1 overflow-y-auto p-2">
-      <!-- Deliberate creation lives here, not on a message hover — a side chat is a room you
-           open on purpose. (You can still seed one from a message via its overflow menu.) -->
       <Button variant="outline" size="sm" class="mb-2 w-full gap-1.5" @click="goto({ sidechat: 'new' })">
         <Plus class="h-4 w-4" /> New side chat
       </Button>
@@ -229,10 +270,25 @@ function relTime(iso: string) {
       </Button>
     </form>
 
-    <!-- VIEW -->
+    <!-- VIEW: the tabbed workspace -->
     <template v-else-if="mode === 'view'">
-      <div class="flex min-h-0 flex-1 flex-col">
-        <!-- Roster strip: avatar stack + counts. A side chat is a *place*, so show who's in it. -->
+      <!-- Tab bar -->
+      <nav class="flex shrink-0 border-b">
+        <button
+          v-for="t in TABS"
+          :key="t.key"
+          class="flex flex-1 items-center justify-center gap-1.5 border-b-2 py-2 text-sm transition-colors"
+          :class="sctab === t.key
+            ? 'border-primary font-medium text-foreground'
+            : 'border-transparent text-muted-foreground hover:text-foreground'"
+          @click="setQuery({ sctab: t.key === 'chat' ? null : t.key })"
+        >
+          <component :is="t.icon" class="h-4 w-4" /> {{ t.label }}
+        </button>
+      </nav>
+
+      <!-- CHAT (kept mounted so its scroll position and subscription survive tab switches) -->
+      <div v-show="sctab === 'chat'" class="flex min-h-0 flex-1 flex-col">
         <div class="flex shrink-0 items-center justify-between gap-3 border-b px-4 py-2">
           <div class="flex items-center -space-x-1.5">
             <span
@@ -252,10 +308,18 @@ function relTime(iso: string) {
             </span>
           </div>
           <div class="flex items-center gap-2">
+            <!-- Browse this side chat's own threads — opens the scoped list in the second column. -->
+            <button
+              class="flex items-center gap-1 rounded border px-1.5 py-0.5 text-xs text-muted-foreground hover:bg-muted hover:text-foreground"
+              title="Threads in this side chat"
+              @click="openThreads"
+            >
+              <MessagesSquare class="h-3.5 w-3.5" /> Threads
+              <span v-if="(sideChat?.threads_count ?? 0) > 0" class="font-semibold">· {{ sideChat?.threads_count }}</span>
+            </button>
             <span class="flex items-center gap-1 text-xs text-muted-foreground">
               <Users class="h-3.5 w-3.5" /> {{ sideChat?.participants_count ?? 0 }}
             </span>
-            <!-- Bring people in — a power for those already in the room. -->
             <button
               v-if="joined"
               class="flex items-center gap-1 rounded border px-1.5 py-0.5 text-xs text-muted-foreground hover:bg-muted hover:text-foreground"
@@ -267,7 +331,6 @@ function relTime(iso: string) {
           </div>
         </div>
 
-        <!-- Highlights card: the decisions and pins that define what this room concluded. -->
         <div v-if="hasHighlights" class="m-3 mb-0 shrink-0 rounded-lg border bg-muted/30 p-2 text-sm">
           <div v-if="highlights.decisions.length" class="mb-1.5">
             <div class="mb-1 flex items-center gap-1 text-xs font-semibold text-emerald-600 dark:text-emerald-400">
@@ -299,7 +362,6 @@ function relTime(iso: string) {
           </div>
         </div>
 
-        <!-- Started from: the live origin message, or a frozen snapshot once it's been deleted. -->
         <div v-if="sideChat?.parent_message" class="m-3 mb-0 shrink-0 rounded-lg border bg-muted/40 p-3 text-sm">
           <div class="mb-1 text-xs font-semibold uppercase text-muted-foreground">Started from</div>
           <span class="font-medium">{{ sideChat.parent_message.user.name }}</span>
@@ -332,17 +394,20 @@ function relTime(iso: string) {
                 <DynamicScrollerItem
                   :item="item"
                   :active="active"
-                  :size-dependencies="[item.body, item.reply_to, item.edited, item.attachments, item.reactions, item.comments, item.link_previews, item.pinned, item.decided]"
+                  :size-dependencies="[item.body, item.reply_to, item.started_thread, item.edited, item.attachments, item.reactions, item.comments, item.link_previews, item.pinned, item.decided]"
                 >
                   <MessageItem
                     :message="item"
                     :current-user-id="user?.id ?? null"
+                    thread-actions
                     side-chat-actions
                     :joined="joined"
                     :highlighted="item.id === highlightedMessageId"
                     @reply="replyingTo = $event"
                     @save="edit"
                     @remove="remove"
+                    @create-thread="onCreateThread"
+                    @open-thread="onOpenThread"
                     @jump-to-reply="onJumpToReply"
                     @toggle-reaction="toggleReaction"
                     @toggle-pin="togglePin"
@@ -353,24 +418,44 @@ function relTime(iso: string) {
             </DynamicScroller>
           </ClientOnly>
         </div>
+
+        <div class="shrink-0 border-t">
+          <div v-if="!joined" class="p-3">
+            <Button class="w-full" :disabled="joining" @click="onJoin">
+              {{ joining ? 'Joining…' : 'Join this side chat to take part' }}
+            </Button>
+          </div>
+          <template v-else>
+            <div v-if="replyingTo" class="flex items-center justify-between bg-muted/40 px-3 py-1.5 text-xs text-muted-foreground">
+              <span class="truncate">Replying to <span class="font-medium">{{ replyingTo.user.name }}</span></span>
+              <button class="hover:text-foreground" @click="replyingTo = null"><X class="h-3.5 w-3.5" /></button>
+            </div>
+            <TypingIndicator :label="typingLabel" />
+            <MessageComposer placeholder="Message…" :sending="sending" @submit="onSend" @typing="notifyTyping" />
+          </template>
+        </div>
       </div>
 
-      <div class="shrink-0 border-t">
-        <!-- Join gate: read all you like, but posting needs a place on the roster. -->
-        <div v-if="!joined" class="p-3">
-          <Button class="w-full" :disabled="joining" @click="onJoin">
-            {{ joining ? 'Joining…' : 'Join this side chat to take part' }}
-          </Button>
-        </div>
-        <template v-else>
-          <div v-if="replyingTo" class="flex items-center justify-between bg-muted/40 px-3 py-1.5 text-xs text-muted-foreground">
-            <span class="truncate">Replying to <span class="font-medium">{{ replyingTo.user.name }}</span></span>
-            <button class="hover:text-foreground" @click="replyingTo = null"><X class="h-3.5 w-3.5" /></button>
-          </div>
-          <TypingIndicator :label="typingLabel" />
-          <MessageComposer placeholder="Message…" :sending="sending" @submit="onSend" @typing="notifyTyping" />
-        </template>
-      </div>
+      <!-- INFO -->
+      <SideChatInfo
+        v-if="sctab === 'info'"
+        :side-chat="sideChat"
+        :highlights="highlights"
+        :joined="joined"
+        @jump="onJumpToReply"
+        @add-people="showAddPeople = true"
+        @leave="onLeave"
+      />
+
+      <!-- WHITEBOARD -->
+      <Whiteboard
+        v-if="sctab === 'board' && activeId"
+        :key="activeId"
+        :base-path="`/api/side-chats/${activeId}/whiteboard`"
+        :stream-name="`sidechat.${activeId}`"
+        :can-draw="joined"
+        readonly-hint="Join this side chat to draw"
+      />
     </template>
 
     <SideChatAddPeopleDialog

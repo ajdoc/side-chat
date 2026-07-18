@@ -6,6 +6,7 @@ use App\Http\Controllers\Auth\SocialAuthController;
 use App\Http\Controllers\ChannelController;
 use App\Http\Controllers\ChannelLinkController;
 use App\Http\Controllers\ChannelMemberController;
+use App\Http\Controllers\ChannelWhiteboardController;
 use App\Http\Controllers\CommentController;
 use App\Http\Controllers\ConversationController;
 use App\Http\Controllers\InviteController;
@@ -24,6 +25,7 @@ use App\Http\Controllers\DecisionController;
 use App\Http\Controllers\ThreadController;
 use App\Http\Controllers\ThreadMessageController;
 use App\Http\Controllers\VoiceController;
+use App\Http\Controllers\WhiteboardController;
 use App\Http\Controllers\WidgetController;
 use Illuminate\Support\Facades\Route;
 
@@ -171,6 +173,14 @@ Route::middleware('auth:api')->group(function () {
     Route::get('threads/{thread}/messages', [ThreadMessageController::class, 'index']);
     Route::post('threads/{thread}/messages', [ThreadMessageController::class, 'store']);
 
+    // The channel's own shared whiteboard — same board a side chat has (below), gated on
+    // channel membership rather than a roster: anyone in the channel may read and draw.
+    Route::get('channels/{channel}/whiteboard', [ChannelWhiteboardController::class, 'index']);
+    Route::post('channels/{channel}/whiteboard/strokes', [ChannelWhiteboardController::class, 'store']);
+    Route::patch('channels/{channel}/whiteboard/strokes/{stroke}', [ChannelWhiteboardController::class, 'update']);
+    Route::delete('channels/{channel}/whiteboard/strokes/{stroke}', [ChannelWhiteboardController::class, 'destroy']);
+    Route::delete('channels/{channel}/whiteboard', [ChannelWhiteboardController::class, 'clear']);
+
     /*
      * Side chats: a mini room spun off a message, with its own roster and timeline.
      *
@@ -188,6 +198,20 @@ Route::middleware('auth:api')->group(function () {
     Route::post('side-chats/{sideChat}/participants', [SideChatController::class, 'addParticipants']);
     Route::get('side-chats/{sideChat}/messages', [SideChatMessageController::class, 'index']);
     Route::post('side-chats/{sideChat}/messages', [SideChatMessageController::class, 'store']);
+    // A side chat's own threads — its workspace list, kept out of the channel's Threads panel.
+    Route::get('side-chats/{sideChat}/threads', [ThreadController::class, 'sideChatIndex']);
+    Route::post('side-chats/{sideChat}/threads', [ThreadController::class, 'sideChatStore']);
+    /*
+     * The shared whiteboard: the persistent half of the side chat's workspace. Reading the
+     * board needs only channel membership; drawing on it needs a place on the roster — the
+     * same line join draws for posting. The live drag + cursor never come here; they ride
+     * over whispers on the sidechat.{id} stream.
+     */
+    Route::get('side-chats/{sideChat}/whiteboard', [WhiteboardController::class, 'index']);
+    Route::post('side-chats/{sideChat}/whiteboard/strokes', [WhiteboardController::class, 'store']);
+    Route::patch('side-chats/{sideChat}/whiteboard/strokes/{stroke}', [WhiteboardController::class, 'update']);
+    Route::delete('side-chats/{sideChat}/whiteboard/strokes/{stroke}', [WhiteboardController::class, 'destroy']);
+    Route::delete('side-chats/{sideChat}/whiteboard', [WhiteboardController::class, 'clear']);
     // Record a message as a decision (the ✅ on a side chat's card), or take it back.
     Route::post('messages/{message}/decision', [DecisionController::class, 'toggle']);
 });

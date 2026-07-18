@@ -20,13 +20,18 @@ class ThreadCreated implements ShouldBroadcastNow
     }
 
     /**
-     * Announced on the parent channel so members see the new thread appear.
+     * Announced where the thread lives: a side chat's own stream when it's a side-chat
+     * thread (so that workspace's Threads list updates), otherwise the parent channel.
      *
      * @return array<int, PrivateChannel>
      */
     public function broadcastOn(): array
     {
-        return [new PrivateChannel('channel.'.$this->thread->channel_id)];
+        return [new PrivateChannel(
+            $this->thread->side_chat_id
+                ? 'sidechat.'.$this->thread->side_chat_id
+                : 'channel.'.$this->thread->channel_id
+        )];
     }
 
     public function broadcastAs(): string
