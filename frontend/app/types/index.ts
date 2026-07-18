@@ -207,8 +207,13 @@ export interface Widget {
   id: number
   channel_id: number
   type: 'music' | 'kanban'
-  state: MusicState | KanbanState
-  created_at: string
+  /**
+   * The live state — present on HTTP responses. Absent when the widget arrives as a
+   * *reference* over the socket (WidgetUpdated / a MessageSent card): its full state is
+   * too big for Pusher's 10KB event cap, so the client fetches it from `/api/widgets/{id}`.
+   */
+  state?: MusicState | KanbanState
+  created_at?: string
 }
 
 export interface MusicTrack {

@@ -43,6 +43,19 @@ export function useMessages() {
       m.widget?.id === widget.id ? { ...m, widget } : m,
     )
   }
+  /**
+   * A widget moved, but its state is too big to ride the socket (Pusher's 10KB event cap),
+   * so the broadcast is a reference only. Pull the fresh state and fold it into every card.
+   */
+  async function refreshWidget(widgetId: number) {
+    try {
+      const res = await api<{ data: Widget }>(`/api/widgets/${widgetId}`)
+      patchWidget(res.data)
+    }
+    catch {
+      // A transient miss just leaves the card on its last state; a reload refetches it.
+    }
+  }
   function setStartedThread(messageId: number | null, summary: StartedThread | null) {
     if (!messageId) return
     const idx = messages.value.findIndex(m => m.id === messageId)
@@ -157,7 +170,11 @@ export function useMessages() {
 
   function subscribe(id: number) {
     echo.private(`channel.${id}`)
-      .listen('.MessageSent', (m: Message) => pushUnique(m))
+      .listen('.MessageSent', (m: Message) => {
+        pushUnique(m)
+        // A widget card arrives as a reference (no state) — pull its live state in.
+        if (m.type === 'widget' && m.widget && m.widget.state == null) refreshWidget(m.widget.id)
+      })
       .listen('.MessageUpdated', (m: Message) => replaceMessage(m))
       .listen('.MessageDeleted', (p: { id: number }) => removeMessage(p.id))
       .listen('.ReactionToggled', (p: { message_id: number, reactions: Reaction[] }) => {
@@ -172,8 +189,9 @@ export function useMessages() {
       .listen('.MessagePreviewsUpdated', (p: { message_id: number, link_previews: LinkPreview[] }) => {
         patchMessage(p.message_id, { link_previews: p.link_previews })
       })
-      // A widget moved (track changed, card crossed a column). Re-sync every card of it.
-      .listen('.WidgetUpdated', (w: Widget) => patchWidget(w))
+      // A widget moved (track changed, card crossed a column). The broadcast is a reference
+      // only, so fetch the fresh state and re-sync every card of it.
+      .listen('.WidgetUpdated', (ref: { id: number }) => refreshWidget(ref.id))
       // Someone pinned or unpinned something. Patch the timeline (the pin icon) and the
       // Pinned tab. The message may live in a thread we've never opened, which is why the
       // event carries the whole thing rather than an id — patchMessage simply won't match.

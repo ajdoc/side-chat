@@ -104,7 +104,10 @@ Route::middleware('auth:api')->group(function () {
 
     // Widgets: the music player and kanban board are created by chat commands (m!/k!),
     // so there's no "create" here — only the card's own buttons/drags, which run through
-    // one free-form action endpoint and broadcast their result as WidgetUpdated.
+    // one free-form action endpoint and broadcast their result as WidgetUpdated. That
+    // broadcast carries only a reference (the state is too big for Pusher's 10KB cap), so
+    // `show` is how a client pulls the fresh state after being nudged.
+    Route::get('widgets/{widget}', [WidgetController::class, 'show']);
     Route::post('widgets/{widget}/action', [WidgetController::class, 'action']);
 
     // Pins: any member may pin or unpin, on channel *and* thread messages.

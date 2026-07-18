@@ -2,7 +2,6 @@
 
 namespace App\Events;
 
-use App\Http\Resources\WidgetResource;
 use App\Models\Widget;
 use Illuminate\Broadcasting\InteractsWithSockets;
 use Illuminate\Broadcasting\PrivateChannel;
@@ -13,11 +12,12 @@ use Illuminate\Queue\SerializesModels;
 /**
  * A widget's state moved — a track started, the queue changed, a card crossed a column.
  *
- * Broadcast on the channel's own stream (widgets are channel-scoped), carrying the whole
- * fresh state so every card rendering this widget re-renders in place at once. There may
- * be several cards for one widget in the timeline; the client patches all of them by
- * matching `widget.id`. This is the transport that keeps a listen-along in sync, so it
- * broadcasts *now* rather than via the queue.
+ * Broadcast on the channel's own stream (widgets are channel-scoped). It carries only a
+ * *reference* to the widget, not its state: a music queue can hold up to 100 tracks and
+ * the full JSON blows past Pusher's 10KB per-event limit ("Payload too large"). On this
+ * signal each client GETs the fresh state from `/api/widgets/{id}` and re-renders every
+ * card of it (matched by `widget.id`; there may be several). Broadcasts *now* rather than
+ * via the queue, so a listen-along stays in sync.
  */
 class WidgetUpdated implements ShouldBroadcastNow
 {
@@ -36,9 +36,18 @@ class WidgetUpdated implements ShouldBroadcastNow
         return 'WidgetUpdated';
     }
 
-    /** @return array<string, mixed> */
+    /**
+     * Only a reference travels over the socket — the full state can exceed Pusher's 10KB
+     * event cap. Clients fetch the fresh state from GET /api/widgets/{id}.
+     *
+     * @return array<string, mixed>
+     */
     public function broadcastWith(): array
     {
-        return (new WidgetResource($this->widget))->resolve();
+        return [
+            'id' => $this->widget->id,
+            'channel_id' => $this->widget->channel_id,
+            'type' => $this->widget->type,
+        ];
     }
 }

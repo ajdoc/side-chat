@@ -3,6 +3,8 @@
 namespace App\Http\Controllers;
 
 use App\Http\Requests\Widget\WidgetActionRequest;
+use App\Http\Requests\Widget\WidgetShowRequest;
+use App\Http\Resources\WidgetResource;
 use App\Models\Widget;
 use App\Services\Widgets\WidgetService;
 use Illuminate\Http\Response;
@@ -16,6 +18,15 @@ use Illuminate\Http\Response;
 class WidgetController extends Controller
 {
     public function __construct(private readonly WidgetService $widgets) {}
+
+    /**
+     * A widget's live state. Fetched after a reference-only WidgetUpdated / MessageSent —
+     * the state is too big to ride the socket (Pusher's 10KB event cap).
+     */
+    public function show(WidgetShowRequest $request, Widget $widget): WidgetResource
+    {
+        return new WidgetResource($widget);
+    }
 
     public function action(WidgetActionRequest $request, Widget $widget): Response
     {

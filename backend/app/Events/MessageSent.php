@@ -5,6 +5,7 @@ namespace App\Events;
 use App\Http\Resources\MessageResource;
 use App\Models\Message;
 use Illuminate\Broadcasting\InteractsWithSockets;
+use Illuminate\Support\Arr;
 use Illuminate\Broadcasting\PrivateChannel;
 use Illuminate\Contracts\Broadcasting\ShouldBroadcastNow;
 use Illuminate\Foundation\Events\Dispatchable;
@@ -39,6 +40,15 @@ class MessageSent implements ShouldBroadcastNow
      */
     public function broadcastWith(): array
     {
-        return (new MessageResource($this->message))->resolve();
+        $data = (new MessageResource($this->message))->resolve();
+
+        // A widget card's full state (a queue of up to 100 tracks) can blow past Pusher's
+        // 10KB per-event limit. Ship only a reference over the socket; the client pulls the
+        // fresh state from GET /api/widgets/{id}. HTTP responses still carry the whole thing.
+        if (is_array($data['widget'] ?? null)) {
+            $data['widget'] = Arr::only($data['widget'], ['id', 'channel_id', 'type']);
+        }
+
+        return $data;
     }
 }
