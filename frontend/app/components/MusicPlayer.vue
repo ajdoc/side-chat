@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { useLocalStorage } from '@vueuse/core'
-import { ArrowDown, ArrowUp, FastForward, ListMusic, Pause, Play, Radio, Repeat, Repeat1, Rewind, Search, Shuffle, SkipBack, SkipForward, Square, Volume2, VolumeX, X } from 'lucide-vue-next'
+import { ArrowDown, ArrowUp, FastForward, ListMusic, Pause, Play, Radio, RefreshCw, Repeat, Repeat1, Rewind, Search, Shuffle, SkipBack, SkipForward, Square, Volume2, VolumeX, X } from 'lucide-vue-next'
 import type { MusicState, MusicTrack, Widget } from '~/types'
 import { Button } from '~/components/ui/button'
 
@@ -70,8 +70,13 @@ const spAccountError = ref(false)
 // scope set, so a full re-consent (reconnect) is what fixes it. Fall back to YouTube and
 // surface a "Reconnect Spotify" prompt until they do.
 const spAuthError = ref(false)
+// The SDK's device_id isn't playable for this token even after a transfer — a 404 that
+// survives the retry. Usually a ghost/stale device from an account or session mismatch; a
+// reconnect re-registers a fresh one. Fall back to YouTube instead of looping the 404.
+const spDeviceError = ref(false)
 const spotifyEligible = computed(() =>
-  canUseSpotify.value && !spAccountError.value && !spAuthError.value && !!current.value?.spotifyUri && (state.value.speed ?? 1) === 1,
+  canUseSpotify.value && !spAccountError.value && !spAuthError.value && !spDeviceError.value
+  && !!current.value?.spotifyUri && (state.value.speed ?? 1) === 1,
 )
 // Which engine actually plays for *this* viewer right now.
 const engine = computed<'spotify' | 'youtube'>(() => (spotifyEligible.value && joined.value ? 'spotify' : 'youtube'))
@@ -179,7 +184,10 @@ async function ensureSpotifyPlayer() {
   const Spotify = await $spotify.ready()
   sp = new Spotify.Player({
     name: 'Side Chat',
-    getOAuthToken: (cb: (t: string) => void) => { getToken().then(t => t && cb(t)) },
+    // Share the one cached token with the playback calls below — the SDK registers its
+    // device under whatever token this returns, so if the two diverged (e.g. after relinking
+    // a different account) the device would 404. One source keeps them on one identity.
+    getOAuthToken: (cb: (t: string) => void) => { cachedSpotifyToken().then(t => t && cb(t)) },
     volume: (muted.value ? 0 : volume.value) / 100,
   })
   sp.addListener('ready', ({ device_id }: any) => { spDeviceId = device_id; spReady = true; sync() })
@@ -220,7 +228,10 @@ async function startSpotifyTrack(uri: string, posSec: number) {
       await new Promise(r => setTimeout(r, 400))
       await play()
     } catch (err2) {
+      // Still failing after activating the device. Stop hammering Spotify — fall back to
+      // YouTube and flag it so a reconnect (fresh device/consent) is offered.
       if (isAuthError(err2)) spAuthError.value = true
+      else spDeviceError.value = true
       loadedUri = null
       return
     }
@@ -358,6 +369,7 @@ async function onReconnectSpotify() {
   try {
     await connectSpotify()
     spAuthError.value = false
+    spDeviceError.value = false
     try { sp?.disconnect?.() } catch { /* already gone */ }
     sp = null; spReady = false; spDeviceId = null; loadedUri = null; spTokenCache = null
     if (joined.value) { await ensureSpotifyPlayer(); sync() }
@@ -394,6 +406,13 @@ const spotifyOffer = computed(() =>
   !!current.value?.spotifyUri && !canUseSpotify.value
     ? (spotifyStatus.value.linked ? 'premium' : 'connect')
     : null,
+)
+// A recoverable Spotify failure a reconnect can fix — a rejected token or an unplayable
+// (ghost/mismatched) device. Drives the auto "Reconnect" banner and its wording.
+const reconnectPrompt = computed(() =>
+  spAuthError.value ? 'Spotify needs reconnecting — click to fix'
+    : spDeviceError.value ? 'Spotify device unavailable — reconnect to fix'
+      : null,
 )
 
 const syncKey = computed(() =>
@@ -496,6 +515,19 @@ onBeforeUnmount(() => {
         <div class="mt-2 flex items-center gap-2 text-muted-foreground">
           <Button variant="ghost" size="icon" class="h-7 w-7" :class="state.autoplay && 'text-primary'" title="Autoplay / radio" @click="toggleAutoplay"><Radio class="h-4 w-4" /></Button>
           <Button variant="ghost" size="icon" class="h-7 w-7" title="Stop" @click="stop"><Square class="h-4 w-4" /></Button>
+          <!-- Force a fresh Spotify link + device — the manual escape hatch for a wedged player. -->
+          <Button
+            v-if="spotifyStatus.linked"
+            variant="ghost"
+            size="icon"
+            class="h-7 w-7"
+            :class="reconnectPrompt && 'text-amber-600 dark:text-amber-400'"
+            :disabled="reconnecting"
+            title="Reconnect Spotify"
+            @click="onReconnectSpotify"
+          >
+            <RefreshCw class="h-4 w-4" :class="reconnecting && 'animate-spin'" />
+          </Button>
 
           <select class="h-7 rounded border bg-background px-1 text-[11px] tabular-nums" :value="speed" title="Playback speed (YouTube engine only)" @change="onSpeed">
             <option v-for="opt in SPEED_OPTIONS" :key="opt.value" :value="opt.value">{{ opt.label }}</option>
@@ -514,14 +546,15 @@ onBeforeUnmount(() => {
           <Play class="h-3.5 w-3.5" /> Listen along
         </Button>
 
-        <!-- Stale link: the account can stream but the token can't. A reconnect re-consents. -->
+        <!-- Recoverable Spotify failure (rejected token / dead device). A reconnect re-consents
+             and re-registers a fresh device. -->
         <button
-          v-if="spAuthError"
+          v-if="reconnectPrompt"
           class="mt-2 w-full rounded-md border border-amber-500/30 bg-amber-500/10 px-2 py-1 text-[11px] font-medium text-amber-700 hover:bg-amber-500/20 disabled:opacity-60 dark:text-amber-400"
           :disabled="reconnecting"
           @click="onReconnectSpotify"
         >
-          {{ reconnecting ? 'Reconnecting…' : 'Spotify needs reconnecting — click to fix' }}
+          {{ reconnecting ? 'Reconnecting…' : reconnectPrompt }}
         </button>
 
         <!-- Real-Spotify nudge for a Spotify track this viewer can't play natively yet. -->
