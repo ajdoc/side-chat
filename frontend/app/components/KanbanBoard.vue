@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ClipboardList, Plus, X } from 'lucide-vue-next'
+import { ClipboardList, Pencil, Plus, X } from 'lucide-vue-next'
 import type { KanbanCard, KanbanState, Widget } from '~/types'
 
 /**
@@ -110,9 +110,18 @@ const remove = (card: KanbanCard) => action(props.widget.id, 'remove', { id: car
               >{{ card.text }}</span>
 
               <button
-                class="flex-none text-muted-foreground opacity-0 group-hover:opacity-100 hover:text-destructive"
+                v-if="editingId !== card.id"
+                class="flex-none text-muted-foreground opacity-0 focus:opacity-100 group-hover:opacity-100 hover:text-foreground"
+                title="Edit card"
+                @click.stop="beginEdit(card)"
+              >
+                <Pencil class="h-3.5 w-3.5" />
+              </button>
+
+              <button
+                class="flex-none text-muted-foreground opacity-0 focus:opacity-100 group-hover:opacity-100 hover:text-destructive"
                 title="Delete card"
-                @click="remove(card)"
+                @click.stop="remove(card)"
               >
                 <X class="h-3.5 w-3.5" />
               </button>

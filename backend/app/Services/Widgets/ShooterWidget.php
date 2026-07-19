@@ -7,20 +7,20 @@ use App\Models\Widget;
 use App\Support\Commands\ParsedCommand;
 
 /**
- * "Side Raid" — the shared, persisted half of a co-op DOOM-style shooter. The *game* runs
- * client-side on a canvas raycaster (see the CoopShooter card + lib/raidEngine); this owns
+ * "Side Squadron" — the shared, persisted half of a co-op Galaga-style shooter. The *game*
+ * runs client-side on a canvas (see the CoopShooter card + lib/squadronEngine); this owns
  * only the things that must survive a refresh and stay the same for everyone:
  *
  *   - `seed` — the one number every client feeds its deterministic spawner, so wave N of a
- *     raid is the same demons in the same spots on every screen without anyone streaming
+ *     run is the same formation in the same slots on every screen without anyone streaming
  *     enemy positions. (Live *teammate* positions ride whispers, not this.)
- *   - `wave` — the raid's high-water mark; whoever clears a wave first drags the team to the
+ *   - `wave` — the run's high-water mark; whoever clears a wave first drags the squad to the
  *     next one (`wave` action, taken as a max), so nobody fights an old wave alone for long.
  *   - `teamLives` — one shared pool. Your local death spends a life for everyone; at zero the
- *     raid is `lost` for all, which is the co-op stake.
+ *     run is `lost` for all, which is the co-op stake.
  *   - `score` + per-player `kills` — the pooled tally and the leaderboard. Kills are reported
  *     in *batches* (a client accumulates them and flushes every few seconds), because one
- *     action per demon would be one HTTP round trip and one broadcast per demon.
+ *     action per invader would be one HTTP round trip and one broadcast per invader.
  *
  * State shape:
  *   status:    'idle' | 'active' | 'lost'
@@ -99,7 +99,7 @@ final class ShooterWidget implements WidgetHandler
             'teamLives' => self::START_LIVES,
             'maxLives' => self::START_LIVES,
             'players' => (object) [],
-            'log' => ['⚔️ Raid started — enter the arena!'],
+            'log' => ['🚀 Squadron scrambled — clear the skies!'],
         ];
 
         return WidgetOutcome::card();
@@ -121,7 +121,7 @@ final class ShooterWidget implements WidgetHandler
 
         $players[$pid] = ['name' => $user->name, 'kills' => 0];
         $state['players'] = $players;
-        $state['log'] = $this->pushLog($state['log'] ?? [], "🎮 {$user->name} deployed");
+        $state['log'] = $this->pushLog($state['log'] ?? [], "🎮 {$user->name} launched");
         $widget->state = $state;
 
         return WidgetOutcome::updated();
@@ -165,7 +165,7 @@ final class ShooterWidget implements WidgetHandler
         }
 
         $state['wave'] = $wave;
-        $state['log'] = $this->pushLog($state['log'] ?? [], "🌊 Wave {$wave} — hold the line!");
+        $state['log'] = $this->pushLog($state['log'] ?? [], "🌊 Wave {$wave} — hold formation!");
         $widget->state = $state;
 
         return WidgetOutcome::updated();
@@ -182,9 +182,9 @@ final class ShooterWidget implements WidgetHandler
         $state['teamLives'] = max(0, (int) $state['teamLives'] - 1);
         if ($state['teamLives'] <= 0) {
             $state['status'] = 'lost';
-            $state['log'] = $this->pushLog($state['log'] ?? [], "💀 {$user->name} fell — the team is wiped on wave {$state['wave']}");
+            $state['log'] = $this->pushLog($state['log'] ?? [], "💀 {$user->name} was shot down — the squadron is wiped on wave {$state['wave']}");
         } else {
-            $state['log'] = $this->pushLog($state['log'] ?? [], "🩸 {$user->name} went down · {$state['teamLives']} lives left");
+            $state['log'] = $this->pushLog($state['log'] ?? [], "🩸 {$user->name} was shot down · {$state['teamLives']} lives left");
         }
         $widget->state = $state;
 
@@ -205,11 +205,11 @@ final class ShooterWidget implements WidgetHandler
     private function help(): string
     {
         return implode("\n", [
-            '🎯 **Side Raid — co-op DOOM-like shooter**',
-            '`g!raid` — start a raid and drop the arena card',
-            'Hit **Deploy** on the card, then WASD to move, mouse to aim, click to shoot',
-            'You fight the same waves together and share a pool of lives — clear waves, climb the leaderboard',
-            '`g!reset` — start a fresh raid',
+            '🚀 **Side Squadron — co-op Galaga-style shooter**',
+            '`g!raid` — scramble a squadron and drop the arena card',
+            'Hit **Launch** on the card, then ← → (or A/D) to steer, space or click to fire',
+            'You fly the same waves together and share a pool of lives — clear waves, climb the leaderboard',
+            '`g!reset` — start a fresh run',
         ]);
     }
 }

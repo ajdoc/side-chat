@@ -2,8 +2,8 @@
  * The drawing half of a side chat's shared whiteboard — deliberately framework-agnostic so
  * its geometry can be reasoned about (and unit-tested) under plain Node, with the Vue card
  * only feeding it a canvas, pointer input, and the strokes to paint. It's the whiteboard
- * sibling of {@link file://./raceEngine.ts raceEngine} / {@link file://./raidEngine.ts
- * raidEngine}, and shares their honesty rule: everyone paints the exact same board from the
+ * sibling of {@link file://./raceEngine.ts raceEngine} / {@link file://./squadronEngine.ts
+ * squadronEngine}, and shares their honesty rule: everyone paints the exact same board from the
  * exact same data.
  *
  * The one thing that makes a *shared* board work is a coordinate system that doesn't depend

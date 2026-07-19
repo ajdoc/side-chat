@@ -9,9 +9,11 @@ use Illuminate\Http\JsonResponse;
 class ChannelMemberController extends Controller
 {
     /**
-     * The people who can be @mentioned in this channel — its server's members, or the
-     * chat's participants. Deliberately thin: id, name and avatar are all the composer's
-     * autocomplete needs, and it keeps everyone's email out of a list any member can read.
+     * The people in this channel — its server's members, or the chat's participants.
+     * Serves two readers: the composer's @-mention autocomplete (which only touches
+     * id/name/avatar) and the Info panel's participant list, which also shows email.
+     * Every reader here is already a proven member of the container, so the roster it
+     * belongs to is one they're a part of.
      */
     public function index(IndexChannelMemberRequest $request, Channel $channel): JsonResponse
     {
@@ -22,10 +24,11 @@ class ChannelMemberController extends Controller
 
         $members = $container->members()
             ->orderBy('name')
-            ->get(['users.id', 'users.name', 'avatar'])
+            ->get(['users.id', 'users.name', 'users.email', 'avatar'])
             ->map(fn ($user) => [
                 'id' => $user->id,
                 'name' => $user->name,
+                'email' => $user->email,
                 'avatar' => $user->avatar,
             ]);
 

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { Loader2, MessagesSquare, SendHorizontal, X } from 'lucide-vue-next'
+import { ChevronDown, Loader2, MessagesSquare, SendHorizontal, Users, X } from 'lucide-vue-next'
 import type { GifResult, Message } from '~/types'
 import { Button } from '~/components/ui/button'
 import { Input } from '~/components/ui/input'
@@ -18,6 +18,8 @@ const { threads, sideChatThreads, loadThreads, createThread, loadSideChatThreads
 const scoped = computed(() => props.sideChatId != null)
 const list = computed(() => (scoped.value ? sideChatThreads.value : threads.value))
 const { thread, messages, gone, hasMore, loadingOlder, loadThread, loadOlder, ensureLoaded, send, edit, remove, toggleReaction, togglePin, subscribe, unsubscribe } = useThreadMessages()
+// A thread has no roster of its own — its participants are the people in the parent channel.
+const { members: participants, load: loadParticipants } = useChannelMembers()
 const {
   label: typingLabel,
   notifyTyping,
@@ -39,6 +41,8 @@ const newName = ref('')
 const creating = ref(false)
 const sending = ref(false)
 const replyingTo = ref<Message | null>(null)
+// The reply the forward picker is open for, or null when it's closed.
+const forwardTarget = ref<Message | null>(null)
 const scroller = ref<any>(null)
 const highlightedMessageId = ref<number | null>(null)
 let highlightTimer: ReturnType<typeof setTimeout> | undefined
@@ -146,6 +150,10 @@ watch(
   { immediate: true },
 )
 
+// The parent channel's roster, for the Participants disclosure. Cached per channel, so
+// re-requesting as you open threads costs nothing.
+watch(() => props.channelId, id => loadParticipants(id), { immediate: true })
+
 // Thread was deleted (its parent message was removed) — close the panel.
 watch(gone, (v) => { if (v) close() })
 
@@ -209,6 +217,17 @@ onBeforeUnmount(teardown)
           <MarkdownBody v-if="thread.parent_message.body" :source="thread.parent_message.body" />
         </div>
 
+        <!-- Participants: collapsed by default so it never crowds the reply list. -->
+        <details class="group/participants m-3 mb-0 shrink-0 rounded-lg border">
+          <summary class="flex cursor-pointer list-none items-center gap-1.5 px-3 py-2 text-xs font-semibold uppercase text-muted-foreground">
+            <Users class="h-3.5 w-3.5" /> Participants ({{ participants.length }})
+            <ChevronDown class="ml-auto h-4 w-4 transition-transform group-open/participants:rotate-180" />
+          </summary>
+          <div class="max-h-56 overflow-y-auto border-t px-2 py-2">
+            <ParticipantList :members="participants" />
+          </div>
+        </details>
+
         <p v-if="!messages.length" class="p-3 text-sm text-muted-foreground">No replies yet. Start the conversation.</p>
 
         <div class="relative min-h-0 flex-1">
@@ -234,6 +253,7 @@ onBeforeUnmount(teardown)
                   <MessageItem
                     :message="item"
                     :current-user-id="user?.id ?? null"
+                    forwardable
                     :highlighted="item.id === highlightedMessageId"
                     @reply="replyingTo = $event"
                     @save="edit"
@@ -241,6 +261,7 @@ onBeforeUnmount(teardown)
                     @jump-to-reply="onJumpToReply"
                     @toggle-reaction="toggleReaction"
                     @toggle-pin="togglePin"
+                    @forward="forwardTarget = $event"
                   />
                 </DynamicScrollerItem>
               </template>
@@ -258,5 +279,8 @@ onBeforeUnmount(teardown)
         <MessageComposer placeholder="Reply…" :sending="sending" @submit="onSend" @typing="notifyTyping" />
       </div>
     </template>
+
+    <!-- Forward a reply from this thread into another chat or channel. -->
+    <ForwardDialog v-model:message="forwardTarget" />
   </aside>
 </template>

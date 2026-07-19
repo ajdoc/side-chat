@@ -2,7 +2,7 @@
  * A tiny top-down racing engine for the Side Grand Prix widget — the driving half of the
  * game, deliberately framework-agnostic so its maths can be unit-tested under plain Node
  * and the Vue card only has to feed it input, a canvas and rival ghost cars. It's the
- * racing sibling of {@link file://./raidEngine.ts raidEngine}, and shares its honesty rules:
+ * racing sibling of {@link file://./squadronEngine.ts squadronEngine}, and shares its honesty rules:
  *
  *   - The **track is deterministic** — every client builds the exact same circuit from the
  *     shared per-race `seed` ({@see makeTrack}), so "the fast left-hander before the pit

@@ -66,6 +66,8 @@ const joining = ref(false)
 const showAddPeople = ref(false)
 const sending = ref(false)
 const replyingTo = ref<Message | null>(null)
+// The message the forward picker is open for, or null when it's closed.
+const forwardTarget = ref<Message | null>(null)
 const scroller = ref<any>(null)
 const highlightedMessageId = ref<number | null>(null)
 let highlightTimer: ReturnType<typeof setTimeout> | undefined
@@ -401,6 +403,7 @@ function relTime(iso: string) {
                     :current-user-id="user?.id ?? null"
                     thread-actions
                     side-chat-actions
+                    forwardable
                     :joined="joined"
                     :highlighted="item.id === highlightedMessageId"
                     @reply="replyingTo = $event"
@@ -412,6 +415,7 @@ function relTime(iso: string) {
                     @toggle-reaction="toggleReaction"
                     @toggle-pin="togglePin"
                     @toggle-decision="toggleDecision"
+                    @forward="forwardTarget = $event"
                   />
                 </DynamicScrollerItem>
               </template>
@@ -465,5 +469,8 @@ function relTime(iso: string) {
       :channel-id="channelId"
       :existing-ids="sideChat?.participant_ids ?? []"
     />
+
+    <!-- Forward a message from this side chat into another chat or channel. -->
+    <ForwardDialog v-model:message="forwardTarget" />
   </aside>
 </template>

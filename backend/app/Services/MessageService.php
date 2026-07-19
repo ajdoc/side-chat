@@ -22,7 +22,7 @@ final class MessageService
             ->whereNull('thread_id')    // thread replies live in their thread
             ->whereNull('side_chat_id') // side-chat messages live in their side chat
             ->with([
-                'user', 'replyTo.user', 'attachments', 'reactions.user', 'comments.user', 'linkPreviews',
+                'user', 'replyTo.user', 'forwardedFrom.user', 'attachments', 'reactions.user', 'comments.user', 'linkPreviews',
                 'startedThread' => fn ($q) => $q->withCount('messages'),
                 'startedSideChat' => fn ($q) => app(SideChatService::class)->applyCardData($q),
                 'widget',

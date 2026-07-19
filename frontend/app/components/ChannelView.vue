@@ -57,6 +57,48 @@ provide(mentionNamesKey, mentionNames)
 
 const channelId = computed(() => props.channel.id)
 
+/**
+ * Which messages open a new calendar day, and the label to print above them.
+ *
+ * Keyed by message id (not index) so it survives the virtual scroller reordering rows and
+ * `loadOlder()` prepending history: a message that was the first-of-day at the top can gain
+ * an older same-day predecessor and quietly lose its divider, and vice versa. Recomputed
+ * whenever `messages` changes, then handed to each row both to render the divider and — via
+ * size-dependencies — to make the scroller re-measure the row whose divider came or went.
+ */
+const daySeparators = computed(() => {
+  const labels = new Map<number, string>()
+  let prevKey: string | null = null
+  for (const m of messages.value) {
+    const key = dayKey(m.created_at)
+    if (key !== prevKey) labels.set(m.id, dayLabel(m.created_at))
+    prevKey = key
+  }
+  return labels
+})
+
+/** Local-calendar-day identity — messages an hour apart across midnight are different days. */
+function dayKey(iso: string): string {
+  const d = new Date(iso)
+  return `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}`
+}
+
+/** "Today" / "Yesterday" for the recent days, otherwise a full date (year only when it differs). */
+function dayLabel(iso: string): string {
+  const d = new Date(iso)
+  const now = new Date()
+  const startOfDay = (x: Date) => new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime()
+  const diffDays = Math.round((startOfDay(now) - startOfDay(d)) / 86400000)
+  if (diffDays === 0) return 'Today'
+  if (diffDays === 1) return 'Yesterday'
+  return d.toLocaleDateString([], {
+    weekday: 'long',
+    month: 'long',
+    day: 'numeric',
+    ...(d.getFullYear() === now.getFullYear() ? {} : { year: 'numeric' }),
+  })
+}
+
 const threadPanelOpen = computed(() => !!(route.query.thread || route.query.threads))
 const sideChatPanelOpen = computed(() => !!(route.query.sidechat || route.query.sidechats))
 const infoPanelOpen = computed(() => route.query.info === '1')
@@ -70,6 +112,8 @@ const activeSideChatId = computed(() => {
 
 const sending = ref(false)
 const replyingTo = ref<Message | null>(null)
+// The message the forward picker is open for, or null when it's closed.
+const forwardTarget = ref<Message | null>(null)
 const scroller = ref<any>(null)
 const highlightedMessageId = ref<number | null>(null)
 let highlightTimer: ReturnType<typeof setTimeout> | undefined
@@ -295,16 +339,29 @@ onBeforeUnmount(() => {
                 :item="item"
                 :active="active"
                 :size-dependencies="[
-                  item.body, item.reply_to, item.started_thread, item.started_side_chat, item.edited, item.attachments,
+                  item.body, item.reply_to, item.forwarded_from, item.started_thread, item.started_side_chat, item.edited, item.attachments,
                   item.reactions, item.comments, item.link_previews, item.pinned, readersByMessage[item.id],
+                  daySeparators.get(item.id),
                 ]"
               >
+                <!-- Day divider: printed above the first message of each calendar day, so
+                     scrolling back through history keeps its bearings. Part of this row's
+                     measured height (hence the size-dependency above), which is what keeps
+                     it correct under virtual scrolling and prepended history. -->
+                <div v-if="daySeparators.get(item.id)" class="relative my-2 flex items-center justify-center">
+                  <div class="absolute inset-x-2 top-1/2 h-px bg-border" />
+                  <span class="relative rounded-full border bg-background px-2.5 py-0.5 text-[11px] font-medium text-muted-foreground">
+                    {{ daySeparators.get(item.id) }}
+                  </span>
+                </div>
+
                 <MessageItem
                   :message="item"
                   :current-user-id="user?.id ?? null"
                   thread-actions
                   side-chat-create
                   side-chat-actions
+                  forwardable
                   :highlighted="item.id === highlightedMessageId"
                   :readers="readersByMessage[item.id]"
                   @reply="replyingTo = $event"
@@ -317,6 +374,7 @@ onBeforeUnmount(() => {
                   @jump-to-reply="onJumpToReply"
                   @toggle-reaction="toggleReaction"
                   @toggle-pin="togglePin"
+                  @forward="forwardTarget = $event"
                 />
               </DynamicScrollerItem>
             </template>
@@ -353,6 +411,7 @@ onBeforeUnmount(() => {
         <MessageComposer
           :placeholder="`Message ${prefix ?? ''}${title}`"
           :sending="sending"
+          :channel-id="channelId"
           :mention-members="mentionMembers"
           @submit="onSend"
           @typing="notifyTyping"
@@ -373,5 +432,8 @@ onBeforeUnmount(() => {
     <ChannelInfoPanel v-else-if="infoPanelOpen && !sideChatPanelOpen" :channel-id="channelId" @jump="onJumpToReply" />
     <!-- The channel's own shared whiteboard, beside the timeline. -->
     <ChannelWhiteboardPanel v-else-if="boardPanelOpen && !sideChatPanelOpen" :channel-id="channelId" />
+
+    <!-- Forward a message from this timeline into another chat or channel. -->
+    <ForwardDialog v-model:message="forwardTarget" />
   </div>
 </template>

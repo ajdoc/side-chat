@@ -17,7 +17,7 @@ class MessageSent implements ShouldBroadcastNow
 
     public function __construct(public Message $message)
     {
-        $this->message->loadMissing('user', 'replyTo.user', 'attachments', 'reactions.user', 'linkPreviews', 'widget');
+        $this->message->loadMissing('user', 'replyTo.user', 'forwardedFrom.user', 'attachments', 'reactions.user', 'linkPreviews', 'widget');
     }
 
     /**

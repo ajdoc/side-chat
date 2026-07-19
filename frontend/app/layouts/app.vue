@@ -3,6 +3,7 @@ import {
   Check, ChevronDown, ChevronRight, Copy, DoorOpen, Hash, LogOut, MessageSquarePlus, MicOff,
   Monitor, Moon, Pencil, Phone, Plus, ScreenShare, Sun, Trash2, User, UserPlus, Users, Volume2,
 } from 'lucide-vue-next'
+import { useLocalStorage } from '@vueuse/core'
 import type { Channel, Conversation, Server, ThemeColor, ThemeMode } from '~/types'
 import { useDesktopNotifications } from '~/composables/useDesktopNotifications'
 import { Button } from '~/components/ui/button'
@@ -50,6 +51,7 @@ const { servers, hasMore: hasMoreServers, fetchServers, loadMore: loadMoreServer
 const { server, channels, openServer, loadMoreChannels, renameChannel, deleteChannel, patchServer } = useServer()
 const { conversations, hasMore: hasMoreChats, fetchConversations, loadMore: loadMoreChats } = useConversations()
 const { user, logout } = useAuth()
+const { hasDraft } = useDrafts()
 const { mode, color, setMode, setColor } = useTheme()
 const { participantsIn } = useVoiceRoster()
 const userStream = useUserStream()
@@ -80,9 +82,23 @@ const activeConversationId = computed(() => Number(route.params.conversationId) 
 // Browser tab: "Side Chat - <server>" (a chat page sets its own).
 useHead({ title: computed(() => server.value?.name ?? '') })
 
-const chatsOpen = ref(true)
-const serversOpen = ref(true)
+// Persisted so a section you folded away stays folded across reloads, not just across
+// navigations. useLocalStorage is SSR-safe (yields the default on the server).
+const chatsOpen = useLocalStorage('sidebar:chatsOpen', true)
+const serversOpen = useLocalStorage('sidebar:serversOpen', true)
 const showNewChat = ref(false)
+
+/**
+ * The server whose channels we currently hold loaded — which is the one the sidebar
+ * unfolds, *not* necessarily the one the route points at.
+ *
+ * The distinction is the whole of "don't collapse when I switch": useServer keeps a
+ * server's channels in memory after you navigate off it (opening a DM never clears them),
+ * so anchoring the unfold to the loaded server — rather than to `activeServerId`, which
+ * goes null the moment you open a chat — leaves the channel list standing while you read
+ * a DM, instead of folding it away and making you click back in to see it again.
+ */
+const loadedServerId = computed(() => server.value?.id ?? null)
 
 // Live count, kept in sync by the join-request Reverb subscription opened in openServer().
 const { requests: joinRequests } = useJoinRequests()
@@ -120,12 +136,13 @@ const rows = computed(() => {
     }
 
     for (const s of servers.value) {
-      const active = s.id === activeServerId.value
-      list.push({ id: `server-${s.id}`, kind: 'server', server: s, expanded: active })
+      const expanded = s.id === loadedServerId.value
+      list.push({ id: `server-${s.id}`, kind: 'server', server: s, expanded })
 
-      // Only the server you're actually in unfolds. useServer holds exactly one server's
-      // channels, which is both why this works and why it's the right amount of sidebar.
-      if (!active) continue
+      // Only the loaded server unfolds. useServer holds exactly one server's channels,
+      // which is both why this works and why it's the right amount of sidebar — and it
+      // stays unfolded even once you've stepped away into a DM (see loadedServerId).
+      if (!expanded) continue
 
       const text = channels.value.filter(c => c.type === 'text')
       const voice = channels.value.filter(c => c.type === 'voice')
@@ -152,7 +169,9 @@ const rows = computed(() => {
 function onScrollEnd() {
   if (hasMoreChats.value) loadMoreChats()
   if (hasMoreServers.value) loadMoreServers()
-  if (activeServerId.value) loadMoreChannels(activeServerId.value)
+  // Page in more of the unfolded server's channels — the one that's actually showing,
+  // which outlives the route (see loadedServerId), not whatever the URL points at.
+  if (loadedServerId.value) loadMoreChannels(loadedServerId.value)
 }
 
 function chatTitle(conversation: Conversation) {
@@ -372,6 +391,14 @@ onBeforeUnmount(() => userStream.unsubscribe())
 
                   <span class="truncate">{{ chatTitle(item.conversation) }}</span>
 
+                  <!-- Unsent text waiting in a chat you're not looking at (Viber-style). Hidden
+                       on the open chat, where the composer already shows it. -->
+                  <span
+                    v-if="hasDraft(item.conversation.channel_id) && item.conversation.id !== activeConversationId"
+                    class="ml-auto shrink-0 text-[10px] font-medium italic text-primary"
+                    title="You have an unsent draft here"
+                  >Draft</span>
+
                   <!-- A call happening in a chat you aren't looking at. Kept live by
                        CallStarted/CallEnded on your own stream — no roster needed. -->
                   <Phone
@@ -479,6 +506,12 @@ onBeforeUnmount(() => userStream.unsubscribe())
                       <Volume2 v-if="item.channel.type === 'voice'" class="h-4 w-4 shrink-0" />
                       <Hash v-else class="h-4 w-4 shrink-0" />
                       <span class="truncate">{{ item.channel.name }}</span>
+                      <!-- Unsent text waiting in a channel you're not looking at (Viber-style). -->
+                      <span
+                        v-if="hasDraft(item.channel.id) && item.channel.id !== activeChannelId"
+                        class="ml-auto shrink-0 text-[10px] font-medium italic text-primary"
+                        title="You have an unsent draft here"
+                      >Draft</span>
                       <!-- Voice channels hold a conversation as well as a call, so they get
                            the same unread badge every other channel does. -->
                       <span

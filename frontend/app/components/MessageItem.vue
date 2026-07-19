@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { CheckCircle2, CornerUpLeft, Info, MessageSquarePlus, MessageSquareText, MessagesSquare, Paperclip, Pencil, Pin, PinOff, Rocket, Trash2, X } from 'lucide-vue-next'
+import { Check, CheckCircle2, Copy, CornerUpLeft, Forward, Info, MessageSquarePlus, MessageSquareText, MessagesSquare, Paperclip, Pencil, Pin, PinOff, Rocket, Trash2, X } from 'lucide-vue-next'
 import type { Message, User } from '~/types'
 import { Button } from '~/components/ui/button'
 import {
@@ -24,6 +24,8 @@ const props = defineProps<{
   sideChatCreate?: boolean
   /** Show side-chat affordances: the living-object card, and (when joined) the decision toggle. */
   sideChatActions?: boolean
+  /** Offer "Forward" — only where a parent is wired to open the forward picker. */
+  forwardable?: boolean
   /** Whether the viewer has joined this side chat — gates the decision toggle. */
   joined?: boolean
   highlighted?: boolean
@@ -43,6 +45,7 @@ const emit = defineEmits<{
   'jump-to-reply': [messageId: number]
   'toggle-reaction': [messageId: number, emoji: string]
   'toggle-pin': [messageId: number]
+  forward: [message: Message]
 }>()
 
 const isSystem = computed(() => props.message.type === 'system')
@@ -66,6 +69,9 @@ const showDelete = ref(false)
 const showInfo = ref(false)
 const showComments = ref(false)
 const pickerOpen = ref(false)
+// Flips to a tick for a beat after a successful copy, then falls back to the copy icon.
+const copied = ref(false)
+let copiedTimer: ReturnType<typeof setTimeout> | undefined
 
 function initials(name: string) {
   return name.split(' ').map(w => w[0]).slice(0, 2).join('').toUpperCase()
@@ -115,6 +121,22 @@ function saveEdit() {
   emit('save', props.message.id, body || null, editFiles.value, removeIds.value)
   editing.value = false
 }
+
+// Copy the message text verbatim — the markdown the author typed, not the rendered HTML,
+// so it round-trips losslessly if it's pasted back into another message.
+async function copyMessage() {
+  if (!props.message.body) return
+  try {
+    await navigator.clipboard.writeText(props.message.body)
+    copied.value = true
+    clearTimeout(copiedTimer)
+    copiedTimer = setTimeout(() => (copied.value = false), 1500)
+  } catch {
+    // clipboard blocked (insecure context / denied) — nothing we can do but leave it be
+  }
+}
+
+onBeforeUnmount(() => clearTimeout(copiedTimer))
 </script>
 
 <template>
@@ -145,6 +167,13 @@ function saveEdit() {
       <!-- Recorded as a decision (side chats only) — says so on the message, like a pin. -->
       <p v-if="message.decided" class="mb-0.5 flex items-center gap-1 text-xs font-medium text-emerald-600 dark:text-emerald-400">
         <CheckCircle2 class="h-3 w-3 shrink-0" /> Decision
+      </p>
+
+      <!-- Forwarded: says whose message this was before it was passed along. The origin
+           lives in another room the viewer may not even be in, so it's a label, not a link. -->
+      <p v-if="message.forwarded_from" class="mb-0.5 flex items-center gap-1 text-xs italic text-muted-foreground">
+        <Forward class="h-3 w-3 shrink-0" />
+        Forwarded<template v-if="message.forwarded_from.user_name"> from <span class="font-medium not-italic">{{ message.forwarded_from.user_name }}</span></template>
       </p>
 
       <!-- reply reference: click to jump to the original message -->
@@ -283,6 +312,21 @@ function saveEdit() {
       </button>
       <button class="rounded p-1 text-muted-foreground hover:text-foreground" title="Comment" @click="showComments = true">
         <MessageSquareText class="h-4 w-4" />
+      </button>
+      <!-- Forward this message into another chat, group or channel. -->
+      <button v-if="forwardable && !isWidget" class="rounded p-1 text-muted-foreground hover:text-foreground" title="Forward" @click="emit('forward', message)">
+        <Forward class="h-4 w-4" />
+      </button>
+      <!-- Copy the message text. Only where there's text to copy. -->
+      <button
+        v-if="message.body"
+        class="rounded p-1 hover:text-foreground"
+        :class="copied ? 'text-green-600 dark:text-green-400' : 'text-muted-foreground'"
+        :title="copied ? 'Copied!' : 'Copy text'"
+        @click="copyMessage"
+      >
+        <Check v-if="copied" class="h-4 w-4" />
+        <Copy v-else class="h-4 w-4" />
       </button>
       <!-- Threads are the quick, inline per-message follow-up: a reply that stays attached to
            this message, no roster of its own. Side chats (above) are the deliberate room. -->

@@ -92,6 +92,8 @@ Route::middleware('auth:api')->group(function () {
     // Edit/delete works for both channel and thread messages (sender-only).
     Route::patch('messages/{message}', [MessageController::class, 'update']);
     Route::delete('messages/{message}', [MessageController::class, 'destroy']);
+    // Forward a message into another channel you're a member of (a DM, group, or channel).
+    Route::post('messages/{message}/forward', [MessageController::class, 'forward']);
 
     // Reactions: any server member may react, on channel *and* thread messages.
     Route::post('messages/{message}/reactions', [ReactionController::class, 'toggle']);

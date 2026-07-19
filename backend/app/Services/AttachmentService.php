@@ -9,6 +9,7 @@ use Illuminate\Contracts\Pagination\LengthAwarePaginator;
 use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\Storage;
+use Illuminate\Support\Str;
 
 final class AttachmentService
 {
@@ -67,6 +68,47 @@ final class AttachmentService
             'extension' => 'gif',
             'size' => 0,
         ]);
+    }
+
+    /**
+     * Copy a message's attachments onto another message — what "forward" does with them.
+     *
+     * A remote reference (a GIF) is just a row pointing at someone else's CDN, so it's
+     * cloned by copying the row. A hosted file has bytes on our disk that belong to the
+     * source channel's folder; the copy lands in the *target* channel's folder so it's
+     * purged with that channel, and gets its own row pointing at the new path. If the copy
+     * can't be made (the source file has gone missing), that one attachment is skipped
+     * rather than failing the whole forward.
+     *
+     * @param  Collection<int, Attachment>  $sources
+     */
+    public function cloneForMessage(Message $target, Collection $sources): void
+    {
+        foreach ($sources as $source) {
+            if ($source->isRemote()) {
+                $target->attachments()->create($source->only(['disk', 'path', 'name', 'mime_type', 'extension', 'size']));
+
+                continue;
+            }
+
+            $disk = Storage::disk($source->disk);
+            if (! $disk->exists($source->path)) {
+                continue; // original bytes are gone — nothing to copy
+            }
+
+            $extension = $source->extension ? ".{$source->extension}" : '';
+            $newPath = "attachments/{$target->channel_id}/".Str::random(40).$extension;
+            $disk->copy($source->path, $newPath);
+
+            $target->attachments()->create([
+                'disk' => $source->disk,
+                'path' => $newPath,
+                'name' => $source->name,
+                'mime_type' => $source->mime_type,
+                'extension' => $source->extension,
+                'size' => $source->size,
+            ]);
+        }
     }
 
     /** Whether a GIF media URL points at a host one of the configured providers serves. */

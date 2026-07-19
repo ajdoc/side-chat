@@ -22,9 +22,6 @@ const emit = defineEmits<{
   leave: []
 }>()
 
-function initials(name: string) {
-  return name.split(' ').map(w => w[0]).slice(0, 2).join('').toUpperCase()
-}
 function excerpt(body: string | null) {
   const text = (body ?? '').replace(/\s+/g, ' ').trim()
   return text.length > 80 ? `${text.slice(0, 80)}…` : text || '(no text)'
@@ -80,16 +77,7 @@ function relTime(iso: string) {
           <UserPlus class="h-3.5 w-3.5" /> Add
         </button>
       </div>
-      <ul class="space-y-1.5">
-        <li v-for="m in sideChat.participants ?? []" :key="m.id" class="flex items-center gap-2">
-          <span class="grid h-6 w-6 shrink-0 place-items-center overflow-hidden rounded-full bg-primary text-[9px] font-semibold text-primary-foreground">
-            <img v-if="m.avatar" :src="m.avatar" :alt="m.name" class="h-full w-full object-cover">
-            <span v-else>{{ initials(m.name) }}</span>
-          </span>
-          <span class="truncate">{{ m.name }}</span>
-          <span v-if="m.id === sideChat.creator?.id" class="rounded bg-muted px-1 text-[10px] text-muted-foreground">creator</span>
-        </li>
-      </ul>
+      <ParticipantList :members="sideChat.participants ?? []" :creator-id="sideChat.creator?.id ?? null" />
     </div>
 
     <!-- Decisions & pins -->

@@ -49,6 +49,11 @@ class MessageResource extends JsonResource
                     'user_name' => $this->replyTo->user?->name,
                 ]
                 : null),
+            // The original this message was forwarded from — just the author, enough for the
+            // "Forwarded from X" line. Null once the original is deleted (nulled by the FK).
+            'forwarded_from' => $this->whenLoaded('forwardedFrom', fn () => $this->forwardedFrom
+                ? ['user_name' => $this->forwardedFrom->user?->name]
+                : null),
             // Summary of a thread started from this message (channel timeline only).
             'started_thread' => $this->whenLoaded('startedThread', fn () => $this->startedThread
                 ? [

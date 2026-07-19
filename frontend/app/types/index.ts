@@ -37,10 +37,14 @@ export interface Channel {
   created_at: string
 }
 
-/** A member who can be @mentioned in a channel — the shape the composer autocomplete needs. */
+/**
+ * A member of a channel. The composer's @-mention autocomplete only reads id/name/avatar;
+ * the Info panel's participant list also shows `email`.
+ */
 export interface ChannelMember {
   id: number
   name: string
+  email: string
   avatar: string | null
 }
 
@@ -205,6 +209,8 @@ export interface Message {
   /** Arrives empty and fills in over the websocket once the unfurl job finishes. */
   link_previews?: LinkPreview[]
   reply_to?: ReplyRef | null
+  /** Set when this message was forwarded — names the original author for the "Forwarded from" line. */
+  forwarded_from?: { user_name: string | null } | null
   started_thread?: StartedThread | null
   /** The living-object card for a side chat spun off this message (channel timeline only). */
   started_side_chat?: SideChat | null
@@ -302,15 +308,15 @@ export interface PollState {
   options: PollOption[]
 }
 
-/** One raider's spot on the Side Raid leaderboard, keyed by user id in `players`. */
+/** One pilot's spot on the Side Squadron leaderboard, keyed by user id in `players`. */
 export interface ShooterPlayer {
   name: string
   kills: number
 }
 
 /**
- * The persisted, shared half of the co-op DOOM-like shooter ("Side Raid"). The playable
- * game is a client-side canvas raycaster (see CoopShooter + lib/raidEngine); this state is
+ * The persisted, shared half of the co-op Galaga-style shooter ("Side Squadron"). The playable
+ * game is a client-side canvas shooter (see CoopShooter + lib/squadronEngine); this state is
  * only what must survive a refresh and stay identical for everyone: the `seed` every client
  * spawns waves from, the team's `wave` high-water mark, the shared `teamLives` pool, and the
  * pooled `score` / per-player `kills`. Live teammate positions travel over whispers, not here.
@@ -371,15 +377,14 @@ export interface RaceGhostMsg {
   lap: number
 }
 
-/** A teammate's whispered position/state, as received off the channel's Reverb stream. */
+/** A teammate's whispered ship state, as received off the channel's Reverb stream. */
 export interface RaidGhostMsg {
   id: number
   name: string
+  /** Horizontal position as a 0..1 fraction of the play field's width (resolution-agnostic). */
   x: number
-  y: number
-  dir: number
   hp: number
-  /** 1 in the frame they fired, for a muzzle flash on their sprite. */
+  /** 1 in the frame they fired, for a muzzle flash on their ship. */
   f?: 0 | 1
 }
 

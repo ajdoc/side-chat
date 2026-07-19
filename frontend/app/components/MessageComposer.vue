@@ -9,6 +9,8 @@ const props = defineProps<{
   maxFiles?: number
   /** Roster for the `@` autocomplete — passed straight through to the editor. */
   mentionMembers?: ChannelMember[]
+  /** The channel this composer belongs to — the key its unsent draft is remembered under. */
+  channelId?: number
 }>()
 
 const emit = defineEmits<{
@@ -22,7 +24,14 @@ interface Pending {
   preview: string | null // object URL for images
 }
 
-const draft = ref('')
+const { getDraft, setDraft } = useDrafts()
+
+// Seeded from the stored draft, so reopening a channel you'd started typing in lands you
+// right back on your unsent words. This is the *initial* ref value, not a change, so it
+// doesn't trip the "typing" whisper below — you haven't typed, you've just arrived. (The
+// composer is recreated per channel — both timelines key ChannelView by id — so this reads
+// the right channel's draft once and never has to chase a changing channel.)
+const draft = ref(props.channelId != null ? getDraft(props.channelId) : '')
 const pending = ref<Pending[]>([])
 const fileInput = ref<HTMLInputElement | null>(null)
 
@@ -89,8 +98,11 @@ function sendGif(gif: GifResult) {
   emit('submit', '', [], gif)
 }
 
-// Clearing the box (or sending) isn't "typing" — only actual content is.
+// Every edit does two things: persist the draft (so it survives leaving the channel or a
+// reload) and, when there's real content, poke the typing whisper. Emptying the box saves
+// nothing — setDraft drops the entry — so a sent or cleared message leaves no draft behind.
 watch(draft, (value) => {
+  if (props.channelId != null) setDraft(props.channelId, value)
   if (value.trim()) emit('typing')
 })
 

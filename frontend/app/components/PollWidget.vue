@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { BarChart3, Check, Lock, LockOpen, Plus, X } from 'lucide-vue-next'
+import { BarChart3, Check, Lock, LockOpen, Pencil, Plus, X } from 'lucide-vue-next'
 import type { PollOption, PollState, Widget } from '~/types'
 
 /**
@@ -136,7 +136,16 @@ const toggleClose = () => action(props.widget.id, state.value.closed ? 'open' : 
           </span>
 
           <button
-            class="flex-none text-muted-foreground opacity-0 group-hover:opacity-100 hover:text-destructive"
+            v-if="editingId !== option.id"
+            class="flex-none text-muted-foreground opacity-0 focus:opacity-100 group-hover:opacity-100 hover:text-foreground"
+            title="Edit option"
+            @click.stop="beginEdit(option)"
+          >
+            <Pencil class="h-3.5 w-3.5" />
+          </button>
+
+          <button
+            class="flex-none text-muted-foreground opacity-0 focus:opacity-100 group-hover:opacity-100 hover:text-destructive"
             title="Remove option"
             @click.stop="remove(option)"
           >

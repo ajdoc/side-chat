@@ -16,7 +16,7 @@ class Message extends Model
     /** @use HasFactory<MessageFactory> */
     use HasFactory;
 
-    protected $fillable = ['channel_id', 'thread_id', 'side_chat_id', 'widget_id', 'user_id', 'body', 'type', 'reply_to_id', 'edited_at', 'pinned_at', 'pinned_by', 'decided_at', 'decided_by'];
+    protected $fillable = ['channel_id', 'thread_id', 'side_chat_id', 'widget_id', 'user_id', 'body', 'type', 'reply_to_id', 'forwarded_from_id', 'edited_at', 'pinned_at', 'pinned_by', 'decided_at', 'decided_by'];
 
     protected function casts(): array
     {
@@ -99,6 +99,12 @@ class Message extends Model
     public function replyTo(): BelongsTo
     {
         return $this->belongsTo(Message::class, 'reply_to_id');
+    }
+
+    /** The original this message was forwarded from (if any). */
+    public function forwardedFrom(): BelongsTo
+    {
+        return $this->belongsTo(Message::class, 'forwarded_from_id');
     }
 
     public function user(): BelongsTo

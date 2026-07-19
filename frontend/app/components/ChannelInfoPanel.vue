@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { CornerUpLeft, Download, Eye, FileText, Image as ImageIcon, Link2, Loader2, Pin, PinOff, Sparkles, X } from 'lucide-vue-next'
+import { CornerUpLeft, Download, Eye, FileText, Image as ImageIcon, Link2, Loader2, Pin, PinOff, Sparkles, Users, X } from 'lucide-vue-next'
 import type { Attachment, ChannelLink } from '~/types'
 import { Button } from '~/components/ui/button'
 
@@ -33,9 +33,11 @@ const {
   loadMore: loadMoreGifs,
 } = useChannelGifs()
 
+const { members, load: loadMembers } = useChannelMembers()
+
 const { stripMarkdown } = useMarkdown()
 
-type Tab = 'pinned' | 'files' | 'links' | 'gifs'
+type Tab = 'people' | 'pinned' | 'files' | 'links' | 'gifs'
 const tab = ref<Tab>('pinned')
 
 const tabs: { value: Tab, label: string, icon: any, ready: boolean }[] = [
@@ -43,6 +45,7 @@ const tabs: { value: Tab, label: string, icon: any, ready: boolean }[] = [
   { value: 'files', label: 'Files', icon: FileText, ready: true },
   { value: 'links', label: 'Links', icon: Link2, ready: true },
   { value: 'gifs', label: 'GIFs', icon: Sparkles, ready: true },
+  { value: 'people', label: 'People', icon: Users, ready: true },
 ]
 
 /** A pin with no body is an attachment someone thought was worth keeping. */
@@ -102,6 +105,7 @@ function onView(a: Attachment) {
 // Each tab is fetched when it's actually opened. Most visits to this panel never leave the
 // tab they landed on, so fetching all three up front would be two wasted round trips.
 watch([tab, () => props.channelId], ([current, id]) => {
+  if (current === 'people') loadMembers(id)
   if (current === 'pinned') loadPins(id)
   if (current === 'files') load(id)
   if (current === 'links') loadLinks(id)
@@ -377,6 +381,14 @@ watch([tab, () => props.channelId], ([current, id]) => {
             {{ loadingGifs ? 'Loading…' : 'Load more' }}
           </Button>
         </template>
+      </template>
+
+      <!-- PEOPLE -->
+      <template v-else-if="tab === 'people'">
+        <p class="mb-2 flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+          <Users class="h-3.5 w-3.5" /> Participants ({{ members.length }})
+        </p>
+        <ParticipantList :members="members" empty-text="No one here yet." />
       </template>
     </div>
   </aside>
