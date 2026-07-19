@@ -54,6 +54,7 @@ const { user, logout } = useAuth()
 const { hasDraft } = useDrafts()
 const { mode, color, setMode, setColor } = useTheme()
 const { participantsIn } = useVoiceRoster()
+const { expandedIds, isExpanded, isLoading, expand: expandServer, toggle: toggleServer, loadChannels, cache: cacheChannels, channelsFor } = useSidebarChannels()
 const userStream = useUserStream()
 const { ensurePermission: ensureNotifyPermission } = useDesktopNotifications()
 
@@ -89,16 +90,35 @@ const serversOpen = useLocalStorage('sidebar:serversOpen', true)
 const showNewChat = ref(false)
 
 /**
- * The server whose channels we currently hold loaded — which is the one the sidebar
- * unfolds, *not* necessarily the one the route points at.
+ * Unfolding, decoupled from where you're standing.
  *
- * The distinction is the whole of "don't collapse when I switch": useServer keeps a
- * server's channels in memory after you navigate off it (opening a DM never clears them),
- * so anchoring the unfold to the loaded server — rather than to `activeServerId`, which
- * goes null the moment you open a chat — leaves the channel list standing while you read
- * a DM, instead of folding it away and making you click back in to see it again.
+ * Which servers show their channels is a set you control (the chevrons) and that persists —
+ * *not* a function of the route. Selecting another server therefore leaves the ones you'd
+ * already opened exactly as they were, and only the one you're viewing draws from useServer's
+ * live channels; the rest draw from the sidebar cache. Two threads keep that honest:
+ *
+ *  - the server you navigate to auto-unfolds (and stays unfolded until you fold it yourself);
+ *  - its live channels are mirrored into the cache, so the moment you step off it onto the
+ *    next server, its tree is already there to draw instead of blinking out.
  */
-const loadedServerId = computed(() => server.value?.id ?? null)
+watch(activeServerId, (id) => {
+  if (id) expandServer(id)
+}, { immediate: true })
+
+// Mirror the active server's live channels (unread, renames, new/removed) into the cache,
+// so an unfolded server you've since left keeps an up-to-date-as-of-leaving tree.
+watch([() => server.value?.id, channels], () => {
+  if (server.value) cacheChannels(server.value.id, channels.value)
+}, { deep: true })
+
+// Restored-from-storage or freshly-opened servers that aren't the active one need their
+// channels fetched into the cache the first time they're shown.
+watch([expandedIds, servers, activeServerId], () => {
+  const known = new Set(servers.value.map(s => s.id))
+  for (const id of expandedIds.value) {
+    if (known.has(id) && id !== activeServerId.value && !channelsFor(id).length) loadChannels(id)
+  }
+}, { immediate: true })
 
 // Live count, kept in sync by the join-request Reverb subscription opened in openServer().
 const { requests: joinRequests } = useJoinRequests()
@@ -136,27 +156,43 @@ const rows = computed(() => {
     }
 
     for (const s of servers.value) {
-      const expanded = s.id === loadedServerId.value
-      list.push({ id: `server-${s.id}`, kind: 'server', server: s, expanded })
+      const isActive = s.id === activeServerId.value
+      const expanded = isExpanded(s.id)
+      list.push({ id: `server-${s.id}`, kind: 'server', server: s, expanded, isActive })
 
-      // Only the loaded server unfolds. useServer holds exactly one server's channels,
-      // which is both why this works and why it's the right amount of sidebar — and it
-      // stays unfolded even once you've stepped away into a DM (see loadedServerId).
+      // Several servers can stand unfolded at once (see the watchers above). The one you're
+      // viewing draws from useServer's live channels; every other unfolded server draws from
+      // the sidebar cache, which is why switching servers doesn't fold the rest away.
       if (!expanded) continue
 
-      const text = channels.value.filter(c => c.type === 'text')
-      const voice = channels.value.filter(c => c.type === 'voice')
+      // The active server draws from useServer's live channels; while it's mid-switch those
+      // are briefly empty, so fall back to the cache (which still holds the last tree) rather
+      // than flash "No channels yet". Every other unfolded server draws from the cache.
+      const rowChannels = isActive && channels.value.length ? channels.value : channelsFor(s.id)
 
-      if (!channels.value.length) {
-        list.push({ id: 'e-channels', kind: 'empty', indent: true, label: 'No channels yet.' })
+      if (!rowChannels.length) {
+        // Tell "still loading" from "genuinely empty": the active server has settled once
+        // useServer commits it (server.value.id === s.id); a cached one, once it's not fetching.
+        const settled = isActive ? server.value?.id === s.id : !isLoading(s.id)
+        list.push(settled
+          ? { id: `e-channels-${s.id}`, kind: 'empty', indent: true, label: 'No channels yet.' }
+          : { id: `l-channels-${s.id}`, kind: 'empty', indent: true, label: 'Loading channels…' })
       }
+
+      const text = rowChannels.filter(c => c.type === 'text')
+      const voice = rowChannels.filter(c => c.type === 'voice')
+
+      // Inline rename/delete only on the active server: those edits flow through useServer,
+      // which holds *its* channels, so a cached (non-active) server's tree couldn't be kept
+      // in step with them. You manage a server's channels from inside it.
+      const canEdit = isActive && s.is_owner
       for (const c of text) {
-        list.push({ id: `c-${c.id}`, kind: 'channel', channel: c, voice: [] })
+        list.push({ id: `c-${c.id}`, kind: 'channel', channel: c, voice: [], isOwner: canEdit })
       }
       for (const c of voice) {
-        list.push({ id: `c-${c.id}`, kind: 'channel', channel: c, voice: participantsIn(c.id) })
+        list.push({ id: `c-${c.id}`, kind: 'channel', channel: c, voice: participantsIn(c.id), isOwner: canEdit })
       }
-      list.push({ id: 'add-channel', kind: 'add-channel', server: s })
+      list.push({ id: `add-channel-${s.id}`, kind: 'add-channel', server: s })
     }
 
     list.push({ id: 'add-server', kind: 'add-server' })
@@ -169,9 +205,9 @@ const rows = computed(() => {
 function onScrollEnd() {
   if (hasMoreChats.value) loadMoreChats()
   if (hasMoreServers.value) loadMoreServers()
-  // Page in more of the unfolded server's channels — the one that's actually showing,
-  // which outlives the route (see loadedServerId), not whatever the URL points at.
-  if (loadedServerId.value) loadMoreChannels(loadedServerId.value)
+  // Only the active server paginates its channels (useServer holds it); the other unfolded
+  // servers are cached at their first page, which is the whole tree for any real sidebar.
+  if (activeServerId.value) loadMoreChannels(activeServerId.value)
 }
 
 function chatTitle(conversation: Conversation) {
@@ -424,21 +460,32 @@ onBeforeUnmount(() => userStream.unsubscribe())
                   New chat
                 </button>
 
-                <!-- A server. Only the one you're in unfolds into its channels. -->
-                <div v-else-if="item.kind === 'server'" class="group/sv relative">
-                  <NuxtLink
-                    :to="`/servers/${item.server.id}`"
-                    class="mx-2 flex items-center gap-2 rounded px-2 py-1.5 text-sm hover:bg-muted"
-                    :class="item.expanded ? 'font-semibold text-foreground' : 'text-muted-foreground'"
+                <!-- A server. Its chevron folds it open/shut on its own; several can stand
+                     open at once and selecting another leaves these alone. -->
+                <div
+                  v-else-if="item.kind === 'server'"
+                  class="group/sv relative mx-2 flex items-center rounded hover:bg-muted"
+                  :class="item.expanded ? 'font-semibold text-foreground' : 'text-muted-foreground'"
+                >
+                  <button
+                    type="button"
+                    class="flex shrink-0 items-center py-1.5 pl-2 pr-1 hover:text-foreground"
+                    :title="item.expanded ? 'Collapse' : 'Expand'"
+                    @click="toggleServer(item.server.id, { active: item.isActive })"
                   >
                     <ChevronDown v-if="item.expanded" class="h-3.5 w-3.5 shrink-0" />
                     <ChevronRight v-else class="h-3.5 w-3.5 shrink-0" />
+                  </button>
+                  <NuxtLink
+                    :to="`/servers/${item.server.id}`"
+                    class="flex min-w-0 flex-1 items-center gap-2 py-1.5 pr-2 text-sm"
+                  >
                     <span class="grid h-5 w-5 shrink-0 place-items-center rounded bg-secondary text-[9px] font-semibold text-secondary-foreground">
                       {{ initialsOf(item.server.name) }}
                     </span>
                     <span class="truncate">{{ item.server.name }}</span>
                     <span
-                      v-if="item.expanded && pendingCount"
+                      v-if="item.isActive && pendingCount"
                       class="ml-auto shrink-0 rounded-full bg-primary px-1.5 py-0.5 text-[10px] font-semibold text-primary-foreground"
                       :title="`${pendingCount} pending join requests`"
                     >{{ pendingCount }}</span>
@@ -461,7 +508,7 @@ onBeforeUnmount(() => userStream.unsubscribe())
                       <DropdownMenuItem @select="navigateTo(`/servers/${item.server.id}/requests`)">
                         <Check class="mr-2 h-4 w-4" /> Pending requests
                         <span
-                          v-if="item.expanded && pendingCount"
+                          v-if="item.isActive && pendingCount"
                           class="ml-auto rounded-full bg-primary px-1.5 text-[10px] font-semibold text-primary-foreground"
                         >{{ pendingCount }}</span>
                       </DropdownMenuItem>
@@ -527,7 +574,7 @@ onBeforeUnmount(() => userStream.unsubscribe())
                     </NuxtLink>
 
                     <span
-                      v-if="server?.is_owner"
+                      v-if="item.isOwner"
                       class="absolute right-3 top-1/2 hidden -translate-y-1/2 items-center gap-0.5 rounded bg-muted px-0.5 group-hover/ch:flex"
                     >
                       <button
