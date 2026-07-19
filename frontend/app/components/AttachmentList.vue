@@ -26,6 +26,17 @@ const emit = defineEmits<{ remove: [id: number] }>()
 const images = computed(() => props.attachments.filter(a => a.is_image))
 const files = computed(() => props.attachments.filter(a => !a.is_image))
 
+// Lightbox carousel state — opened by clicking an inline image/GIF, paging across the
+// images in this message rather than opening a raw file URL in a new tab.
+const lightboxOpen = ref(false)
+const lightboxIndex = ref(0)
+
+function openLightbox(id: number) {
+  const at = images.value.findIndex(img => img.id === id)
+  lightboxIndex.value = at < 0 ? 0 : at
+  lightboxOpen.value = true
+}
+
 function isMarked(id: number) {
   return props.markedForRemoval?.includes(id) ?? false
 }
@@ -57,11 +68,11 @@ function triggerDownload(a: Attachment) {
 }
 
 /**
- * Images and PDFs can be viewed in the browser; anything else has no viewer, so
- * "view" simply downloads it.
+ * File cards only (images open in the lightbox instead). PDFs view in the browser;
+ * anything else has no viewer, so "view" simply downloads it.
  */
 function onView(a: Attachment) {
-  if (a.is_image || a.is_pdf) {
+  if (a.is_pdf) {
     window.open(a.url, '_blank', 'noopener')
   } else {
     triggerDownload(a)
@@ -83,7 +94,7 @@ function onView(a: Attachment) {
           :src="img.url"
           :alt="img.name"
           class="max-h-60 max-w-xs cursor-zoom-in rounded-lg border object-cover"
-          @click="onView(img)"
+          @click="openLightbox(img.id)"
         >
         <div class="absolute right-1 top-1 hidden gap-1 group-hover/att:flex">
           <button
@@ -142,5 +153,12 @@ function onView(a: Attachment) {
         <X class="h-4 w-4" />
       </button>
     </div>
+
+    <ImageLightbox
+      v-if="images.length"
+      v-model:open="lightboxOpen"
+      :images="images"
+      :start-index="lightboxIndex"
+    />
   </div>
 </template>

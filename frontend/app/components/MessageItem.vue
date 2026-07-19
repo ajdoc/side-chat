@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { Check, CheckCircle2, Copy, CornerUpLeft, Forward, Info, MessageSquarePlus, MessageSquareText, MessagesSquare, Paperclip, Pencil, Pin, PinOff, Rocket, Trash2, X } from 'lucide-vue-next'
+import { Check, CheckCircle2, Copy, CornerUpLeft, Forward, Info, MessagesSquare, MoreHorizontal, Paperclip, Pencil, Pin, PinOff, Rocket, Trash2, X } from 'lucide-vue-next'
 import type { Message, User } from '~/types'
 import { Button } from '~/components/ui/button'
 import {
@@ -12,6 +12,13 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from '~/components/ui/alert-dialog'
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from '~/components/ui/dropdown-menu'
 
 const props = defineProps<{
   message: Message
@@ -68,7 +75,13 @@ const editFileInput = ref<HTMLInputElement | null>(null)
 const showDelete = ref(false)
 const showInfo = ref(false)
 const showComments = ref(false)
-const pickerOpen = ref(false)
+// Any of the toolbar's own menus being open pins the hover bar in place — otherwise moving
+// the mouse into a menu un-hovers the message and the bar (with the button you just clicked)
+// vanishes out from under it.
+const reactOpen = ref(false)
+const replyMenuOpen = ref(false)
+const overflowOpen = ref(false)
+const menuOpen = computed(() => reactOpen.value || replyMenuOpen.value || overflowOpen.value)
 // Flips to a tick for a beat after a successful copy, then falls back to the copy icon.
 const copied = ref(false)
 let copiedTimer: ReturnType<typeof setTimeout> | undefined
@@ -288,11 +301,12 @@ onBeforeUnmount(() => clearTimeout(copiedTimer))
       </template>
     </div>
 
-    <!-- hover actions -->
+    <!-- hover actions: three quick buttons + an overflow menu. The frequent moves stay one
+         click away; everything else lives under the ⋯ so the bar stays uncluttered. -->
     <div
       v-if="!editing"
       class="absolute right-2 top-1 items-center gap-1 rounded border bg-background p-0.5 shadow-sm"
-      :class="pickerOpen ? 'flex' : 'hidden group-hover:flex'"
+      :class="menuOpen ? 'flex' : 'hidden group-hover:flex'"
     >
       <!-- Start a side chat off this message — the app's signature move, so it leads the
            action bar as a labeled, primary-tinted affordance rather than hiding in an
@@ -306,67 +320,69 @@ onBeforeUnmount(() => clearTimeout(copiedTimer))
       >
         <Rocket class="h-4 w-4" /> Side chat
       </button>
-      <EmojiPicker v-model:open="pickerOpen" @select="emit('toggle-reaction', message.id, $event)" />
-      <button class="rounded p-1 text-muted-foreground hover:text-foreground" title="Reply" @click="emit('reply', message)">
-        <CornerUpLeft class="h-4 w-4" />
-      </button>
-      <button class="rounded p-1 text-muted-foreground hover:text-foreground" title="Comment" @click="showComments = true">
-        <MessageSquareText class="h-4 w-4" />
-      </button>
-      <!-- Forward this message into another chat, group or channel. -->
-      <button v-if="forwardable && !isWidget" class="rounded p-1 text-muted-foreground hover:text-foreground" title="Forward" @click="emit('forward', message)">
-        <Forward class="h-4 w-4" />
-      </button>
-      <!-- Copy the message text. Only where there's text to copy. -->
-      <button
-        v-if="message.body"
-        class="rounded p-1 hover:text-foreground"
-        :class="copied ? 'text-green-600 dark:text-green-400' : 'text-muted-foreground'"
-        :title="copied ? 'Copied!' : 'Copy text'"
-        @click="copyMessage"
-      >
-        <Check v-if="copied" class="h-4 w-4" />
-        <Copy v-else class="h-4 w-4" />
-      </button>
-      <!-- Threads are the quick, inline per-message follow-up: a reply that stays attached to
-           this message, no roster of its own. Side chats (above) are the deliberate room. -->
-      <button
-        v-if="threadActions"
-        class="rounded p-1 text-muted-foreground hover:text-foreground"
-        title="Reply in thread"
-        @click="emit('create-thread', message.id)"
-      >
-        <MessageSquarePlus class="h-4 w-4" />
-      </button>
-      <!-- Record / un-record a decision (inside a side chat, participants only). -->
-      <button
-        v-if="sideChatActions && joined"
-        class="rounded p-1 hover:text-foreground"
-        :class="message.decided ? 'text-emerald-600 dark:text-emerald-400' : 'text-muted-foreground'"
-        :title="message.decided ? 'Unmark decision' : 'Mark as decision'"
-        @click="emit('toggle-decision', message.id)"
-      >
-        <CheckCircle2 class="h-4 w-4" />
-      </button>
-      <!-- Any member may pin *or* unpin: a pin belongs to the channel, not to whoever
-           happened to make it. -->
-      <button
-        class="rounded p-1 text-muted-foreground hover:text-foreground"
-        :title="message.pinned ? 'Unpin message' : 'Pin message'"
-        @click="emit('toggle-pin', message.id)"
-      >
-        <PinOff v-if="message.pinned" class="h-4 w-4" />
-        <Pin v-else class="h-4 w-4" />
-      </button>
-      <button class="rounded p-1 text-muted-foreground hover:text-foreground" title="Message info" @click="showInfo = true">
-        <Info class="h-4 w-4" />
-      </button>
-      <button v-if="canModify && !isWidget" class="rounded p-1 text-muted-foreground hover:text-foreground" title="Edit" @click="startEdit">
-        <Pencil class="h-4 w-4" />
-      </button>
-      <button v-if="canModify" class="rounded p-1 text-muted-foreground hover:text-destructive" title="Delete" @click="showDelete = true">
-        <Trash2 class="h-4 w-4" />
-      </button>
+
+      <!-- React (emoji) and comment (word-reaction) are the same "react without a full reply"
+           gesture, so they share one popover instead of two near-identical buttons. -->
+      <MessageReactPopover
+        v-model:open="reactOpen"
+        :message-id="message.id"
+        @react="emit('toggle-reaction', message.id, $event)"
+        @open-all="showComments = true"
+      />
+
+      <!-- Reply and reply-in-thread, behind one split control (caret only where threads apply). -->
+      <MessageReplyControl
+        v-model:open="replyMenuOpen"
+        :thread-actions="threadActions"
+        @reply="emit('reply', message)"
+        @thread="emit('create-thread', message.id)"
+      />
+
+      <!-- Everything else: forward, copy, pin, decision, info, edit, delete. -->
+      <DropdownMenu v-model:open="overflowOpen">
+        <DropdownMenuTrigger as-child>
+          <button class="rounded p-1 text-muted-foreground hover:text-foreground" title="More actions" aria-label="More actions">
+            <MoreHorizontal class="h-4 w-4" />
+          </button>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="end" class="w-48">
+          <!-- Forward this message into another chat, group or channel. -->
+          <DropdownMenuItem v-if="forwardable && !isWidget" @select="emit('forward', message)">
+            <Forward class="h-4 w-4" /> Forward
+          </DropdownMenuItem>
+          <!-- Copy the message text. Only where there's text to copy. -->
+          <DropdownMenuItem v-if="message.body" @select="copyMessage">
+            <Check v-if="copied" class="h-4 w-4" />
+            <Copy v-else class="h-4 w-4" />
+            {{ copied ? 'Copied!' : 'Copy text' }}
+          </DropdownMenuItem>
+          <!-- Record / un-record a decision (inside a side chat, participants only). -->
+          <DropdownMenuItem v-if="sideChatActions && joined" @select="emit('toggle-decision', message.id)">
+            <CheckCircle2 class="h-4 w-4" :class="message.decided ? 'text-emerald-600 dark:text-emerald-400' : ''" />
+            {{ message.decided ? 'Unmark decision' : 'Mark as decision' }}
+          </DropdownMenuItem>
+          <!-- Any member may pin *or* unpin: a pin belongs to the channel, not to whoever
+               happened to make it. -->
+          <DropdownMenuItem @select="emit('toggle-pin', message.id)">
+            <PinOff v-if="message.pinned" class="h-4 w-4" />
+            <Pin v-else class="h-4 w-4" />
+            {{ message.pinned ? 'Unpin message' : 'Pin message' }}
+          </DropdownMenuItem>
+          <DropdownMenuItem @select="showInfo = true">
+            <Info class="h-4 w-4" /> Message info
+          </DropdownMenuItem>
+
+          <template v-if="canModify">
+            <DropdownMenuSeparator />
+            <DropdownMenuItem v-if="!isWidget" @select="startEdit">
+              <Pencil class="h-4 w-4" /> Edit
+            </DropdownMenuItem>
+            <DropdownMenuItem variant="destructive" @select="showDelete = true">
+              <Trash2 class="h-4 w-4" /> Delete
+            </DropdownMenuItem>
+          </template>
+        </DropdownMenuContent>
+      </DropdownMenu>
     </div>
 
     <MessageInfoDialog v-if="showInfo" v-model:open="showInfo" :message="message" />

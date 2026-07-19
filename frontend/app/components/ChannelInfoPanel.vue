@@ -98,8 +98,22 @@ function triggerDownload(a: Attachment) {
   link.remove()
 }
 function onView(a: Attachment) {
-  if (a.is_image || a.is_pdf) window.open(a.url, '_blank', 'noopener')
+  // Non-image files only now — images and GIFs open in the lightbox carousel below.
+  if (a.is_pdf) window.open(a.url, '_blank', 'noopener')
   else triggerDownload(a)
+}
+
+// Lightbox carousel, shared by the Files > Images grid and the GIFs grid. Each opens with
+// its own set so paging stays within the grid you clicked in.
+const lightboxOpen = ref(false)
+const lightboxIndex = ref(0)
+const lightboxImages = ref<Attachment[]>([])
+
+function openLightbox(list: Attachment[], id: number) {
+  const at = list.findIndex(a => a.id === id)
+  lightboxImages.value = list
+  lightboxIndex.value = at < 0 ? 0 : at
+  lightboxOpen.value = true
 }
 
 // Each tab is fetched when it's actually opened. Most visits to this panel never leave the
@@ -228,7 +242,7 @@ watch([tab, () => props.channelId], ([current, id]) => {
                 :alt="img.name"
                 :title="`${img.name} · ${img.uploaded_by ?? ''}`"
                 class="aspect-square w-full cursor-zoom-in rounded-md border object-cover"
-                @click="onView(img)"
+                @click="openLightbox(images, img.id)"
               >
             </div>
           </section>
@@ -366,7 +380,7 @@ watch([tab, () => props.channelId], ([current, id]) => {
               :title="gif.uploaded_by ?? ''"
               loading="lazy"
               class="aspect-square w-full cursor-zoom-in rounded-md border object-cover"
-              @click="onView(gif)"
+              @click="openLightbox(gifs, gif.id)"
             >
           </div>
 
@@ -391,5 +405,12 @@ watch([tab, () => props.channelId], ([current, id]) => {
         <ParticipantList :members="members" empty-text="No one here yet." />
       </template>
     </div>
+
+    <ImageLightbox
+      v-if="lightboxImages.length"
+      v-model:open="lightboxOpen"
+      :images="lightboxImages"
+      :start-index="lightboxIndex"
+    />
   </aside>
 </template>
