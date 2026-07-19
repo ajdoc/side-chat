@@ -338,6 +338,19 @@ onBeforeUnmount(() => clearTimeout(copiedTimer))
         @thread="emit('create-thread', message.id)"
       />
 
+      <!-- Record / un-record a decision. Marking decisions is *the* side-chat move — the
+           whole point of the room — so it earns a quick button here rather than the overflow
+           menu. Members only, and only inside a side chat (never on the channel timeline). -->
+      <button
+        v-if="sideChatActions && joined"
+        class="rounded p-1 hover:text-foreground"
+        :class="message.decided ? 'text-emerald-600 dark:text-emerald-400' : 'text-muted-foreground'"
+        :title="message.decided ? 'Unmark decision' : 'Mark as decision'"
+        @click="emit('toggle-decision', message.id)"
+      >
+        <CheckCircle2 class="h-4 w-4" />
+      </button>
+
       <!-- Everything else: forward, copy, pin, decision, info, edit, delete. -->
       <DropdownMenu v-model:open="overflowOpen">
         <DropdownMenuTrigger as-child>
@@ -355,11 +368,6 @@ onBeforeUnmount(() => clearTimeout(copiedTimer))
             <Check v-if="copied" class="h-4 w-4" />
             <Copy v-else class="h-4 w-4" />
             {{ copied ? 'Copied!' : 'Copy text' }}
-          </DropdownMenuItem>
-          <!-- Record / un-record a decision (inside a side chat, participants only). -->
-          <DropdownMenuItem v-if="sideChatActions && joined" @select="emit('toggle-decision', message.id)">
-            <CheckCircle2 class="h-4 w-4" :class="message.decided ? 'text-emerald-600 dark:text-emerald-400' : ''" />
-            {{ message.decided ? 'Unmark decision' : 'Mark as decision' }}
           </DropdownMenuItem>
           <!-- Any member may pin *or* unpin: a pin belongs to the channel, not to whoever
                happened to make it. -->
