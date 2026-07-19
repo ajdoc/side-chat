@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { CheckCircle2, Info, Loader2, MessageSquare, MessagesSquare, PenTool, Pin, Plus, Rocket, UserPlus, Users, X } from 'lucide-vue-next'
-import type { Message } from '~/types'
+import type { GifResult, Message } from '~/types'
 import { Button } from '~/components/ui/button'
 import { Input } from '~/components/ui/input'
 
@@ -154,11 +154,11 @@ async function onLeave() {
   await leave(activeId.value)
 }
 
-async function onSend(body: string, files: File[]) {
+async function onSend(body: string, files: File[], gif?: GifResult) {
   if (!activeId.value || sending.value) return
   sending.value = true
   try {
-    await send(activeId.value, body, replyingTo.value?.id ?? null, files)
+    await send(activeId.value, body, replyingTo.value?.id ?? null, files, gif)
     stopTyping()
     replyingTo.value = null
     scrollBottom()

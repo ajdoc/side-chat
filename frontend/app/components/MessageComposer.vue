@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { Paperclip, SendHorizontal, X } from 'lucide-vue-next'
-import type { ChannelMember } from '~/types'
+import type { ChannelMember, GifResult } from '~/types'
 import { Button } from '~/components/ui/button'
 
 const props = defineProps<{
@@ -12,7 +12,7 @@ const props = defineProps<{
 }>()
 
 const emit = defineEmits<{
-  submit: [body: string, files: File[]]
+  submit: [body: string, files: File[], gif?: GifResult]
   /** Fires on every edit to the draft; the listener rate-limits it into a whisper. */
   typing: []
 }>()
@@ -83,6 +83,12 @@ function submit() {
   pending.value = []
 }
 
+// A GIF sends the moment it's picked (like Slack) — no text or files needed alongside it.
+function sendGif(gif: GifResult) {
+  if (props.sending) return
+  emit('submit', '', [], gif)
+}
+
 // Clearing the box (or sending) isn't "typing" — only actual content is.
 watch(draft, (value) => {
   if (value.trim()) emit('typing')
@@ -122,6 +128,7 @@ onBeforeUnmount(() => {
         @paste="onPaste"
       >
         <template #toolbar-end>
+          <GifPicker @select="sendGif" />
           <button
             type="button"
             tabindex="-1"

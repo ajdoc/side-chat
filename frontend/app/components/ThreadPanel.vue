@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { Loader2, MessagesSquare, SendHorizontal, X } from 'lucide-vue-next'
-import type { Message } from '~/types'
+import type { GifResult, Message } from '~/types'
 import { Button } from '~/components/ui/button'
 import { Input } from '~/components/ui/input'
 
@@ -106,11 +106,11 @@ async function submitCreate() {
   }
 }
 
-async function onSend(body: string, files: File[]) {
+async function onSend(body: string, files: File[], gif?: GifResult) {
   if (!activeThreadId.value || sending.value) return
   sending.value = true
   try {
-    await send(activeThreadId.value, body, replyingTo.value?.id ?? null, files)
+    await send(activeThreadId.value, body, replyingTo.value?.id ?? null, files, gif)
     stopTyping()
     replyingTo.value = null
     scrollBottom()

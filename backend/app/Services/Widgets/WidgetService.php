@@ -27,11 +27,12 @@ final class WidgetService
     /** @var array<string, WidgetHandler> type => handler */
     private array $handlers;
 
-    public function __construct(MusicWidget $music, KanbanWidget $kanban, ShooterWidget $shooter, RacingWidget $racing)
+    public function __construct(MusicWidget $music, KanbanWidget $kanban, PollWidget $poll, ShooterWidget $shooter, RacingWidget $racing)
     {
         $this->handlers = [
             $music->type() => $music,
             $kanban->type() => $kanban,
+            $poll->type() => $poll,
             $shooter->type() => $shooter,
             $racing->type() => $racing,
         ];

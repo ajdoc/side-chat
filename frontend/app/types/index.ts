@@ -116,10 +116,25 @@ export interface Attachment {
   size: number
   is_image: boolean
   is_pdf: boolean
+  is_gif: boolean
   url: string
   download_url: string
   uploaded_by?: string | null
   created_at: string
+}
+
+/** One GIF from a picker provider (Giphy, Klipy), as returned by /api/gifs/*. */
+export interface GifResult {
+  id: string
+  /** Full GIF media — what gets sent and stored as a remote attachment. */
+  url: string
+  /** Small thumbnail for the picker grid. */
+  preview_url: string
+  width: number
+  height: number
+  title: string
+  /** Which provider served this result — 'giphy' | 'klipy'. */
+  provider: string
 }
 
 /**
@@ -206,13 +221,13 @@ export interface Message {
 export interface Widget {
   id: number
   channel_id: number
-  type: 'music' | 'kanban' | 'shooter' | 'racing'
+  type: 'music' | 'kanban' | 'poll' | 'shooter' | 'racing'
   /**
    * The live state — present on HTTP responses. Absent when the widget arrives as a
    * *reference* over the socket (WidgetUpdated / a MessageSent card): its full state is
    * too big for Pusher's 10KB event cap, so the client fetches it from `/api/widgets/{id}`.
    */
-  state?: MusicState | KanbanState | ShooterState | RacingState
+  state?: MusicState | KanbanState | PollState | ShooterState | RacingState
   created_at?: string
 }
 
@@ -268,6 +283,23 @@ export interface KanbanCard {
 export interface KanbanState {
   seq: number
   cards: KanbanCard[]
+}
+
+export interface PollOption {
+  id: number
+  text: string
+  /** Everyone who's picked this option — the tally is its length, and a voter can see their own pick. */
+  voters: { id: number, name: string }[]
+}
+
+export interface PollState {
+  seq: number
+  question: string
+  /** Let a voter pick more than one option; single-choice (the default) replaces their pick. */
+  multi: boolean
+  /** Voting is locked and the result stands. */
+  closed: boolean
+  options: PollOption[]
 }
 
 /** One raider's spot on the Side Raid leaderboard, keyed by user id in `players`. */

@@ -39,6 +39,12 @@ class AttachmentController extends Controller
         return AttachmentResource::collection($this->attachments->forChannel($channel));
     }
 
+    /** GIFs posted in a channel — picked or uploaded (Info > GIFs). */
+    public function indexForChannelGifs(IndexChannelAttachmentRequest $request, Channel $channel): AnonymousResourceCollection
+    {
+        return AttachmentResource::collection($this->attachments->gifsForChannel($channel));
+    }
+
     /** Delete one attachment (and its file). */
     public function destroy(DeleteAttachmentRequest $request, Attachment $attachment, DeleteAttachmentAction $action): MessageResource
     {

@@ -22,6 +22,7 @@ class AttachmentResource extends JsonResource
             'size' => $this->size,
             'is_image' => $this->isImage(),
             'is_pdf' => $this->isPdf(),
+            'is_gif' => $this->isGif(),
             // Short-lived signed URLs; the files live on a private disk.
             'url' => $this->url(),
             'download_url' => $this->downloadUrl(),

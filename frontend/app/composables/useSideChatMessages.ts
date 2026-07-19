@@ -1,4 +1,4 @@
-import type { CommentSummary, LinkPreview, Message, Reaction, SideChat } from '~/types'
+import type { CommentSummary, GifResult, LinkPreview, Message, Reaction, SideChat } from '~/types'
 
 /**
  * One side chat: its metadata (roster, counts), its messages, and the real-time
@@ -78,8 +78,8 @@ export function useSideChatMessages() {
     return messages.value.some(m => m.id === id)
   }
 
-  async function send(sideChatId: number, body: string, replyToId?: number | null, files: File[] = []) {
-    const payload = buildMessagePayload({ body, replyToId, files })
+  async function send(sideChatId: number, body: string, replyToId?: number | null, files: File[] = [], gif?: GifResult | null) {
+    const payload = buildMessagePayload({ body, replyToId, files, gif })
     const res = await api<{ data: Message }>(`/api/side-chats/${sideChatId}/messages`, {
       method: 'POST',
       body: payload as any,

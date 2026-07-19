@@ -55,6 +55,19 @@ return [
         'key' => env('YOUTUBE_API_KEY'),
     ],
 
+    // GIF picker providers. The picker fans out to *every* provider with a key and merges the
+    // results (see App\Services\GifService); set one or both. Keys are proxied server-side so
+    // they never reach the browser. With none set, the picker shows a "not configured" note.
+    //
+    // (We moved off Tenor because Google shut down its public API on 2026-06-30 — new keys
+    // stopped issuing that January. Giphy + Klipy are the successors platforms migrated to.)
+    'giphy' => [
+        'key' => env('GIPHY_API_KEY'),
+    ],
+    'klipy' => [
+        'key' => env('KLIPY_API_KEY'),
+    ],
+
     // Spotify no longer needs credentials here: the music widget reads tracks, playlists
     // and albums from their public embed pages (the Web API stopped serving playlist tracks
     // to ordinary apps in Nov 2024). These are kept only in case a future path wants the

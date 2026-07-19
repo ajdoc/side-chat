@@ -14,6 +14,8 @@ final class AttachmentService
 {
     public const DISK = 'local';
 
+    public function __construct(private readonly GifService $gifs) {}
+
     /**
      * Store uploaded files against a message.
      *
@@ -37,6 +39,54 @@ final class AttachmentService
                 'size' => $file->getSize(),
             ]);
         }
+    }
+
+    /**
+     * Record a GIF picked from a provider (Giphy, Klipy) as a *remote* attachment — a
+     * reference to their CDN, not a file we host. `path` is the media URL; {@see Attachment::url()}
+     * returns it verbatim and {@see Attachment::deleteFile()} is a no-op for it.
+     *
+     * The URL is user-supplied (it rode in on the send request), so its host is checked
+     * against the configured providers' allowlist before we ever store or render it.
+     *
+     * @param  array{url: string, title?: string|null, width?: int|null, height?: int|null}  $gif
+     */
+    public function storeGif(Message $message, array $gif): void
+    {
+        $url = $gif['url'] ?? null;
+
+        if (! is_string($url) || ! $this->isAllowedGifHost($url)) {
+            return;
+        }
+
+        $message->attachments()->create([
+            'disk' => 'remote',
+            'path' => $url,
+            'name' => (isset($gif['title']) && $gif['title'] !== '') ? $gif['title'] : 'gif',
+            'mime_type' => 'image/gif',
+            'extension' => 'gif',
+            'size' => 0,
+        ]);
+    }
+
+    /** Whether a GIF media URL points at a host one of the configured providers serves. */
+    private function isAllowedGifHost(string $url): bool
+    {
+        $host = parse_url($url, PHP_URL_HOST);
+
+        if (! is_string($host)) {
+            return false;
+        }
+
+        $host = strtolower($host);
+
+        foreach ($this->gifs->allowedHosts() as $allowed) {
+            if ($host === $allowed || str_ends_with($host, '.'.$allowed)) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /**
@@ -108,6 +158,17 @@ final class AttachmentService
     {
         return Attachment::query()
             ->whereIn('message_id', Message::where('channel_id', $channel->id)->select('id'))
+            ->with(['message.user'])
+            ->orderByDesc('id')
+            ->paginate(50);
+    }
+
+    /** Every GIF posted in a channel (main timeline + threads) - the Info > GIFs tab. */
+    public function gifsForChannel(Channel $channel): LengthAwarePaginator
+    {
+        return Attachment::query()
+            ->whereIn('message_id', Message::where('channel_id', $channel->id)->select('id'))
+            ->where('mime_type', 'image/gif')
             ->with(['message.user'])
             ->orderByDesc('id')
             ->paginate(50);

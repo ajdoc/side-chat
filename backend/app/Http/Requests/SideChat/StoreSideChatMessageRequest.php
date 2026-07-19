@@ -29,7 +29,7 @@ class StoreSideChatMessageRequest extends FormRequest
         $sideChat = $this->route('sideChat');
 
         return array_merge(SendMessageData::validationRules(), [
-            'body' => ['required_without:attachments', 'nullable', 'string', 'max:2000'],
+            'body' => ['required_without_all:attachments,gif', 'nullable', 'string', 'max:2000'],
             'attachments' => ['nullable', 'array', 'max:10'],
             'attachments.*' => ['file', 'max:20480'], // 20 MB each
             // A reply must target a message inside this same side chat.

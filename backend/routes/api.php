@@ -9,6 +9,7 @@ use App\Http\Controllers\ChannelMemberController;
 use App\Http\Controllers\ChannelWhiteboardController;
 use App\Http\Controllers\CommentController;
 use App\Http\Controllers\ConversationController;
+use App\Http\Controllers\GifController;
 use App\Http\Controllers\InviteController;
 use App\Http\Controllers\JoinRequestController;
 use App\Http\Controllers\MessageController;
@@ -127,10 +128,15 @@ Route::middleware('auth:api')->group(function () {
     Route::post('servers/{server}/join-requests/approve', [JoinRequestController::class, 'approve']);
     Route::post('servers/{server}/join-requests/decline', [JoinRequestController::class, 'decline']);
 
-    // Attachments and links (the channel Info panel's tabs).
+    // Attachments, links and GIFs (the channel Info panel's tabs).
     Route::get('channels/{channel}/attachments', [AttachmentController::class, 'indexForChannel']);
     Route::get('channels/{channel}/links', [ChannelLinkController::class, 'index']);
+    Route::get('channels/{channel}/gifs', [AttachmentController::class, 'indexForChannelGifs']);
     Route::delete('attachments/{attachment}', [AttachmentController::class, 'destroy']);
+
+    // GIF picker — proxies the configured providers (Giphy, Klipy) so their keys stay server-side.
+    Route::get('gifs/featured', [GifController::class, 'featured']);
+    Route::get('gifs/search', [GifController::class, 'search']);
 
     // Voice. Signalling and media don't come through here — see routes/channels.php. This
     // is only the roster the sidebar reads, and the ICE servers handed out on join.

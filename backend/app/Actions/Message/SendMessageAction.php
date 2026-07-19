@@ -28,8 +28,8 @@ final class SendMessageAction
     {
         // A message that's really a widget command (`m!p …`, `k!add …`) never lands as chat:
         // it drives the channel's music player or board instead. Only a text-only send can be
-        // a command — anything with an attachment is a plain message. See WidgetService.
-        if ($files === [] && ($command = $this->commands->parse($data->body)) !== null) {
+        // a command — anything with an attachment or a GIF is a plain message. See WidgetService.
+        if ($files === [] && $data->gif === null && ($command = $this->commands->parse($data->body)) !== null) {
             return $this->widgets->handleCommand($channel, $user, $command);
         }
 
@@ -40,6 +40,10 @@ final class SendMessageAction
         ]);
 
         $this->attachments->storeFor($message, $files);
+
+        if ($data->gif !== null) {
+            $this->attachments->storeGif($message, $data->gif);
+        }
 
         // Any URL we haven't seen before unfurls on the queue and arrives over the
         // websocket a moment later — the send itself never waits on a third-party fetch.

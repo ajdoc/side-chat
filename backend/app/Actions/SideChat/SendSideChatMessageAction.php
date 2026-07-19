@@ -31,6 +31,11 @@ final class SendSideChatMessageAction
         ]);
 
         $this->attachments->storeFor($message, $files);
+
+        if ($data->gif !== null) {
+            $this->attachments->storeGif($message, $data->gif);
+        }
+
         $this->links->syncFor($message);
 
         $message->load('user', 'replyTo.user', 'attachments', 'reactions.user', 'comments.user', 'linkPreviews');

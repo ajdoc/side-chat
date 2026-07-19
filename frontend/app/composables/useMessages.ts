@@ -1,4 +1,4 @@
-import type { CommentSummary, LinkPreview, Message, Reaction, SideChat, StartedThread, Thread, Widget } from '~/types'
+import type { CommentSummary, GifResult, LinkPreview, Message, Reaction, SideChat, StartedThread, Thread, Widget } from '~/types'
 
 // Messages for one text channel, plus the real-time Reverb subscription.
 export function useMessages() {
@@ -116,9 +116,9 @@ export function useMessages() {
     return messages.value.some(m => m.id === id)
   }
 
-  async function send(body: string, replyToId?: number | null, files: File[] = []) {
+  async function send(body: string, replyToId?: number | null, files: File[] = [], gif?: GifResult | null) {
     if (!channelId.value) return
-    const payload = buildMessagePayload({ body, replyToId, files })
+    const payload = buildMessagePayload({ body, replyToId, files, gif })
     const res = await api<{ data: Message }>(`/api/channels/${channelId.value}/messages`, {
       method: 'POST',
       body: payload as any,

@@ -1,4 +1,4 @@
-import type { CommentSummary, LinkPreview, Message, Reaction, Thread } from '~/types'
+import type { CommentSummary, GifResult, LinkPreview, Message, Reaction, Thread } from '~/types'
 
 // One thread: its metadata, messages, and the real-time subscription (thread.{id}).
 export function useThreadMessages() {
@@ -63,8 +63,8 @@ export function useThreadMessages() {
     return messages.value.some(m => m.id === id)
   }
 
-  async function send(threadId: number, body: string, replyToId?: number | null, files: File[] = []) {
-    const payload = buildMessagePayload({ body, replyToId, files })
+  async function send(threadId: number, body: string, replyToId?: number | null, files: File[] = [], gif?: GifResult | null) {
+    const payload = buildMessagePayload({ body, replyToId, files, gif })
     const res = await api<{ data: Message }>(`/api/threads/${threadId}/messages`, {
       method: 'POST',
       body: payload as any,

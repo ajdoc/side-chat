@@ -25,6 +25,13 @@ const {
   loadMore: loadMorePins,
   toggle: togglePin,
 } = usePins()
+const {
+  gifs,
+  hasMore: hasMoreGifs,
+  loading: loadingGifs,
+  load: loadGifs,
+  loadMore: loadMoreGifs,
+} = useChannelGifs()
 
 const { stripMarkdown } = useMarkdown()
 
@@ -35,7 +42,7 @@ const tabs: { value: Tab, label: string, icon: any, ready: boolean }[] = [
   { value: 'pinned', label: 'Pinned', icon: Pin, ready: true },
   { value: 'files', label: 'Files', icon: FileText, ready: true },
   { value: 'links', label: 'Links', icon: Link2, ready: true },
-  { value: 'gifs', label: 'GIFs', icon: Sparkles, ready: false },
+  { value: 'gifs', label: 'GIFs', icon: Sparkles, ready: true },
 ]
 
 /** A pin with no body is an attachment someone thought was worth keeping. */
@@ -48,7 +55,9 @@ function pinPreview(message: { body: string | null, attachments?: Attachment[] }
   return count === 1 ? message.attachments![0]!.name : `${count} files`
 }
 
-const images = computed(() => files.value.filter(f => f.is_image))
+// GIFs get their own tab, so keep them out of the Files > Images grid — otherwise a picked
+// GIF shows up twice in the same panel.
+const images = computed(() => files.value.filter(f => f.is_image && !f.is_gif))
 const others = computed(() => files.value.filter(f => !f.is_image))
 
 /** A failed unfurl has no title — fall back to something readable rather than a blank row. */
@@ -96,6 +105,7 @@ watch([tab, () => props.channelId], ([current, id]) => {
   if (current === 'pinned') loadPins(id)
   if (current === 'files') load(id)
   if (current === 'links') loadLinks(id)
+  if (current === 'gifs') loadGifs(id)
 }, { immediate: true })
 </script>
 
@@ -328,6 +338,43 @@ watch([tab, () => props.channelId], ([current, id]) => {
             @click="loadMoreLinks(channelId)"
           >
             {{ loadingLinks ? 'Loading…' : 'Load more' }}
+          </Button>
+        </template>
+      </template>
+
+      <!-- GIFs -->
+      <template v-else-if="tab === 'gifs'">
+        <div v-if="loadingGifs && !gifs.length" class="flex justify-center py-6">
+          <Loader2 class="h-4 w-4 animate-spin text-muted-foreground" />
+        </div>
+
+        <p v-else-if="!gifs.length" class="py-6 text-center text-sm text-muted-foreground">
+          No GIFs posted in this channel yet.
+        </p>
+
+        <template v-else>
+          <div class="grid grid-cols-2 gap-2">
+            <img
+              v-for="gif in gifs"
+              :key="gif.id"
+              :src="gif.url"
+              :alt="gif.name"
+              :title="gif.uploaded_by ?? ''"
+              loading="lazy"
+              class="aspect-square w-full cursor-zoom-in rounded-md border object-cover"
+              @click="onView(gif)"
+            >
+          </div>
+
+          <Button
+            v-if="hasMoreGifs"
+            variant="outline"
+            size="sm"
+            class="mt-4 w-full"
+            :disabled="loadingGifs"
+            @click="loadMoreGifs(channelId)"
+          >
+            {{ loadingGifs ? 'Loading…' : 'Load more' }}
           </Button>
         </template>
       </template>
