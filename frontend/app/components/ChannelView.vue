@@ -99,10 +99,15 @@ function dayLabel(iso: string): string {
   })
 }
 
+// A thread started from *this* timeline lives under `thread`/`threads`. A side chat's own
+// threads live under `scthread`/`scthreads` (see SideChatPanel), a separate namespace — which
+// is the whole reason a main-chat thread and a side chat can now stand open at the same time
+// instead of the one being read as a thread of the other.
 const threadPanelOpen = computed(() => !!(route.query.thread || route.query.threads))
+const sideChatThreadPanelOpen = computed(() => !!(route.query.scthread || route.query.scthreads))
 const sideChatPanelOpen = computed(() => !!(route.query.sidechat || route.query.sidechats))
 const infoPanelOpen = computed(() => route.query.info === '1')
-const boardPanelOpen = computed(() => route.query.board === '1')
+const spacePanelOpen = computed(() => !!route.query.space)
 // The open side chat's id, when one is in view mode — it scopes an alongside thread column
 // to that side chat rather than the channel.
 const activeSideChatId = computed(() => {
@@ -186,17 +191,28 @@ async function onJumpToReply(id: number) {
   highlightTimer = setTimeout(() => { highlightedMessageId.value = null }, 1500)
 }
 
+/**
+ * Merge a patch into the current query (null deletes a key), instead of replacing it.
+ *
+ * This is what lets a thread and a side chat coexist: opening one preserves whatever else is
+ * already standing, rather than wiping the URL. Info and Side Space, being full-column
+ * surfaces, are always cleared here — a thread or side chat takes precedence over them.
+ */
+function patchQuery(patch: Record<string, string | null>) {
+  navigateTo({ path: route.path, query: mergeQuery(route.query, { info: null, space: null, ...patch }) })
+}
+
 function onCreateThread(messageId: number) {
-  navigateTo({ path: route.path, query: { thread: 'new', from: String(messageId) } })
+  patchQuery({ thread: 'new', threads: null, from: String(messageId) })
 }
 function onOpenThread(id: number) {
-  navigateTo({ path: route.path, query: { thread: String(id) } })
+  patchQuery({ thread: String(id), threads: null, from: null })
 }
 function onCreateSideChat(messageId: number) {
-  navigateTo({ path: route.path, query: { sidechat: 'new', from: String(messageId) } })
+  patchQuery({ sidechat: 'new', sidechats: null, from: String(messageId) })
 }
 function onOpenSideChat(id: number) {
-  navigateTo({ path: route.path, query: { sidechat: String(id) } })
+  patchQuery({ sidechat: String(id), sidechats: null, from: null })
 }
 
 async function onScrollStart() {
@@ -419,19 +435,31 @@ onBeforeUnmount(() => {
       </div>
     </div>
 
-    <!-- The side chat workspace and a thread column can stand open together — the thread is
-         then scoped to the side chat. Side chat sits closest to the timeline; the thread it
-         spawned sits to its right. -->
+    <!-- A thread started from this timeline, right beside it and scoped to the channel. It no
+         longer cares whether a side chat is open — that used to reinterpret it as a thread of
+         the side chat; now the two have separate query keys and simply stand side by side. -->
+    <ThreadPanel v-if="threadPanelOpen" :channel-id="channelId" :side-chat-id="null" />
+
+    <!-- The side chat workspace and, to its right, a thread scoped to that side chat. Both
+         share the URL, so the side chat and its own thread can stand open together. -->
     <SideChatPanel v-if="sideChatPanelOpen" :channel-id="channelId" />
     <ThreadPanel
-      v-if="threadPanelOpen"
+      v-if="sideChatThreadPanelOpen && activeSideChatId != null"
       :channel-id="channelId"
-      :side-chat-id="sideChatPanelOpen ? activeSideChatId : null"
+      :side-chat-id="activeSideChatId"
     />
-    <!-- Reuses the reply-jump: page older history in, scroll to it, flash a highlight. -->
-    <ChannelInfoPanel v-else-if="infoPanelOpen && !sideChatPanelOpen" :channel-id="channelId" @jump="onJumpToReply" />
-    <!-- The channel's own shared whiteboard, beside the timeline. -->
-    <ChannelWhiteboardPanel v-else-if="boardPanelOpen && !sideChatPanelOpen" :channel-id="channelId" />
+
+    <!-- Info and Side Space each take the whole side column, so they yield to a thread or a
+         side chat rather than stack beside them. Info reuses the reply-jump. -->
+    <ChannelInfoPanel
+      v-if="infoPanelOpen && !threadPanelOpen && !sideChatPanelOpen"
+      :channel-id="channelId"
+      @jump="onJumpToReply"
+    />
+    <SideSpacePanel
+      v-if="spacePanelOpen && !threadPanelOpen && !sideChatPanelOpen"
+      :channel-id="channelId"
+    />
 
     <!-- Forward a message from this timeline into another chat or channel. -->
     <ForwardDialog v-model:message="forwardTarget" />

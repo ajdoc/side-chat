@@ -111,6 +111,28 @@ final class AttachmentService
         }
     }
 
+    /**
+     * Attach a *copy* of an already-stored file to a message — the bytes come from somewhere
+     * other than an upload (a Side Space document being shared into chat). Mirrors the hosted
+     * branch of {@see cloneForMessage}: the copy lands in the target channel's folder so it's
+     * purged with that channel, and gets its own row. Returns the new attachment.
+     */
+    public function attachStoredFile(Message $target, string $disk, string $path, string $name, string $mimeType, ?string $extension, int $size): Attachment
+    {
+        $ext = $extension ? ".{$extension}" : '';
+        $newPath = "attachments/{$target->channel_id}/".Str::random(40).$ext;
+        Storage::disk($disk)->copy($path, $newPath);
+
+        return $target->attachments()->create([
+            'disk' => $disk,
+            'path' => $newPath,
+            'name' => $name,
+            'mime_type' => $mimeType,
+            'extension' => $extension,
+            'size' => $size,
+        ]);
+    }
+
     /** Whether a GIF media URL points at a host one of the configured providers serves. */
     private function isAllowedGifHost(string $url): bool
     {

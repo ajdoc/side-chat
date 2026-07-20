@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import { CheckCircle2, Info, Loader2, MessageSquare, MessagesSquare, PenTool, Pin, Plus, Rocket, UserPlus, Users, X } from 'lucide-vue-next'
-import type { GifResult, Message } from '~/types'
+import { CheckCircle2, Info, LayoutPanelLeft, Loader2, MessageSquare, MessagesSquare, Pin, Plus, Rocket, UserPlus, Users, X } from 'lucide-vue-next'
+import type { GifResult, Message, SideSpaceAppId } from '~/types'
 import { Button } from '~/components/ui/button'
 import { Input } from '~/components/ui/input'
 
@@ -12,13 +12,17 @@ import { Input } from '~/components/ui/input'
  *
  *   - **Chat** — the conversation, its roster, its decisions and pins.
  *   - **Info** — the side chat about itself: who's here, where it came from, what it decided.
- *   - **Whiteboard** — a shared, persistent, real-time board (see Whiteboard).
+ *   - **Space** — the shared, persistent, real-time workspace: whiteboard, notes, docs and
+ *     a widget canvas, each a tab (see SideSpace).
  *
  * And because a side chat can own threads of its own, opening one leaves this panel in place
  * and adds a second column beside it — the ThreadPanel, scoped to this side chat. Which is
  * why the query helpers here *merge* rather than replace: the two columns share the URL.
  */
 const props = defineProps<{ channelId: number }>()
+
+// Draggable, remembered width (its left border carries the handle).
+const { width: panelWidth, startResize } = useResizable('side-chat', 380, { min: 300, max: 720 })
 const route = useRoute()
 const { user } = useAuth()
 
@@ -49,12 +53,21 @@ const fromMessageId = computed(() => (route.query.from ? Number(route.query.from
 const TABS = [
   { key: 'chat', label: 'Chat', icon: MessageSquare },
   { key: 'info', label: 'Info', icon: Info },
-  { key: 'board', label: 'Board', icon: PenTool },
+  { key: 'space', label: 'Space', icon: LayoutPanelLeft },
 ] as const
-const sctab = computed<'chat' | 'info' | 'board'>(() => {
+const sctab = computed<'chat' | 'info' | 'space'>(() => {
   const t = route.query.sctab
-  return t === 'info' || t === 'board' ? t : 'chat'
+  return t === 'info' || t === 'space' ? t : 'chat'
 })
+
+// The Side Space's active app rides in `spacetab`; board is the default (kept out of the URL).
+const spaceApp = computed<SideSpaceAppId>(() => {
+  const s = route.query.spacetab
+  return s === 'notes' || s === 'docs' || s === 'canvas' ? s : 'board'
+})
+function setSpaceApp(app: SideSpaceAppId) {
+  setQuery({ spacetab: app === 'board' ? null : app })
+}
 
 const joined = computed(() =>
   !!user.value && (sideChat.value?.participant_ids?.includes(user.value.id) ?? false),
@@ -117,15 +130,16 @@ function close() {
   navigateTo({ path: route.path, query: {} })
 }
 
-// Threads live in a second column; opening one keeps this workspace open.
+// A side chat's threads live in a second column, under their own `sc…` query keys so they
+// don't collide with a channel thread the main timeline may have open at the same time.
 function openThreads() {
-  setQuery({ threads: '1', thread: null, from: null })
+  setQuery({ scthreads: '1', scthread: null, scfrom: null })
 }
 function onCreateThread(messageId: number) {
-  setQuery({ threads: null, thread: 'new', from: String(messageId) })
+  setQuery({ scthreads: null, scthread: 'new', scfrom: String(messageId) })
 }
 function onOpenThread(id: number) {
-  setQuery({ threads: null, thread: String(id), from: null })
+  setQuery({ scthreads: null, scthread: String(id), scfrom: null })
 }
 
 async function submitCreate() {
@@ -224,7 +238,8 @@ function relTime(iso: string) {
 </script>
 
 <template>
-  <aside class="flex w-[380px] shrink-0 flex-col border-l">
+  <aside class="relative flex shrink-0 flex-col border-l" :style="{ width: `${panelWidth}px` }">
+    <ResizeHandle edge="left" @resize="startResize" />
     <header class="flex h-12 shrink-0 items-center justify-between border-b px-4">
       <div class="flex min-w-0 items-center gap-2 font-semibold">
         <Rocket class="h-4 w-4 text-muted-foreground" />
@@ -451,14 +466,16 @@ function relTime(iso: string) {
         @leave="onLeave"
       />
 
-      <!-- WHITEBOARD -->
-      <Whiteboard
-        v-if="sctab === 'board' && activeId"
+      <!-- SIDE SPACE — board, notes, docs and the widget canvas for this side chat. -->
+      <SideSpace
+        v-if="sctab === 'space' && activeId"
         :key="activeId"
-        :base-path="`/api/side-chats/${activeId}/whiteboard`"
+        :base-path="`/api/side-chats/${activeId}`"
         :stream-name="`sidechat.${activeId}`"
-        :can-draw="joined"
-        readonly-hint="Join this side chat to draw"
+        :can-edit="joined"
+        :active-app="spaceApp"
+        readonly-hint="Join this side chat to edit"
+        @update:active-app="setSpaceApp"
       />
     </template>
 

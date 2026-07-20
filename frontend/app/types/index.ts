@@ -464,6 +464,75 @@ export interface WhiteboardStroke {
   created_at?: string
 }
 
+/** The apps a Side Space houses, each a tab: whiteboard, notes, documents, widget canvas. */
+export type SideSpaceAppId = 'board' | 'notes' | 'docs' | 'canvas'
+
+/**
+ * A Side Space note: one shared markdown document per surface, edited collaboratively with
+ * last-write-wins. Addressed by its surface (channel or side chat), never on its own — so no
+ * id. `updated_by` is who saved it last, for the "edited by" line.
+ */
+export interface SpaceNote {
+  content: string
+  updated_by: User | null
+  updated_at: string | null
+}
+
+/** The kinds of card the Open Canvas holds. `widget` places one of the interactive widgets. */
+export type CanvasItemKind = 'note' | 'todo' | 'widget'
+
+/** One entry in a `todo` card's checklist. `id` is a client-minted uuid, stable across saves. */
+export interface CanvasTodoEntry {
+  id: string
+  text: string
+  done: boolean
+}
+
+/**
+ * One card on a Side Space's Open Canvas — a markdown note or a checklist, freely placed on
+ * a surface's 2D board. `content` is kind-specific (see {@link CanvasNoteCard} / {@link
+ * CanvasTodoCard}); `x`/`y`/`w`/`h` are the canvas's logical pixels and `z` is stack order.
+ */
+export interface CanvasItem {
+  id: number
+  kind: CanvasItemKind
+  content: Record<string, any>
+  x: number
+  y: number
+  w: number
+  h: number
+  z: number
+  /** Present on `widget` cards: the interactive widget this card places, with its live state. */
+  widget?: Widget
+  user?: User
+  created_at?: string
+}
+
+/** How the Docs app previews a file: PDF in an iframe, sheet/word via a viewer, else download. */
+export type SpaceDocumentKind = 'pdf' | 'sheet' | 'word' | 'other'
+
+/**
+ * A file on a Side Space's Docs app. Bytes live on a private disk; `url`/`download_url` are
+ * short-lived signed links (like an {@link Attachment}'s), so they're re-fetched with the list
+ * rather than held forever.
+ */
+export interface SpaceDocument {
+  id: number
+  name: string
+  mime_type: string
+  extension: string | null
+  size: number
+  kind: SpaceDocumentKind
+  /** 'shelf' — uploaded to Docs (deletable, can be sent to chat). 'chat' — shared in a message. */
+  source: 'shelf' | 'chat'
+  /** The message a 'chat' document rode in on; null for 'shelf' documents. */
+  message_id: number | null
+  url: string
+  download_url: string
+  uploaded_by: User | null
+  created_at: string
+}
+
 /**
  * A side chat: a mini room spun off a message, with its own roster and timeline. The
  * "living object" — its card in the main timeline carries the counts that keep it alive

@@ -7,6 +7,7 @@ use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\BelongsToMany;
 use Illuminate\Database\Eloquent\Relations\HasMany;
+use Illuminate\Database\Eloquent\Relations\HasOne;
 
 class SideChat extends Model
 {
@@ -47,6 +48,24 @@ class SideChat extends Model
     public function whiteboardStrokes(): HasMany
     {
         return $this->hasMany(WhiteboardStroke::class)->orderBy('id');
+    }
+
+    /** The Side Space note — this side chat's one shared markdown document. */
+    public function spaceNote(): HasOne
+    {
+        return $this->hasOne(SpaceNote::class);
+    }
+
+    /** The Open Canvas cards, in stack order (bottom first). */
+    public function canvasItems(): HasMany
+    {
+        return $this->hasMany(CanvasItem::class)->orderBy('z');
+    }
+
+    /** The Docs app files for this side chat. */
+    public function spaceDocuments(): HasMany
+    {
+        return $this->hasMany(SpaceDocument::class);
     }
 
     /** The roster — who has joined. Carries the pivot role and when they joined. */

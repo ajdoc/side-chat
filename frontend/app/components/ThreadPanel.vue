@@ -11,6 +11,9 @@ import { Input } from '~/components/ui/input'
  * the channel's Threads panel exactly as before.
  */
 const props = defineProps<{ channelId: number, sideChatId?: number | null }>()
+
+// Draggable, remembered width (its left border carries the handle).
+const { width: panelWidth, startResize } = useResizable('thread', 360, { min: 280, max: 640 })
 const route = useRoute()
 const { user } = useAuth()
 
@@ -28,14 +31,25 @@ const {
   unsubscribe: unsubscribeTyping,
 } = useTyping()
 
+// Each scope owns its own query keys, so the channel's thread column and a side chat's own
+// thread column can be open at once without overwriting each other. The channel thread keeps
+// the original `thread`/`threads`/`from`; a side chat's threads live under `sc…`.
+const keys = computed(() => (scoped.value
+  ? { view: 'scthread', list: 'scthreads', from: 'scfrom' }
+  : { view: 'thread', list: 'threads', from: 'from' }))
+
 const mode = computed<'list' | 'create' | 'view' | null>(() => {
-  if (route.query.threads === '1') return 'list'
-  if (route.query.thread === 'new') return 'create'
-  if (route.query.thread) return 'view'
+  const q = route.query
+  if (q[keys.value.list] === '1') return 'list'
+  if (q[keys.value.view] === 'new') return 'create'
+  if (q[keys.value.view]) return 'view'
   return null
 })
-const activeThreadId = computed(() => (mode.value === 'view' ? Number(route.query.thread) : null))
-const fromMessageId = computed(() => (route.query.from ? Number(route.query.from) : null))
+const activeThreadId = computed(() => (mode.value === 'view' ? Number(route.query[keys.value.view]) : null))
+const fromMessageId = computed(() => {
+  const v = route.query[keys.value.from]
+  return typeof v === 'string' ? Number(v) : null
+})
 
 const newName = ref('')
 const creating = ref(false)
@@ -72,10 +86,7 @@ async function onScrollStart() {
     })
   }
 }
-function goto(query: Record<string, string>) {
-  navigateTo({ path: route.path, query })
-}
-/** Merge into the current query — used when scoped, so the side chat column stays open. */
+/** Merge into the current query, so any other open column (a side chat, the other thread) stays. */
 function setQuery(patch: Record<string, string | null>) {
   const q: Record<string, string> = {}
   for (const [k, v] of Object.entries(route.query)) if (typeof v === 'string') q[k] = v
@@ -85,13 +96,13 @@ function setQuery(patch: Record<string, string | null>) {
   }
   navigateTo({ path: route.path, query: q })
 }
-/** Open a thread. Scoped: keep the side chat; unscoped: it's the only column. */
+/** Open a thread in this scope's keys; merging leaves any other column standing. */
 function openThread(id: number) {
-  scoped.value ? setQuery({ thread: String(id), threads: null, from: null }) : goto({ thread: String(id) })
+  setQuery({ [keys.value.view]: String(id), [keys.value.list]: null, [keys.value.from]: null })
 }
+/** Close just this column — its own keys — so a side chat (or the other thread) beside it stays. */
 function close() {
-  // Scoped: fall back to the side chat workspace; unscoped: clear the panel entirely.
-  scoped.value ? setQuery({ thread: null, threads: null, from: null }) : navigateTo({ path: route.path, query: {} })
+  setQuery({ [keys.value.view]: null, [keys.value.list]: null, [keys.value.from]: null })
 }
 
 async function submitCreate() {
@@ -164,7 +175,8 @@ onBeforeUnmount(teardown)
 </script>
 
 <template>
-  <aside class="flex w-[360px] shrink-0 flex-col border-l">
+  <aside class="relative flex shrink-0 flex-col border-l" :style="{ width: `${panelWidth}px` }">
+    <ResizeHandle edge="left" @resize="startResize" />
     <header class="flex h-12 shrink-0 items-center justify-between border-b px-4">
       <div class="flex items-center gap-2 font-semibold">
         <MessagesSquare class="h-4 w-4 text-muted-foreground" />

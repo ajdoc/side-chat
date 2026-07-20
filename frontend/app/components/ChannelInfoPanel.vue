@@ -7,9 +7,12 @@ const props = defineProps<{ channelId: number }>()
 
 const emit = defineEmits<{ jump: [messageId: number] }>()
 
+// Draggable, remembered width (its left border carries the handle).
+const { width: panelWidth, startResize } = useResizable('channel-info', 360, { min: 300, max: 640 })
+
 const route = useRoute()
 
-const { files, hasMore, loading, load, loadMore } = useChannelFiles()
+const { files, shelfDocs, hasMore, loading, load, loadMore } = useChannelFiles()
 const {
   links,
   hasMore: hasMoreLinks,
@@ -61,7 +64,12 @@ function pinPreview(message: { body: string | null, attachments?: Attachment[] }
 // GIFs get their own tab, so keep them out of the Files > Images grid — otherwise a picked
 // GIF shows up twice in the same panel.
 const images = computed(() => files.value.filter(f => f.is_image && !f.is_gif))
-const others = computed(() => files.value.filter(f => !f.is_image))
+// Non-image chat files plus the Side Space Docs shelf, newest first — so a doc uploaded to
+// Docs shows up here too.
+const others = computed(() =>
+  [...files.value.filter(f => !f.is_image), ...shelfDocs.value]
+    .sort((a, b) => (a.created_at < b.created_at ? 1 : -1)),
+)
 
 /** A failed unfurl has no title — fall back to something readable rather than a blank row. */
 function linkTitle(link: ChannelLink) {
@@ -128,7 +136,8 @@ watch([tab, () => props.channelId], ([current, id]) => {
 </script>
 
 <template>
-  <aside class="flex w-[360px] shrink-0 flex-col border-l">
+  <aside class="relative flex shrink-0 flex-col border-l" :style="{ width: `${panelWidth}px` }">
+    <ResizeHandle edge="left" @resize="startResize" />
     <header class="flex h-12 shrink-0 items-center justify-between border-b px-4">
       <span class="font-semibold">Channel info</span>
       <button class="text-muted-foreground hover:text-foreground" aria-label="Close" @click="close">
@@ -224,8 +233,8 @@ watch([tab, () => props.channelId], ([current, id]) => {
           <Loader2 class="h-4 w-4 animate-spin text-muted-foreground" />
         </div>
 
-        <p v-else-if="!files.length" class="py-6 text-center text-sm text-muted-foreground">
-          No files posted in this channel yet.
+        <p v-else-if="!files.length && !shelfDocs.length" class="py-6 text-center text-sm text-muted-foreground">
+          No files in this channel yet.
         </p>
 
         <template v-else>

@@ -88,6 +88,10 @@ final class MusicWidget implements WidgetHandler
     public function action(Widget $widget, User $user, string $action, array $payload): WidgetOutcome
     {
         return match ($action) {
+            // In-widget "add to queue" — the button/field twin of `m!p <link or search>`, so a
+            // card away from a composer (e.g. on the Open Canvas) can still add music. Reuses
+            // the command's own logic: a link enqueues, plain words open the search picker.
+            'add' => $this->play($widget, $user, (string) ($payload['query'] ?? '')),
             'pause' => $this->pause($widget),
             'resume' => $this->resume($widget),
             'next' => $this->next($widget),

@@ -3,9 +3,14 @@
 use App\Http\Controllers\Auth\AuthController;
 use App\Http\Controllers\AttachmentController;
 use App\Http\Controllers\Auth\SocialAuthController;
+use App\Http\Controllers\CanvasController;
+use App\Http\Controllers\ChannelCanvasController;
 use App\Http\Controllers\ChannelController;
+use App\Http\Controllers\ChannelDocumentController;
+use App\Http\Controllers\DocumentController;
 use App\Http\Controllers\ChannelLinkController;
 use App\Http\Controllers\ChannelMemberController;
+use App\Http\Controllers\ChannelSpaceNoteController;
 use App\Http\Controllers\ChannelWhiteboardController;
 use App\Http\Controllers\CommentController;
 use App\Http\Controllers\ConversationController;
@@ -21,6 +26,7 @@ use App\Http\Controllers\ReadReceiptController;
 use App\Http\Controllers\ServerController;
 use App\Http\Controllers\SideChatController;
 use App\Http\Controllers\SideChatMessageController;
+use App\Http\Controllers\SpaceNoteController;
 use App\Http\Controllers\SpotifyController;
 use App\Http\Controllers\DecisionController;
 use App\Http\Controllers\ThreadController;
@@ -189,6 +195,22 @@ Route::middleware('auth:api')->group(function () {
     Route::delete('channels/{channel}/whiteboard/strokes/{stroke}', [ChannelWhiteboardController::class, 'destroy']);
     Route::delete('channels/{channel}/whiteboard', [ChannelWhiteboardController::class, 'clear']);
 
+    // The channel's Side Space note — its one shared markdown document, gated like the board.
+    Route::get('channels/{channel}/notes', [ChannelSpaceNoteController::class, 'show']);
+    Route::put('channels/{channel}/notes', [ChannelSpaceNoteController::class, 'update']);
+
+    // The channel's Open Canvas — free 2D cards, gated on membership like the board.
+    Route::get('channels/{channel}/canvas', [ChannelCanvasController::class, 'index']);
+    Route::post('channels/{channel}/canvas', [ChannelCanvasController::class, 'store']);
+    Route::patch('channels/{channel}/canvas/{item}', [ChannelCanvasController::class, 'update']);
+    Route::delete('channels/{channel}/canvas/{item}', [ChannelCanvasController::class, 'destroy']);
+
+    // The channel's Docs app — view-only file shelf, gated on membership like the board.
+    Route::get('channels/{channel}/documents', [ChannelDocumentController::class, 'index']);
+    Route::post('channels/{channel}/documents', [ChannelDocumentController::class, 'store']);
+    Route::post('channels/{channel}/documents/{document}/send', [ChannelDocumentController::class, 'sendToChat']);
+    Route::delete('channels/{channel}/documents/{document}', [ChannelDocumentController::class, 'destroy']);
+
     /*
      * Side chats: a mini room spun off a message, with its own roster and timeline.
      *
@@ -220,6 +242,18 @@ Route::middleware('auth:api')->group(function () {
     Route::patch('side-chats/{sideChat}/whiteboard/strokes/{stroke}', [WhiteboardController::class, 'update']);
     Route::delete('side-chats/{sideChat}/whiteboard/strokes/{stroke}', [WhiteboardController::class, 'destroy']);
     Route::delete('side-chats/{sideChat}/whiteboard', [WhiteboardController::class, 'clear']);
+    // The side chat's Side Space note. Reading needs channel membership; saving needs the roster.
+    Route::get('side-chats/{sideChat}/notes', [SpaceNoteController::class, 'show']);
+    Route::put('side-chats/{sideChat}/notes', [SpaceNoteController::class, 'update']);
+    // The side chat's Open Canvas. Reading needs channel membership; authoring needs the roster.
+    Route::get('side-chats/{sideChat}/canvas', [CanvasController::class, 'index']);
+    Route::post('side-chats/{sideChat}/canvas', [CanvasController::class, 'store']);
+    Route::patch('side-chats/{sideChat}/canvas/{item}', [CanvasController::class, 'update']);
+    Route::delete('side-chats/{sideChat}/canvas/{item}', [CanvasController::class, 'destroy']);
+    // The side chat's Docs app. Listing needs channel membership; uploading needs the roster.
+    Route::get('side-chats/{sideChat}/documents', [DocumentController::class, 'index']);
+    Route::post('side-chats/{sideChat}/documents', [DocumentController::class, 'store']);
+    Route::delete('side-chats/{sideChat}/documents/{document}', [DocumentController::class, 'destroy']);
     // Record a message as a decision (the ✅ on a side chat's card), or take it back.
     Route::post('messages/{message}/decision', [DecisionController::class, 'toggle']);
 });

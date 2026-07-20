@@ -15,7 +15,11 @@ return [
     |
     */
 
-    'paths' => ['api/*', 'broadcasting/auth', 'sanctum/csrf-cookie'],
+    // 'attachments/*' and 'space-documents/*' are the signed file routes (routes/web.php).
+    // They must allow cross-origin requests because the Docs app fetch()es a spreadsheet's or
+    // Word doc's bytes to render them (SheetJS / mammoth) — unlike a PDF iframe or an <img>,
+    // a fetch() is gated by CORS. Serving from a non-CORS path is what triggers the error.
+    'paths' => ['api/*', 'attachments/*', 'space-documents/*', 'broadcasting/auth', 'sanctum/csrf-cookie'],
 
     'allowed_methods' => ['*'],
 

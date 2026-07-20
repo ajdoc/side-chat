@@ -76,6 +76,9 @@ const colors: { value: ThemeColor, label: string }[] = [
   { value: 'rose', label: 'Rose' },
 ]
 
+// The sidebar's width is draggable and remembered (its right border carries the handle).
+const { width: sidebarWidth, startResize: startSidebarResize } = useResizable('sidebar', 256, { min: 200, max: 480, edge: 'right' })
+
 const activeServerId = computed(() => Number(route.params.serverId) || null)
 const activeChannelId = computed(() => Number(route.params.channelId) || null)
 const activeConversationId = computed(() => Number(route.params.conversationId) || null)
@@ -363,7 +366,8 @@ onBeforeUnmount(() => userStream.unsubscribe())
 
 <template>
   <div class="flex h-screen text-foreground">
-    <aside class="flex w-64 shrink-0 flex-col border-r bg-sidebar">
+    <aside class="relative flex shrink-0 flex-col border-r bg-sidebar" :style="{ width: `${sidebarWidth}px` }">
+      <ResizeHandle edge="right" @resize="startSidebarResize" />
       <div class="flex h-12 shrink-0 items-center border-b px-4 font-semibold">
         Side Chat
       </div>

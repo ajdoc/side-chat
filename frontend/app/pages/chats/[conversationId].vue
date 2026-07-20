@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { Info, LogOut, MessagesSquare, Pencil, PenTool, Phone, UserPlus, Users } from 'lucide-vue-next'
+import { Info, LayoutPanelLeft, LogOut, MessagesSquare, Pencil, Phone, UserPlus, Users } from 'lucide-vue-next'
 import { Button } from '~/components/ui/button'
 import {
   DropdownMenu,
@@ -72,13 +72,18 @@ async function onCall() {
 }
 
 function openThreadsList() {
-  navigateTo({ path: route.path, query: { threads: '1' } })
+  // Open the chat's Threads list beside anything already up (a side chat stays put),
+  // clearing a channel thread that was in view and the full-column Info / Side Space.
+  navigateTo({
+    path: route.path,
+    query: mergeQuery(route.query, { threads: '1', thread: null, from: null, info: null, space: null }),
+  })
 }
 function openInfo() {
   navigateTo({ path: route.path, query: { info: '1' } })
 }
-function openBoard() {
-  navigateTo({ path: route.path, query: { board: '1' } })
+function openSpace() {
+  navigateTo({ path: route.path, query: { space: 'board' } })
 }
 
 // --- group actions ---
@@ -153,8 +158,8 @@ useHead({ title: computed(() => title.value) })
       <Button variant="ghost" size="sm" class="gap-2 text-muted-foreground" @click="openThreadsList">
         <MessagesSquare class="h-4 w-4" /> Threads
       </Button>
-      <Button variant="ghost" size="sm" class="gap-2 text-muted-foreground" @click="openBoard">
-        <PenTool class="h-4 w-4" /> Whiteboard
+      <Button variant="ghost" size="sm" class="gap-2 text-muted-foreground" @click="openSpace">
+        <LayoutPanelLeft class="h-4 w-4" /> Side Space
       </Button>
       <Button variant="ghost" size="sm" class="gap-2 text-muted-foreground" @click="openInfo">
         <Info class="h-4 w-4" /> Info

@@ -351,6 +351,16 @@ const onSpeed = (e: Event) => send('speed', { value: Number((e.target as HTMLInp
 const pick = (i: number) => send('pick', { index: i })
 const cancelSearch = () => send('cancelSearch')
 
+// Add to the queue from inside the card — the composer's `m!p` isn't reachable everywhere
+// (the Open Canvas has no message box), so the player carries its own search/link field.
+const addQuery = ref('')
+async function addMusic() {
+  const q = addQuery.value.trim()
+  if (!q) return
+  await send('add', { query: q })
+  addQuery.value = ''
+}
+
 const linkingSpotify = ref(false)
 async function onConnectSpotify() {
   if (linkingSpotify.value) return
@@ -449,6 +459,19 @@ onBeforeUnmount(() => {
     </div>
 
     <div class="p-3">
+      <!-- Add to queue — works without the m! command (e.g. on the Open Canvas). -->
+      <form class="mb-3 flex items-center gap-1.5" @submit.prevent="addMusic">
+        <div class="flex min-w-0 flex-1 items-center gap-1.5 rounded-lg border bg-background/60 px-2">
+          <Search class="h-3.5 w-3.5 flex-none text-muted-foreground" />
+          <input
+            v-model="addQuery"
+            placeholder="Search or paste a link…"
+            class="min-w-0 flex-1 bg-transparent py-1.5 text-xs outline-none placeholder:text-muted-foreground"
+          >
+        </div>
+        <Button type="submit" size="sm" class="h-8 flex-none" :disabled="busy || !addQuery.trim()">Add</Button>
+      </form>
+
       <!-- Search picker -->
       <div v-if="pending" class="mb-3 rounded-lg border bg-background/60 p-2">
         <div class="mb-1.5 flex items-center gap-1.5 text-xs font-medium">
@@ -493,7 +516,7 @@ onBeforeUnmount(() => {
         </div>
       </div>
       <p v-else class="py-2 text-center text-sm text-muted-foreground">
-        Nothing playing. Try <code class="rounded bg-muted px-1">m!p &lt;link or search&gt;</code>.
+        Nothing playing. Search or paste a link above to start.
       </p>
 
       <!-- Controls -->

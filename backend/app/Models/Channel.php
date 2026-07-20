@@ -7,6 +7,7 @@ use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
+use Illuminate\Database\Eloquent\Relations\HasOne;
 
 class Channel extends Model
 {
@@ -68,6 +69,24 @@ class Channel extends Model
     public function whiteboardStrokes(): HasMany
     {
         return $this->hasMany(WhiteboardStroke::class)->orderBy('id');
+    }
+
+    /** The channel's Side Space note — its one shared markdown document. */
+    public function spaceNote(): HasOne
+    {
+        return $this->hasOne(SpaceNote::class);
+    }
+
+    /** The channel's Open Canvas cards, in stack order (bottom first). */
+    public function canvasItems(): HasMany
+    {
+        return $this->hasMany(CanvasItem::class)->orderBy('z');
+    }
+
+    /** The channel's Docs app files. */
+    public function spaceDocuments(): HasMany
+    {
+        return $this->hasMany(SpaceDocument::class);
     }
 
     /** How far each member has read in this channel. */

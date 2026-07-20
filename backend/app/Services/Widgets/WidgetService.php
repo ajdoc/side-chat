@@ -44,6 +44,18 @@ final class WidgetService
     }
 
     /**
+     * The channel's widget of a given type, created (with the handler's initial state) if it
+     * doesn't exist yet — the same one-per-(channel,type) widget a chat command would reach.
+     * Used when an Open Canvas card places a widget. Null if the type is unknown.
+     */
+    public function ensure(Channel $channel, User $user, string $type): ?Widget
+    {
+        $handler = $this->handlerForType($type);
+
+        return $handler !== null ? $this->widgetFor($channel, $user, $handler) : null;
+    }
+
+    /**
      * Run a parsed chat command and return the message that should answer it — a fresh
      * card, the existing one, or a private ephemeral note. Called from the send path.
      */
