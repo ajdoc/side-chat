@@ -16,6 +16,8 @@ const props = defineProps<{ channelId: number, sideChatId?: number | null }>()
 const { width: panelWidth, startResize } = useResizable('thread', 360, { min: 280, max: 640 })
 const route = useRoute()
 const { user } = useAuth()
+// Names follow whatever people are called in this server or chat — see useNicknames.
+const { nameFor } = useNicknames()
 
 const { threads, sideChatThreads, loadThreads, createThread, loadSideChatThreads, createSideChatThread } = useThreads()
 const scoped = computed(() => props.sideChatId != null)
@@ -121,11 +123,11 @@ async function submitCreate() {
   }
 }
 
-async function onSend(body: string, files: File[], gif?: GifResult) {
+async function onSend(body: string, files: File[], gif?: GifResult, uploadIds: string[] = []) {
   if (!activeThreadId.value || sending.value) return
   sending.value = true
   try {
-    await send(activeThreadId.value, body, replyingTo.value?.id ?? null, files, gif)
+    await send(activeThreadId.value, body, replyingTo.value?.id ?? null, files, gif, uploadIds)
     stopTyping()
     replyingTo.value = null
     scrollBottom()
@@ -200,7 +202,7 @@ onBeforeUnmount(teardown)
         <div class="text-sm font-medium">{{ t.name }}</div>
         <div class="text-xs text-muted-foreground">
           {{ t.replies_count ?? 0 }} {{ (t.replies_count ?? 0) === 1 ? 'reply' : 'replies' }}
-          <template v-if="t.creator"> · started by {{ t.creator.name }}</template>
+          <template v-if="t.creator"> · started by {{ nameFor(t.creator) }}</template>
         </div>
       </button>
       <p v-if="!list.length" class="p-3 text-sm text-muted-foreground">
@@ -225,7 +227,7 @@ onBeforeUnmount(teardown)
       <div class="flex min-h-0 flex-1 flex-col">
         <div v-if="thread?.parent_message" class="m-3 mb-0 shrink-0 rounded-lg border bg-muted/40 p-3 text-sm">
           <div class="mb-1 text-xs font-semibold uppercase text-muted-foreground">Started from</div>
-          <span class="font-medium">{{ thread.parent_message.user.name }}</span>
+          <span class="font-medium">{{ nameFor(thread.parent_message.user) }}</span>
           <MarkdownBody v-if="thread.parent_message.body" :source="thread.parent_message.body" />
         </div>
 
@@ -284,7 +286,7 @@ onBeforeUnmount(teardown)
 
       <div class="shrink-0 border-t">
         <div v-if="replyingTo" class="flex items-center justify-between bg-muted/40 px-3 py-1.5 text-xs text-muted-foreground">
-          <span class="truncate">Replying to <span class="font-medium">{{ replyingTo.user.name }}</span></span>
+          <span class="truncate">Replying to <span class="font-medium">{{ nameFor(replyingTo.user) }}</span></span>
           <button class="hover:text-foreground" @click="replyingTo = null"><X class="h-3.5 w-3.5" /></button>
         </div>
         <TypingIndicator :label="typingLabel" />

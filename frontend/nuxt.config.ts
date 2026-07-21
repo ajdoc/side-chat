@@ -35,6 +35,10 @@ export default defineNuxtConfig({
       reverbHost: 'localhost',
       reverbPort: '8080',
       reverbScheme: 'http',
+      // The largest attachment the chunked path will take, in MB. Mirrors the API's
+      // MAX_UPLOAD_MB (config/uploads.php) — a mismatch just means the browser lets through
+      // a file the server then refuses.
+      maxUploadMb: '2048',
     },
   },
 })

@@ -43,6 +43,9 @@ watch(open, async (isOpen) => {
   }
 }, { immediate: true })
 
+// Everyone listed here is shown under whatever they're called in this place.
+const { nameFor } = useNicknames()
+
 function initials(name: string) {
   return name.split(' ').map(w => w[0]).slice(0, 2).join('').toUpperCase()
 }
@@ -85,9 +88,9 @@ function formatSeenAt(iso: string) {
             <ul class="mt-1 space-y-1 pl-6">
               <li v-for="u in reaction.users" :key="u.id" class="flex items-center gap-2 text-sm">
                 <span class="grid h-6 w-6 shrink-0 place-items-center rounded-full bg-secondary text-[10px] font-semibold text-secondary-foreground">
-                  {{ initials(u.name) }}
+                  {{ initials(nameFor(u)) }}
                 </span>
-                {{ u.name }}
+                {{ nameFor(u) }}
               </li>
             </ul>
           </div>
@@ -110,9 +113,9 @@ function formatSeenAt(iso: string) {
             <ul v-if="info.seen_by.length" class="space-y-1.5">
               <li v-for="entry in info.seen_by" :key="entry.user.id" class="flex items-center gap-2 text-sm">
                 <span class="grid h-7 w-7 shrink-0 place-items-center rounded-full bg-primary text-[10px] font-semibold text-primary-foreground">
-                  {{ initials(entry.user.name) }}
+                  {{ initials(nameFor(entry.user)) }}
                 </span>
-                <span class="min-w-0 flex-1 truncate">{{ entry.user.name }}</span>
+                <span class="min-w-0 flex-1 truncate">{{ nameFor(entry.user) }}</span>
                 <Check class="h-3.5 w-3.5 shrink-0 text-green-600 dark:text-green-400" />
                 <span class="shrink-0 text-xs tabular-nums text-muted-foreground">
                   {{ formatSeenAt(entry.read_at) }}
@@ -130,9 +133,9 @@ function formatSeenAt(iso: string) {
             <ul class="space-y-1.5">
               <li v-for="member in info.not_seen_by" :key="member.id" class="flex items-center gap-2 text-sm text-muted-foreground">
                 <span class="grid h-7 w-7 shrink-0 place-items-center rounded-full bg-muted text-[10px] font-semibold">
-                  {{ initials(member.name) }}
+                  {{ initials(nameFor(member)) }}
                 </span>
-                <span class="min-w-0 flex-1 truncate">{{ member.name }}</span>
+                <span class="min-w-0 flex-1 truncate">{{ nameFor(member) }}</span>
               </li>
             </ul>
           </section>

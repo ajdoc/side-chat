@@ -26,6 +26,8 @@ const {
   screenResolution,
   screenMode,
   canPickSpeaker,
+  pushToTalk,
+  setPushToTalk,
   screenResolutions,
   refreshDevices,
   setMicDevice,
@@ -46,6 +48,38 @@ watch(open, (isOpen) => {
 function deviceLabel(device: MediaDeviceInfo, index: number, kind: string) {
   return device.label || `${kind} ${index + 1}`
 }
+
+/**
+ * The device pickers go through `v-model`, not `:value` + `@change`, and that is load-bearing.
+ *
+ * The options arrive *after* the first render — refreshDevices is async — and a plain `:value`
+ * is only written to the element when the bound value itself changes. It doesn't, so the
+ * remembered device would be set against an empty list, dropped, and the browser would show
+ * whichever option happened to land first. `v-model` re-applies the selection on every
+ * re-render of the select, so the list filling in re-selects the device you actually chose.
+ *
+ * Writes go straight through to useVoice (which saves and, mid-call, switches on the spot);
+ * an empty value is the "System default" row, which the setters have nothing to do with.
+ */
+const selectedMic = computed({
+  get: () => micId.value ?? '',
+  set: (deviceId: string) => { if (deviceId) void setMicDevice(deviceId) },
+})
+
+const selectedSpeaker = computed({
+  get: () => speakerId.value ?? '',
+  set: (deviceId: string) => { if (deviceId) void setSpeaker(deviceId) },
+})
+
+const selectedResolution = computed({
+  get: () => screenResolution.value,
+  set: (value: typeof screenResolution.value) => setScreenResolution(value),
+})
+
+const selectedMode = computed({
+  get: () => screenMode.value,
+  set: (value: typeof screenMode.value) => setScreenMode(value),
+})
 
 const modeOptions = [
   { value: 'auto', label: 'Automatic', hint: 'Detects text vs. video and adapts' },
@@ -78,9 +112,8 @@ const modeOptions = [
         <label class="block space-y-1">
           <span class="text-sm font-medium">Microphone</span>
           <select
+            v-model="selectedMic"
             class="h-9 w-full rounded-md border bg-background px-2 text-sm"
-            :value="micId ?? ''"
-            @change="setMicDevice(($event.target as HTMLSelectElement).value)"
           >
             <option v-if="!inputDevices.length" value="">System default</option>
             <option
@@ -98,9 +131,8 @@ const modeOptions = [
           <span class="text-sm font-medium">Speaker</span>
           <select
             v-if="canPickSpeaker"
+            v-model="selectedSpeaker"
             class="h-9 w-full rounded-md border bg-background px-2 text-sm"
-            :value="speakerId ?? ''"
-            @change="setSpeaker(($event.target as HTMLSelectElement).value)"
           >
             <option v-if="!outputDevices.length" value="">System default</option>
             <option
@@ -117,6 +149,24 @@ const modeOptions = [
           </p>
         </label>
 
+        <!-- Push to talk -->
+        <label class="flex cursor-pointer items-start gap-2.5">
+          <input
+            type="checkbox"
+            class="mt-0.5 h-4 w-4 shrink-0 cursor-pointer accent-primary"
+            :checked="pushToTalk"
+            @change="setPushToTalk(($event.target as HTMLInputElement).checked)"
+          >
+          <span class="space-y-0.5">
+            <span class="block text-sm font-medium">Push to talk</span>
+            <span class="block text-xs text-muted-foreground">
+              Your mic stays off until you hold <strong class="font-medium">Space</strong> — except
+              while you're typing, where Space is still a space. The mic button mutes you outright,
+              key or no key.
+            </span>
+          </span>
+        </label>
+
         <div class="border-t pt-4">
           <p class="mb-1 text-sm font-medium">Screen share</p>
           <p class="mb-3 text-xs text-muted-foreground">
@@ -128,9 +178,8 @@ const modeOptions = [
           <label class="block space-y-1">
             <span class="text-sm">Resolution</span>
             <select
+              v-model="selectedResolution"
               class="h-9 w-full rounded-md border bg-background px-2 text-sm"
-              :value="screenResolution"
-              @change="setScreenResolution(Number(($event.target as HTMLSelectElement).value) as typeof screenResolution)"
             >
               <option v-for="r in screenResolutions" :key="r" :value="r">
                 {{ r }}p{{ r === 720 ? ' (recommended)' : '' }}
@@ -142,9 +191,8 @@ const modeOptions = [
           <label class="mt-3 block space-y-1">
             <span class="text-sm">Quality mode</span>
             <select
+              v-model="selectedMode"
               class="h-9 w-full rounded-md border bg-background px-2 text-sm"
-              :value="screenMode"
-              @change="setScreenMode(($event.target as HTMLSelectElement).value as typeof screenMode)"
             >
               <option v-for="m in modeOptions" :key="m.value" :value="m.value">
                 {{ m.label }} — {{ m.hint }}

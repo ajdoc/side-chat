@@ -32,6 +32,11 @@ function initials(name: string) {
   return name.split(' ').map(w => w[0]).slice(0, 2).join('').toUpperCase()
 }
 
+// What this person is called in the server or chat the call is in — see useNicknames.
+// A call is inside a place like everything else, so a nickname holds here too.
+const { nameFor } = useNicknames()
+const peerName = computed(() => nameFor(props.peer))
+
 const volumeLabel = computed(() => `${Math.round(props.peer.volume * 100)}%`)
 </script>
 
@@ -62,15 +67,15 @@ const volumeLabel = computed(() => `${Math.round(props.peer.volume * 100)}%`)
         class="grid h-20 w-20 place-items-center rounded-full bg-secondary text-lg font-semibold text-secondary-foreground ring-2 transition-all"
         :class="speaking ? 'ring-green-500' : 'ring-transparent'"
       >
-        <img v-if="peer.avatar" :src="peer.avatar" :alt="peer.name" class="h-full w-full rounded-full object-cover">
-        <span v-else>{{ initials(peer.name) }}</span>
+        <img v-if="peer.avatar" :src="peer.avatar" :alt="peerName" class="h-full w-full rounded-full object-cover">
+        <span v-else>{{ initials(peerName) }}</span>
       </div>
 
       <!-- Their own choices, as broadcast to everyone. -->
       <span
         v-if="muted"
         class="absolute -bottom-1 -right-1 grid h-7 w-7 place-items-center rounded-full bg-destructive text-destructive-foreground"
-        :title="self ? 'Your microphone is off' : `${peer.name} muted their microphone`"
+        :title="self ? 'Your microphone is off' : `${peerName} muted their microphone`"
       >
         <MicOff class="h-3.5 w-3.5" />
       </span>
@@ -92,7 +97,7 @@ const volumeLabel = computed(() => `${Math.round(props.peer.volume * 100)}%`)
     </div>
 
     <div class="flex min-w-0 items-center gap-1.5">
-      <span class="truncate text-sm font-medium">{{ peer.name }}</span>
+      <span class="truncate text-sm font-medium">{{ peerName }}</span>
       <span v-if="self" class="text-xs text-muted-foreground">(you)</span>
     </div>
 
@@ -116,7 +121,7 @@ const volumeLabel = computed(() => `${Math.round(props.peer.volume * 100)}%`)
         type="button"
         class="shrink-0 rounded p-1 transition"
         :class="peer.localMuted ? 'text-destructive' : 'text-muted-foreground hover:text-foreground'"
-        :title="peer.localMuted ? `Unmute ${peer.name} for yourself` : `Mute ${peer.name} for yourself`"
+        :title="peer.localMuted ? `Unmute ${peerName} for yourself` : `Mute ${peerName} for yourself`"
         @click="emit('toggleMute')"
       >
         <VolumeX v-if="peer.localMuted" class="h-4 w-4" />
@@ -131,8 +136,8 @@ const volumeLabel = computed(() => `${Math.round(props.peer.volume * 100)}%`)
         :value="peer.volume"
         :disabled="peer.localMuted"
         class="h-1 w-full cursor-pointer appearance-none rounded-full bg-muted accent-primary disabled:cursor-not-allowed disabled:opacity-40"
-        :aria-label="`Volume for ${peer.name}`"
-        :title="`${peer.name}: ${volumeLabel}`"
+        :aria-label="`Volume for ${peerName}`"
+        :title="`${peerName}: ${volumeLabel}`"
         @input="emit('setVolume', Number(($event.target as HTMLInputElement).value))"
       >
 
@@ -149,7 +154,7 @@ const volumeLabel = computed(() => `${Math.round(props.peer.volume * 100)}%`)
       v-if="!self"
       type="button"
       class="flex w-full items-center justify-center gap-1.5 rounded-md border border-destructive/30 px-2 py-1 text-xs font-medium text-destructive transition hover:bg-destructive hover:text-destructive-foreground"
-      :title="`Disconnect ${peer.name} from the call`"
+      :title="`Disconnect ${peerName} from the call`"
       @click="emit('disconnect')"
     >
       <PhoneOff class="h-3.5 w-3.5" />

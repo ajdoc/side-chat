@@ -14,6 +14,8 @@ class UpdateChannelSpaceNoteRequest extends MemberRequest
     {
         return [
             'content' => ['nullable', 'string', 'max:100000'],
+            // The revision this edit was typed on top of. Omit it to save unconditionally.
+            'base_version' => ['nullable', 'integer', 'min:0'],
         ];
     }
 }

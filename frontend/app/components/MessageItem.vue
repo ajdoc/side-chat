@@ -66,6 +66,28 @@ const canModify = computed(() =>
 const attachments = computed(() => props.message.attachments ?? [])
 
 const { stripMarkdown } = useMarkdown()
+// Everyone on a message — author, the person replied to, whoever forwarded it — is shown
+// under whatever they're called in this server or chat. See useNicknames.
+const { nameFor, nameOf } = useNicknames()
+
+/**
+ * The two compact references carry a name and an id rather than a whole user, and either
+ * can be null once the person or the original is gone — so both fall back to what they
+ * were given before falling back to nothing at all.
+ */
+const replyToName = computed(() => {
+  const origin = props.message.reply_to
+  if (!origin?.user_name) return 'unknown'
+
+  return origin.user_id ? nameOf(origin.user_id, origin.user_name) : origin.user_name
+})
+
+const forwardedFromName = computed(() => {
+  const origin = props.message.forwarded_from
+  if (!origin?.user_name) return ''
+
+  return origin.user_id ? nameOf(origin.user_id, origin.user_name) : origin.user_name
+})
 
 const editing = ref(false)
 const editDraft = ref('')
@@ -167,7 +189,7 @@ onBeforeUnmount(() => clearTimeout(copiedTimer))
     :class="highlighted ? 'bg-amber-200/50 dark:bg-amber-400/10' : ''"
   >
     <div class="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-primary text-xs font-semibold text-primary-foreground">
-      {{ initials(message.user.name) }}
+      {{ initials(nameFor(message.user)) }}
     </div>
 
     <div class="min-w-0 flex-1">
@@ -186,7 +208,7 @@ onBeforeUnmount(() => clearTimeout(copiedTimer))
            lives in another room the viewer may not even be in, so it's a label, not a link. -->
       <p v-if="message.forwarded_from" class="mb-0.5 flex items-center gap-1 text-xs italic text-muted-foreground">
         <Forward class="h-3 w-3 shrink-0" />
-        Forwarded<template v-if="message.forwarded_from.user_name"> from <span class="font-medium not-italic">{{ message.forwarded_from.user_name }}</span></template>
+        Forwarded<template v-if="forwardedFromName"> from <span class="font-medium not-italic">{{ forwardedFromName }}</span></template>
       </p>
 
       <!-- reply reference: click to jump to the original message -->
@@ -197,12 +219,12 @@ onBeforeUnmount(() => clearTimeout(copiedTimer))
         @click="emit('jump-to-reply', message.reply_to.id)"
       >
         <CornerUpLeft class="h-3 w-3 shrink-0" />
-        <span class="font-medium">{{ message.reply_to.user_name ?? 'unknown' }}</span>
+        <span class="font-medium">{{ replyToName }}</span>
         <span class="truncate">{{ message.reply_to.body ? stripMarkdown(message.reply_to.body) : '' }}</span>
       </button>
 
       <div class="flex items-baseline gap-2">
-        <span class="text-sm font-semibold">{{ message.user.name }}</span>
+        <span class="text-sm font-semibold">{{ nameFor(message.user) }}</span>
         <span class="text-xs text-muted-foreground">{{ formatTime(message.created_at) }}</span>
       </div>
 

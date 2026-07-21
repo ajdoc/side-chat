@@ -3,6 +3,7 @@
 namespace App\Models;
 
 use App\Contracts\MessageContainer;
+use App\Models\Concerns\HasNicknames;
 use Illuminate\Broadcasting\PrivateChannel;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
@@ -27,7 +28,7 @@ use Illuminate\Database\Eloquent\Relations\HasOne;
 class Conversation extends Model implements MessageContainer
 {
     /** @use HasFactory<\Database\Factories\ConversationFactory> */
-    use HasFactory;
+    use HasFactory, HasNicknames;
 
     public const TYPES = ['dm', 'group'];
 

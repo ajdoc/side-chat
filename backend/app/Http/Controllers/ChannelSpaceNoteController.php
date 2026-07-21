@@ -7,6 +7,7 @@ use App\Http\Requests\Space\ChannelSpaceRequest;
 use App\Http\Requests\Space\UpdateChannelSpaceNoteRequest;
 use App\Http\Resources\SpaceNoteResource;
 use App\Models\Channel;
+use Illuminate\Http\JsonResponse;
 
 /**
  * A channel's (or DM's) Side Space note — the same shared document a side chat has
@@ -22,17 +23,25 @@ class ChannelSpaceNoteController extends Controller
         return new SpaceNoteResource($note->load('editor'));
     }
 
-    public function update(UpdateChannelSpaceNoteRequest $request, Channel $channel): SpaceNoteResource
+    /** Same optimistic-concurrency save as {@see SpaceNoteController::update()}: 409 on a stale base. */
+    public function update(UpdateChannelSpaceNoteRequest $request, Channel $channel): JsonResponse
     {
         $note = $channel->spaceNote()->firstOrCreate([], ['content' => '']);
 
-        $note->update([
-            'content' => $request->validated('content') ?? '',
-            'updated_by' => $request->user()->id,
-        ]);
+        $saved = $note->applyEdit(
+            $request->validated('content') ?? '',
+            $request->user()->id,
+            $request->validated('base_version'),
+        );
+
+        $payload = ['data' => (new SpaceNoteResource($note->load('editor')))->resolve()];
+
+        if (! $saved) {
+            return response()->json($payload, 409);
+        }
 
         broadcast(new SpaceNoteUpdated($note))->toOthers();
 
-        return new SpaceNoteResource($note->load('editor'));
+        return response()->json($payload);
     }
 }

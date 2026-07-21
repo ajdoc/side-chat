@@ -73,6 +73,9 @@ export function useServer() {
     unread.subscribe(id)
     voiceRoster.subscribe(id)
     lifecycle.subscribe(id)
+    // What people are called *in this server*. Fire-and-forget: names render fine
+    // without it, and it swaps them in when it lands.
+    void useNicknames().open({ kind: 'server', id })
   }
 
   async function loadMoreChannels(id: number) {

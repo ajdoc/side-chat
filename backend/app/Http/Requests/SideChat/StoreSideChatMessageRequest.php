@@ -5,6 +5,7 @@ namespace App\Http\Requests\SideChat;
 use App\DTOs\Message\SendMessageData;
 use App\Models\SideChat;
 use Illuminate\Foundation\Http\FormRequest;
+use App\Http\Requests\Message\UploadRules;
 use Illuminate\Validation\Rule;
 
 /**
@@ -13,6 +14,8 @@ use Illuminate\Validation\Rule;
  */
 class StoreSideChatMessageRequest extends FormRequest
 {
+    use UploadRules;
+
     public function authorize(): bool
     {
         $sideChat = $this->route('sideChat');
@@ -28,8 +31,8 @@ class StoreSideChatMessageRequest extends FormRequest
     {
         $sideChat = $this->route('sideChat');
 
-        return array_merge(SendMessageData::validationRules(), [
-            'body' => ['required_without_all:attachments,gif', 'nullable', 'string', 'max:2000'],
+        return array_merge(SendMessageData::validationRules(), $this->uploadRules(), [
+            'body' => ['required_without_all:attachments,gif,uploads', 'nullable', 'string', 'max:2000'],
             'attachments' => ['nullable', 'array', 'max:10'],
             'attachments.*' => ['file', 'max:20480'], // 20 MB each
             // A reply must target a message inside this same side chat.

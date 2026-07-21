@@ -291,6 +291,14 @@ export function useVoice() {
   const notice = useState<string | null>('voice:notice', () => null)
   const peers = useState<Peer[]>('voice:peers', () => [])
   const selfMuted = useState<boolean>('voice:selfMuted', () => false)
+  /**
+   * Push-to-talk: the mic stays shut and only opens while the talk key is held. A remembered
+   * preference (it belongs to your room, not to a call), with `pttHeld` the live "key is down
+   * right now" — the two together are what {@link micOpen} decides on. The key listeners
+   * themselves live on the call bar, which is mounted wherever you've wandered off to.
+   */
+  const pushToTalk = useState<boolean>('voice:pushToTalk', () => loadSettings().pushToTalk)
+  const pttHeld = useState<boolean>('voice:pttHeld', () => false)
   const selfDeafened = useState<boolean>('voice:selfDeafened', () => false)
   const selfSpeaking = useState<boolean>('voice:selfSpeaking', () => false)
   const screenStream = useState<MediaStream | null>('voice:screenStream', () => null)
@@ -316,6 +324,14 @@ export function useVoice() {
   const canPickSpeaker = computed(() =>
     typeof HTMLMediaElement !== 'undefined' && 'setSinkId' in HTMLMediaElement.prototype,
   )
+
+  /**
+   * Is audio actually leaving this machine? Muting is a hard no; past that, push-to-talk means
+   * only while the key is held. Everything that gates the mic — the tracks, the speaking ring,
+   * what peers are told — reads this rather than `selfMuted`, so the two ways of being quiet
+   * can't drift apart.
+   */
+  const micOpen = computed(() => !selfMuted.value && (!pushToTalk.value || pttHeld.value))
 
   const inCall = computed(() => status.value === 'connected' || status.value === 'connecting')
   const isSharing = computed(() => screenStream.value !== null)
@@ -355,12 +371,14 @@ export function useVoice() {
     speakerId: string | null
     resolution: ScreenResolution
     mode: ScreenMode
+    pushToTalk: boolean
   } {
     const fallback = {
       micId: null,
       speakerId: null,
       resolution: DEFAULT_SCREEN_RESOLUTION,
       mode: DEFAULT_SCREEN_MODE,
+      pushToTalk: false,
     }
     if (typeof localStorage === 'undefined') return fallback
     try {
@@ -370,6 +388,7 @@ export function useVoice() {
         speakerId: typeof saved.speakerId === 'string' ? saved.speakerId : null,
         resolution: SCREEN_RESOLUTIONS.includes(saved.resolution) ? saved.resolution : DEFAULT_SCREEN_RESOLUTION,
         mode: (['auto', 'detail', 'motion'] as const).includes(saved.mode) ? saved.mode : DEFAULT_SCREEN_MODE,
+        pushToTalk: saved.pushToTalk === true,
       }
     } catch {
       return fallback
@@ -383,6 +402,7 @@ export function useVoice() {
       speakerId: speakerId.value,
       resolution: screenResolution.value,
       mode: screenMode.value,
+      pushToTalk: pushToTalk.value,
     }))
   }
 
@@ -445,7 +465,9 @@ export function useVoice() {
     if (!presence || !user.value) return
     presence.whisper('state', {
       id: user.value.id,
-      muted: selfMuted.value,
+      // What peers see is whether the line is actually open: on push-to-talk that's the key,
+      // not the mic button.
+      muted: !micOpen.value,
       deafened: selfDeafened.value,
       screen_sharing: isSharing.value,
       camera_on: isCameraOn.value,
@@ -460,7 +482,7 @@ export function useVoice() {
       await api(`/api/channels/${channelId.value}/voice/state`, {
         method: 'PATCH',
         body: {
-          muted: selfMuted.value,
+          muted: !micOpen.value,
           deafened: selfDeafened.value,
           screen_sharing: isSharing.value,
           camera_on: isCameraOn.value,
@@ -848,7 +870,7 @@ export function useVoice() {
       const now = Date.now()
 
       if (localAnalyser) {
-        const talking = !selfMuted.value && loudness(localAnalyser, buffer) > SPEAKING_THRESHOLD
+        const talking = micOpen.value && loudness(localAnalyser, buffer) > SPEAKING_THRESHOLD
         if (talking) selfSpeaking.value = true
         else if (selfSpeaking.value) selfSpeaking.value = false
       }
@@ -903,6 +925,10 @@ export function useVoice() {
       channelId.value = null
       return
     }
+
+    // A fresh capture arrives live. On push-to-talk it must not: joining a call is not the
+    // same as asking to be heard in it.
+    applyMic()
 
     let joined: JoinResponse
     try {
@@ -1048,6 +1074,7 @@ export function useVoice() {
     selfMuted.value = false
     selfDeafened.value = false
     selfSpeaking.value = false
+    pttHeld.value = false // a key held as you hang up mustn't leave the next call open
     peers.value = []
 
     if (id) {
@@ -1061,15 +1088,23 @@ export function useVoice() {
 
   // --- the controls ---
 
+  /**
+   * Open or close the capture to match {@link micOpen}. The single place a track's `enabled`
+   * is decided, so muting, deafening and push-to-talk can't each hold a different opinion of
+   * whether you're on air.
+   */
+  function applyMic() {
+    const open = micOpen.value
+    localStream?.getAudioTracks().forEach(track => {
+      track.enabled = open
+    })
+    if (!open) selfSpeaking.value = false
+  }
+
   /** Mute *your* microphone, for everyone. Stops sending audio, rather than sending silence. */
   function toggleMute() {
     selfMuted.value = !selfMuted.value
-
-    localStream?.getAudioTracks().forEach(track => {
-      track.enabled = !selfMuted.value
-    })
-
-    if (selfMuted.value) selfSpeaking.value = false
+    applyMic()
 
     void publishState()
   }
@@ -1080,11 +1115,44 @@ export function useVoice() {
 
     if (selfDeafened.value && !selfMuted.value) {
       selfMuted.value = true
-      localStream?.getAudioTracks().forEach(track => { track.enabled = false })
+      applyMic()
     }
 
     for (const id of handles.keys()) applyAudio(id)
 
+    void publishState()
+  }
+
+  /**
+   * Turn push-to-talk on or off. Switching it on shuts the mic immediately — the point of the
+   * mode is that nothing goes out unasked — and switching it off leaves you exactly as muted
+   * or unmuted as the mic button says, rather than surprising the room with an open line.
+   */
+  function setPushToTalk(on: boolean) {
+    if (pushToTalk.value === on) return
+    pushToTalk.value = on
+    pttHeld.value = false
+    saveSettings()
+    applyMic()
+    void publishState()
+  }
+
+  /**
+   * The talk key going down and coming back up. Cheap enough to call on every key event: both
+   * return early unless push-to-talk is actually on and the state is really changing, so a
+   * held key repeating doesn't republish anything.
+   */
+  function holdTalk() {
+    if (!pushToTalk.value || pttHeld.value) return
+    pttHeld.value = true
+    applyMic()
+    void publishState()
+  }
+
+  function releaseTalk() {
+    if (!pttHeld.value) return
+    pttHeld.value = false
+    applyMic()
     void publishState()
   }
 
@@ -1192,8 +1260,9 @@ export function useVoice() {
     const track = stream.getAudioTracks()[0]
     if (!track) return
 
-    // Carry mute across the swap — a fresh capture starts enabled, which would un-mute you.
-    track.enabled = !selfMuted.value
+    // Carry mute across the swap — a fresh capture starts enabled, which would un-mute you
+    // (and on push-to-talk, open the line without the key).
+    track.enabled = micOpen.value
 
     await Promise.all([...handles.values()].map(h => h.micSender?.replaceTrack(track)))
 
@@ -1572,6 +1641,12 @@ export function useVoice() {
     selfMuted,
     selfDeafened,
     selfSpeaking,
+    pushToTalk,
+    pttHeld,
+    micOpen,
+    setPushToTalk,
+    holdTalk,
+    releaseTalk,
     screenStream,
     cameraStream,
     inCall,

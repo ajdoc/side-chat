@@ -7,7 +7,7 @@ namespace App\Support\Commands;
  *
  * A command is a single line beginning `<x>!<verb>` where `<x>` is a known widget prefix
  * — `m` for music, `k` for kanban, `p` for a poll, `g` for the co-op shooter, `r` for the
- * co-op racer.
+ * co-op racer, `s` for Skribbl.
  * Anything else (including a
  * stray "hey!" or a message
  * that merely mentions `k!add` mid-sentence) is left alone: the parser anchors to the
@@ -16,7 +16,7 @@ namespace App\Support\Commands;
 final class CommandParser
 {
     /** Prefix letter → widget type. The set of things `<x>!…` is allowed to be. */
-    public const NAMESPACES = ['m' => 'music', 'k' => 'kanban', 'p' => 'poll', 'g' => 'shooter', 'r' => 'racing'];
+    public const NAMESPACES = ['m' => 'music', 'k' => 'kanban', 'p' => 'poll', 'g' => 'shooter', 'r' => 'racing', 's' => 'skribbl'];
 
     public function parse(?string $body): ?ParsedCommand
     {

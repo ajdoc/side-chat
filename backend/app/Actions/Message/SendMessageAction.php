@@ -10,6 +10,7 @@ use App\Models\Message;
 use App\Models\User;
 use App\Services\AttachmentService;
 use App\Services\LinkPreviewService;
+use App\Services\NicknameService;
 use App\Services\Widgets\WidgetService;
 use App\Support\Commands\CommandParser;
 use App\Support\MentionParser;
@@ -24,12 +25,12 @@ final class SendMessageAction
     ) {}
 
     /** @param  array<int, \Illuminate\Http\UploadedFile>  $files */
-    public function handle(Channel $channel, User $user, SendMessageData $data, array $files = []): Message
+    public function handle(Channel $channel, User $user, SendMessageData $data, array $files = [], array $uploadIds = []): Message
     {
         // A message that's really a widget command (`m!p …`, `k!add …`) never lands as chat:
         // it drives the channel's music player or board instead. Only a text-only send can be
         // a command — anything with an attachment or a GIF is a plain message. See WidgetService.
-        if ($files === [] && $data->gif === null && ($command = $this->commands->parse($data->body)) !== null) {
+        if ($files === [] && $uploadIds === [] && $data->gif === null && ($command = $this->commands->parse($data->body)) !== null) {
             return $this->widgets->handleCommand($channel, $user, $command);
         }
 
@@ -40,6 +41,8 @@ final class SendMessageAction
         ]);
 
         $this->attachments->storeFor($message, $files);
+        // Large files came up in pieces and are already on disk; claiming moves them into place.
+        $this->attachments->attachUploads($message, $uploadIds, $user);
 
         if ($data->gif !== null) {
             $this->attachments->storeGif($message, $data->gif);
@@ -77,8 +80,9 @@ final class SendMessageAction
             return ['mentionsAll' => false, 'mentionedUserIds' => []];
         }
 
-        /** @var array<int, string> $names */
-        $names = $container->members()->pluck('name', 'users.id')->all();
+        // Every name each member answers to here — their own, plus the nickname they go
+        // by in this place. See NicknameService::mentionNamesFor.
+        $names = app(NicknameService::class)->mentionNamesFor($container);
         $parsed = MentionParser::parse($message->body, $names);
 
         $userIds = array_values(array_filter(

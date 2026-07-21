@@ -50,8 +50,10 @@ const route = useRoute()
 const { servers, hasMore: hasMoreServers, fetchServers, loadMore: loadMoreServers, renameServer, deleteServer, leaveServer } = useServers()
 const { server, channels, openServer, loadMoreChannels, renameChannel, deleteChannel, patchServer } = useServer()
 const { conversations, hasMore: hasMoreChats, fetchConversations, loadMore: loadMoreChats } = useConversations()
-const { user, logout } = useAuth()
+const { user, logout, updateProfile } = useAuth()
 const { hasDraft } = useDrafts()
+// People in a voice channel show under whatever they're called in this server.
+const { nameFor } = useNicknames()
 const { mode, color, setMode, setColor } = useTheme()
 const { participantsIn } = useVoiceRoster()
 const { expandedIds, isExpanded, isLoading, expand: expandServer, toggle: toggleServer, loadChannels, cache: cacheChannels, channelsFor } = useSidebarChannels()
@@ -250,6 +252,7 @@ const showDeleteServer = ref(false)
 const showDeleteChannel = ref(false)
 const showRenameServer = ref(false)
 const showRenameChannel = ref(false)
+const showProfile = ref(false)
 const targetChannel = ref<Channel | null>(null)
 const targetServer = ref<Server | null>(null)
 const nameDraft = ref('')
@@ -310,6 +313,26 @@ function askLeaveServer(s: Server) {
   showLeave.value = true
 }
 
+const showNickname = ref(false)
+
+/**
+ * Rename yourself in one server.
+ *
+ * Navigates first, because a nickname is scoped to a place and useNicknames only ever
+ * holds the one you're standing in — offering to rename you in a server you aren't
+ * looking at would write the name into whichever place happened to be open.
+ */
+async function askOwnNickname(serverId: number) {
+  if (activeServerId.value !== serverId) await navigateTo(`/servers/${serverId}`)
+  showNickname.value = true
+}
+
+function askEditProfile() {
+  nameDraft.value = user.value?.name ?? ''
+  actionError.value = ''
+  showProfile.value = true
+}
+
 const onRenameServer = () => confirm(showRenameServer, async () => {
   const name = nameDraft.value.trim()
   if (!name || !targetServer.value) return
@@ -323,6 +346,12 @@ const onRenameChannel = () => confirm(showRenameChannel, async () => {
   if (!name || !targetChannel.value) return
   await renameChannel(targetChannel.value.id, name)
 }, 'Could not rename the channel.')
+
+const onSaveProfile = () => confirm(showProfile, async () => {
+  const name = nameDraft.value.trim()
+  if (!name || name === user.value?.name) return
+  await updateProfile({ name })
+}, 'Could not save your name.')
 
 const onLeaveServer = () => confirm(showLeave, async () => {
   if (!targetServer.value) return
@@ -519,6 +548,12 @@ onBeforeUnmount(() => userStream.unsubscribe())
                       <DropdownMenuItem v-if="item.server.is_owner" @select="askRenameServer(item.server)">
                         <Pencil class="mr-2 h-4 w-4" /> Rename server
                       </DropdownMenuItem>
+                      <!-- What *you* are called in this server. Other people's nicknames
+                           are set from the roster in the channel Info panel, where you can
+                           see who you're renaming. -->
+                      <DropdownMenuItem @select="askOwnNickname(item.server.id)">
+                        <User class="mr-2 h-4 w-4" /> Change my nickname
+                      </DropdownMenuItem>
 
                       <DropdownMenuSeparator />
 
@@ -606,12 +641,12 @@ onBeforeUnmount(() => userStream.unsubscribe())
                     class="mx-2 flex items-center gap-2 rounded py-0.5 pl-12 pr-2 text-xs text-muted-foreground hover:bg-muted"
                   >
                     <span class="grid h-5 w-5 shrink-0 place-items-center rounded-full bg-secondary text-[9px] font-semibold text-secondary-foreground">
-                      <img v-if="p.user.avatar" :src="p.user.avatar" :alt="p.user.name" class="h-full w-full rounded-full object-cover">
-                      <span v-else>{{ initialsOf(p.user.name) }}</span>
+                      <img v-if="p.user.avatar" :src="p.user.avatar" :alt="nameFor(p.user)" class="h-full w-full rounded-full object-cover">
+                      <span v-else>{{ initialsOf(nameFor(p.user)) }}</span>
                     </span>
-                    <span class="truncate">{{ p.user.name }}</span>
-                    <MicOff v-if="p.muted" class="ml-auto h-3 w-3 shrink-0 text-destructive" :title="`${p.user.name} is muted`" />
-                    <ScreenShare v-if="p.screen_sharing" class="ml-auto h-3 w-3 shrink-0 text-primary" :title="`${p.user.name} is sharing their screen`" />
+                    <span class="truncate">{{ nameFor(p.user) }}</span>
+                    <MicOff v-if="p.muted" class="ml-auto h-3 w-3 shrink-0 text-destructive" :title="`${nameFor(p.user)} is muted`" />
+                    <ScreenShare v-if="p.screen_sharing" class="ml-auto h-3 w-3 shrink-0 text-primary" :title="`${nameFor(p.user)} is sharing their screen`" />
                   </NuxtLink>
                 </div>
 
@@ -695,7 +730,7 @@ onBeforeUnmount(() => userStream.unsubscribe())
               </div>
             </div>
             <DropdownMenuSeparator />
-            <DropdownMenuItem>
+            <DropdownMenuItem @select="askEditProfile">
               <User class="mr-2 h-4 w-4" /> Profile
             </DropdownMenuItem>
             <DropdownMenuItem class="text-destructive focus:text-destructive" @select="logout">
@@ -715,7 +750,18 @@ onBeforeUnmount(() => userStream.unsubscribe())
          wherever you are — including in a conversation you have never once opened. -->
     <IncomingCall />
 
+    <!-- The pinned music player. Same reasoning as the call above: it lives here so that
+         changing channel, server, DM or group chat can't unmount it mid-song. -->
+    <MusicDock />
+
     <NewChatDialog v-model:open="showNewChat" />
+
+    <!-- Your own nickname in a server, reached from that server's menu. -->
+    <NicknameDialog
+      v-model:open="showNickname"
+      :member="user"
+      :current-user-id="user?.id ?? null"
+    />
 
     <Dialog v-model:open="showInvite">
       <DialogContent v-if="server">
@@ -733,6 +779,39 @@ onBeforeUnmount(() => userStream.unsubscribe())
             <Copy v-else class="h-4 w-4" />
           </Button>
         </div>
+      </DialogContent>
+    </Dialog>
+
+    <!-- Your display name. The email below it is what the account is keyed on, so it's shown
+         for recognition but isn't editable here. -->
+    <Dialog v-model:open="showProfile">
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>Profile</DialogTitle>
+          <DialogDescription>
+            Your display name is what everyone else sees you by — on messages, in calls, and
+            in every chat you're in.
+          </DialogDescription>
+        </DialogHeader>
+        <form class="space-y-3" @submit.prevent="onSaveProfile">
+          <label class="block space-y-1">
+            <span class="text-sm font-medium">Display name</span>
+            <Input v-model="nameDraft" placeholder="Your name" maxlength="50" autofocus />
+          </label>
+          <label class="block space-y-1">
+            <span class="text-sm font-medium">Email</span>
+            <Input :model-value="user?.email ?? ''" readonly class="text-muted-foreground" />
+          </label>
+          <p v-if="actionError" class="text-sm text-destructive">{{ actionError }}</p>
+          <div class="flex justify-end gap-2">
+            <Button type="button" variant="outline" :disabled="working" @click="showProfile = false">
+              Cancel
+            </Button>
+            <Button type="submit" :disabled="working || !nameDraft.trim()">
+              {{ working ? 'Saving…' : 'Save' }}
+            </Button>
+          </div>
+        </form>
       </DialogContent>
     </Dialog>
 

@@ -21,7 +21,20 @@ export function useChannelMembers() {
   // Guards against a slow response landing after you've switched channels.
   const requestedId = ref<number | null>(null)
 
-  const names = computed(() => members.value.map(m => m.name))
+  /**
+   * Every name that should render as a chip — account names *and* the public nicknames
+   * people go by here.
+   *
+   * Both, because both are writable: the composer offers whichever name is current, but a
+   * message sent before somebody was given a nickname still says their old one, and it
+   * addressed them then and addresses them now. Mirrors MentionParser on the server, which
+   * decides whose sidebar lights up off the same pair.
+   */
+  const { publicNameFor } = useNicknames()
+
+  const names = computed(() => [
+    ...new Set(members.value.flatMap(m => [m.name, publicNameFor(m)])),
+  ])
 
   async function load(channelId: number) {
     requestedId.value = channelId

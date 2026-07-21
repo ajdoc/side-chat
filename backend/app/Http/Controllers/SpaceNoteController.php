@@ -7,6 +7,7 @@ use App\Http\Requests\Space\UpdateSpaceNoteRequest;
 use App\Http\Requests\SideChat\ViewSideChatRequest;
 use App\Http\Resources\SpaceNoteResource;
 use App\Models\SideChat;
+use Illuminate\Http\JsonResponse;
 
 /**
  * A side chat's Side Space note — the shared, collaboratively-edited document beside the
@@ -25,18 +26,30 @@ class SpaceNoteController extends Controller
         return new SpaceNoteResource($note->load('editor'));
     }
 
-    public function update(UpdateSpaceNoteRequest $request, SideChat $sideChat): SpaceNoteResource
+    /**
+     * Save the body. A stale `base_version` — someone else saved while this editor was typing
+     * — comes back 409 with the note as it now stands, which the client merges its own text
+     * into and re-sends, so neither person's paragraph vanishes.
+     */
+    public function update(UpdateSpaceNoteRequest $request, SideChat $sideChat): JsonResponse
     {
         $note = $sideChat->spaceNote()->firstOrCreate([], ['content' => '']);
 
-        $note->update([
-            'content' => $request->validated('content') ?? '',
-            'updated_by' => $request->user()->id,
-        ]);
+        $saved = $note->applyEdit(
+            $request->validated('content') ?? '',
+            $request->user()->id,
+            $request->validated('base_version'),
+        );
+
+        $payload = ['data' => (new SpaceNoteResource($note->load('editor')))->resolve()];
+
+        if (! $saved) {
+            return response()->json($payload, 409);
+        }
 
         // Everyone else's Notes tab converges on the new body; the saver skips the echo.
         broadcast(new SpaceNoteUpdated($note))->toOthers();
 
-        return new SpaceNoteResource($note->load('editor'));
+        return response()->json($payload);
     }
 }

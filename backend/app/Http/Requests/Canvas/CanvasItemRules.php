@@ -20,7 +20,7 @@ final class CanvasItemRules
             'kind' => [$req, 'string', 'in:note,todo,widget'],
             'content' => [$req, 'array'],
             // A `widget` card names which widget to place; note/todo cards leave this out.
-            'content.type' => ['required_if:kind,widget', 'string', 'in:music,kanban,poll,shooter,racing'],
+            'content.type' => ['required_if:kind,widget', 'string', 'in:music,kanban,poll,shooter,racing,skribbl'],
             'x' => ['sometimes', 'integer', 'min:0', 'max:100000'],
             'y' => ['sometimes', 'integer', 'min:0', 'max:100000'],
             'w' => ['sometimes', 'integer', 'min:120', 'max:4000'],

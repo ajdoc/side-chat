@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { Columns3, Flag, Gamepad2, GripVertical, ListChecks, Music, StickyNote, Trash2, Vote } from 'lucide-vue-next'
+import { Columns3, Flag, Gamepad2, GripVertical, ListChecks, Music, Palette, StickyNote, Trash2, Vote } from 'lucide-vue-next'
 import type { CanvasItem } from '~/types'
 
 /**
@@ -81,6 +81,7 @@ const WIDGET_TYPES = [
   { type: 'poll', label: 'Poll', icon: Vote, w: 280, h: 260 },
   { type: 'shooter', label: 'Galaga', icon: Gamepad2, w: 320, h: 420 },
   { type: 'racing', label: 'Racing', icon: Flag, w: 340, h: 380 },
+  { type: 'skribbl', label: 'Skribbl', icon: Palette, w: 360, h: 520 },
 ] as const
 
 // One widget per (channel, type), so a type already on the canvas can't be added again.

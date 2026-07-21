@@ -4,7 +4,9 @@ namespace App\Services;
 
 use App\Models\Attachment;
 use App\Models\Channel;
+use App\Models\ChunkedUpload;
 use App\Models\Message;
+use App\Models\User;
 use Illuminate\Contracts\Pagination\LengthAwarePaginator;
 use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Collection;
@@ -39,6 +41,60 @@ final class AttachmentService
                 'extension' => strtolower($file->getClientOriginalExtension()) ?: null,
                 'size' => $file->getSize(),
             ]);
+        }
+    }
+
+    /**
+     * Claim files staged by {@see \App\Http\Controllers\ChunkedUploadController} — the large-file
+     * path — as attachments on a message.
+     *
+     * The bytes are already on our disk under the uploader's name, so this *moves* them into the
+     * channel's folder rather than copying: a 200MB copy would double both the time and the disk
+     * for no reason, and the staging row is finished with either way. Only completed uploads
+     * belonging to this user are eligible — the ids came in on a request, so neither is assumed —
+     * and they're attached in the order the client asked for, not whatever order the database
+     * returns, so a batch of files keeps the order it was picked in.
+     *
+     * @param  array<int, string>  $uuids
+     */
+    public function attachUploads(Message $message, array $uuids, User $user): void
+    {
+        if ($uuids === []) {
+            return;
+        }
+
+        $uploads = ChunkedUpload::query()
+            ->whereIn('uuid', $uuids)
+            ->where('user_id', $user->id)
+            ->whereNotNull('completed_at')
+            ->get()
+            ->sortBy(fn (ChunkedUpload $u) => array_search($u->uuid, $uuids, true));
+
+        foreach ($uploads as $upload) {
+            $disk = Storage::disk($upload->disk);
+
+            // The bytes went missing (a prune sweep, a wiped disk): drop the row and move on
+            // rather than leaving a row pointing at nothing.
+            if (! $disk->exists($upload->path)) {
+                $upload->delete();
+
+                continue;
+            }
+
+            $extension = $upload->extension ? ".{$upload->extension}" : '';
+            $path = "attachments/{$message->channel_id}/".Str::random(40).$extension;
+            $disk->move($upload->path, $path);
+
+            $message->attachments()->create([
+                'disk' => $upload->disk,
+                'path' => $path,
+                'name' => $upload->name,
+                'mime_type' => $upload->mime_type,
+                'extension' => $upload->extension,
+                'size' => $upload->size,
+            ]);
+
+            $upload->delete();
         }
     }
 

@@ -12,6 +12,8 @@ import type { SideSpaceAppId } from '~/types'
  * All the real work lives in the surface-agnostic {@link SideSpace}; this is its panel shell.
  */
 const props = defineProps<{ channelId: number }>()
+// Docs' "Jump to message" — the panel has no timeline of its own, so it passes the ask on.
+const emit = defineEmits<{ jump: [messageId: number] }>()
 const route = useRoute()
 
 // Draggable, remembered width (its left border carries the handle).
@@ -55,6 +57,7 @@ function close() {
       :can-edit="true"
       :active-app="activeApp"
       @update:active-app="setApp"
+      @jump="emit('jump', $event)"
     />
   </aside>
 </template>

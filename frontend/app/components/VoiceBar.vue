@@ -20,8 +20,48 @@ const { server, channels } = useServer()
 const { conversations } = useConversations()
 const {
   channelId, status, peers, selfMuted, selfDeafened, isSharing, isCameraOn, inCall,
-  toggleMute, toggleDeafen, toggleCamera, disconnect,
+  pushToTalk, pttHeld, micOpen,
+  toggleMute, toggleDeafen, toggleCamera, disconnect, holdTalk, releaseTalk,
 } = useVoice()
+
+/**
+ * The push-to-talk key, listened for here because this bar is the one piece of call UI that
+ * exists wherever you've wandered off to — the whole point of the mode is that it works while
+ * you're reading another channel.
+ *
+ * Space is the key, but only when you aren't typing: in a composer, an input, or any
+ * contenteditable it stays a space. A held key repeats, so `holdTalk` is written to ignore
+ * repeats; and the window losing focus closes the mic, because a keyup that lands on another
+ * window would otherwise never reach us and leave the line open.
+ */
+function isTyping(target: EventTarget | null): boolean {
+  const el = target as HTMLElement | null
+  if (!el?.tagName) return false
+  return el.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(el.tagName)
+}
+
+function onKeyDown(e: KeyboardEvent) {
+  if (e.code !== 'Space' || !inCall.value || !pushToTalk.value) return
+  if (isTyping(e.target) || e.ctrlKey || e.metaKey || e.altKey) return
+  e.preventDefault() // Space would otherwise scroll the page
+  holdTalk()
+}
+
+function onKeyUp(e: KeyboardEvent) {
+  if (e.code !== 'Space') return
+  releaseTalk()
+}
+
+onMounted(() => {
+  window.addEventListener('keydown', onKeyDown)
+  window.addEventListener('keyup', onKeyUp)
+  window.addEventListener('blur', releaseTalk)
+})
+onBeforeUnmount(() => {
+  window.removeEventListener('keydown', onKeyDown)
+  window.removeEventListener('keyup', onKeyUp)
+  window.removeEventListener('blur', releaseTalk)
+})
 
 const channel = computed(() => channels.value.find(c => c.id === channelId.value) ?? null)
 const conversation = computed(() =>
@@ -60,15 +100,25 @@ const link = computed(() => {
       <ScreenShare v-if="isSharing" class="h-4 w-4 shrink-0 text-primary" title="You're sharing your screen" />
     </div>
 
+    <!-- Push-to-talk needs to say, at a glance, whether the line is open right now — the mic
+         button alone can't, since on this mode it's the key that decides. -->
+    <p
+      v-if="pushToTalk && !selfMuted"
+      class="mb-1 truncate rounded px-1.5 py-0.5 text-center text-[11px] transition-colors"
+      :class="pttHeld ? 'bg-green-600/15 font-medium text-green-600 dark:text-green-400' : 'text-muted-foreground'"
+    >
+      {{ pttHeld ? 'Talking…' : 'Hold Space to talk' }}
+    </p>
+
     <div class="flex gap-1">
       <button
         type="button"
         class="flex flex-1 items-center justify-center rounded p-1.5 transition hover:bg-muted"
-        :class="selfMuted ? 'text-destructive' : 'text-muted-foreground'"
-        :title="selfMuted ? 'Unmute' : 'Mute'"
+        :class="micOpen ? 'text-muted-foreground' : 'text-destructive'"
+        :title="selfMuted ? 'Unmute' : pushToTalk ? 'Push-to-talk — hold Space' : 'Mute'"
         @click="toggleMute"
       >
-        <MicOff v-if="selfMuted" class="h-4 w-4" />
+        <MicOff v-if="!micOpen" class="h-4 w-4" />
         <Mic v-else class="h-4 w-4" />
       </button>
       <!--

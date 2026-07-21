@@ -22,6 +22,11 @@ const emit = defineEmits<{
   leave: []
 }>()
 
+// Names here follow whatever people are called in this server or chat — see useNicknames.
+// `origin_author` is deliberately left alone: it's a snapshot of a deleted message's
+// author, kept as text with no id to resolve.
+const { nameFor } = useNicknames()
+
 function excerpt(body: string | null) {
   const text = (body ?? '').replace(/\s+/g, ' ').trim()
   return text.length > 80 ? `${text.slice(0, 80)}…` : text || '(no text)'
@@ -45,7 +50,7 @@ function relTime(iso: string) {
         <span class="truncate">{{ sideChat.name }}</span>
       </div>
       <p class="mt-1 text-xs text-muted-foreground">
-        <template v-if="sideChat.creator">Started by {{ sideChat.creator.name }} · </template>
+        <template v-if="sideChat.creator">Started by {{ nameFor(sideChat.creator) }} · </template>
         {{ relTime(sideChat.created_at) }}
       </p>
     </div>
@@ -53,7 +58,7 @@ function relTime(iso: string) {
     <!-- Started from -->
     <div v-if="sideChat.parent_message" class="rounded-lg border bg-muted/40 p-3">
       <div class="mb-1 text-xs font-semibold uppercase text-muted-foreground">Started from</div>
-      <span class="font-medium">{{ sideChat.parent_message.user.name }}</span>
+      <span class="font-medium">{{ nameFor(sideChat.parent_message.user) }}</span>
       <MarkdownBody v-if="sideChat.parent_message.body" :source="sideChat.parent_message.body" />
     </div>
     <div v-else-if="sideChat.origin_author" class="rounded-lg border border-dashed bg-muted/20 p-3">
@@ -93,7 +98,7 @@ function relTime(iso: string) {
           :title="d.body ?? ''"
           @click="emit('jump', d.id)"
         >
-          <span class="font-medium">{{ d.user.name }}:</span> {{ excerpt(d.body) }}
+          <span class="font-medium">{{ nameFor(d.user) }}:</span> {{ excerpt(d.body) }}
         </button>
       </div>
       <div v-if="highlights.pinned.length">
@@ -107,7 +112,7 @@ function relTime(iso: string) {
           :title="p.body ?? ''"
           @click="emit('jump', p.id)"
         >
-          <span class="font-medium">{{ p.user.name }}:</span> {{ excerpt(p.body) }}
+          <span class="font-medium">{{ nameFor(p.user) }}:</span> {{ excerpt(p.body) }}
         </button>
       </div>
     </div>

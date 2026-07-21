@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { useLocalStorage } from '@vueuse/core'
-import { ArrowDown, ArrowUp, FastForward, ListMusic, Pause, Play, Radio, RefreshCw, Repeat, Repeat1, Rewind, Search, Shuffle, SkipBack, SkipForward, Square, Volume2, VolumeX, X } from 'lucide-vue-next'
+import { ArrowDown, ArrowUp, FastForward, ListMusic, Maximize2, Mic2, Pause, Pin, PinOff, Play, Radio, RefreshCw, Repeat, Repeat1, Rewind, Search, Shuffle, SkipBack, SkipForward, Square, Volume2, VolumeX, X } from 'lucide-vue-next'
 import type { MusicState, MusicTrack, Widget } from '~/types'
 import { Button } from '~/components/ui/button'
 
@@ -24,11 +24,16 @@ import { Button } from '~/components/ui/button'
  *
  * Playback only ever starts from a real click ("Listen along"), sidestepping autoplay
  * blocking; the transport buttons drive the shared state for everyone regardless.
+ *
+ * The card normally lives in a timeline and unmounts when you leave it. Pin it and this same
+ * component is rendered instead by MusicDock, at the app level, where navigation can't reach
+ * it — see useMusicPin. `docked` says which of the two we are.
  */
-const props = defineProps<{ widget: Widget }>()
+const props = defineProps<{ widget: Widget, docked?: boolean }>()
 
 const { $youtube, $spotify } = useNuxtApp() as any
 const { action } = useWidgets()
+const { isPinned, toggle: togglePin, hasJoined, markJoined } = useMusicPin()
 const { status: spotifyStatus, canUseSpotify, ensureLoaded, connect: connectSpotify, getToken } = useSpotifyAuth()
 
 const state = computed(() => props.widget.state as MusicState)
@@ -57,10 +62,18 @@ const SOURCE_LABEL: Record<string, string> = {
   youtube: 'YouTube', spotify: 'Spotify', soundcloud: 'SoundCloud', deezer: 'Deezer',
 }
 
-// Has this viewer opted in to hearing the room? Playback never begins without it.
-const joined = ref(false)
+// Has this viewer opted in to hearing the room? Playback never begins without it. Kept in
+// app state rather than here so pinning hands the opt-in over to the dock intact — the sound
+// is supposed to *continue*, not ask permission again on the other side of a navigation.
+const joined = computed(() => hasJoined(props.widget.id))
 const volume = useLocalStorage('music:volume', 100)
 const muted = ref(false)
+// A hand-off between the timeline card and the dock builds a *new* iframe, and a browser is
+// within its rights to refuse that one audio until it sees a gesture it likes. Rather than
+// leave a silent player looking like it's playing, notice a YouTube engine that stays
+// unstarted while the room plays on, and offer a one-click resume.
+const blocked = ref(false)
+let stalledTicks = 0
 
 // --- engine selection ---------------------------------------------------
 // Spotify's SDK reported this account can't stream (not Premium) — stop offering it.
@@ -259,20 +272,27 @@ function tick() {
     sp.getCurrentState?.().then((st: any) => {
       if (!st) return
       spState = { position: st.position / 1000, duration: st.duration / 1000, paused: st.paused }
-      displayTime.value = spState.position
+      setPosition(spState.position)
       duration.value = spState.duration || current.value?.duration || 0
       detectSpotifyEnd(spState)
     })
     return
   }
   if (engine.value === 'youtube' && joined.value && ytReady && yt?.getCurrentTime) {
-    displayTime.value = yt.getCurrentTime() || 0
+    setPosition(yt.getCurrentTime() || 0)
     duration.value = yt.getDuration() || current.value?.duration || 0
     maybeReportDuration()
+    detectBlocked()
     return
   }
-  displayTime.value = targetPosition()
+  setPosition(targetPosition())
   duration.value = current.value?.duration || 0
+}
+
+/** The one place a fresh reading of "where playback actually is" enters the component. */
+function setPosition(pos: number) {
+  displayTime.value = pos
+  sampleClock(pos)
 }
 
 // Spotify plays a single uri with no "up next", so it just stops at the end. Detect that
@@ -287,6 +307,15 @@ function detectSpotifyEnd(st: { position: number, duration: number, paused: bool
     spEndedFor.add(id)
     action(props.widget.id, 'ended', { id })
   }
+}
+
+// PLAYING (1) and BUFFERING (3) are the healthy states; anything else while the room is
+// playing means our sound isn't coming. Give it a couple of seconds — loading a video passes
+// through UNSTARTED legitimately — before admitting it and asking for a click.
+function detectBlocked() {
+  const st = yt?.getPlayerState?.()
+  if (!isPlaying.value || st === 1 || st === 3) { stalledTicks = 0; blocked.value = false; return }
+  if (++stalledTicks >= 6) blocked.value = true
 }
 
 function maybeReportDuration() {
@@ -321,11 +350,27 @@ function applyVolume() {
 }
 
 function joinListening() {
-  joined.value = true
+  markJoined(props.widget.id)
+  blocked.value = false
   loadedVideoId = null
   loadedUri = null
+  stalledTicks = 0
   ensureSpotifyPlayer()
   sync()
+  // Inside the click, so the gesture is still the browser's reason to allow sound. sync()
+  // has just reloaded the video; nudging play covers the case where it only cued it.
+  if (isPlaying.value) { try { yt?.playVideo?.() } catch { /* not ready yet — sync will */ } }
+}
+
+/**
+ * Pin this player to the dock (or send it back to the timeline).
+ *
+ * Handing playback from one instance to the other means a fresh <iframe>, and a fresh iframe
+ * only gets to make noise off a user gesture — which this click is. Nothing else is needed:
+ * the new instance reads the same shared transport and seeks itself to where the room is.
+ */
+function onTogglePin() {
+  togglePin(props.widget)
 }
 
 // --- transport (drives the shared state for everyone) ---
@@ -360,6 +405,90 @@ async function addMusic() {
   await send('add', { query: q })
   addQuery.value = ''
 }
+
+// --- karaoke ------------------------------------------------------------
+// Lyrics are a *view* on playback, not new shared state: every viewer's highlight rides the
+// position their own engine is at, which the transport already keeps locked to the room. So
+// opening the pane (or the stage) is purely local — one person singing along changes nothing
+// for anyone else.
+const karaokeOpen = useLocalStorage('music:karaoke', false)
+const stageOpen = ref(false)
+const wantLyrics = computed(() => karaokeOpen.value || stageOpen.value)
+const { lines: lyricLines, synced: lyricsSynced, instrumental, loading: lyricsLoading, missing: lyricsMissing } = useLyrics(current, wantLyrics)
+
+function toggleKaraoke() {
+  if (stageOpen.value) { stageOpen.value = false; return }
+  karaokeOpen.value = !karaokeOpen.value
+}
+const seekTo = (seconds: number) => send('seek', { position: seconds })
+
+// ---- the karaoke clock -------------------------------------------------
+// `displayTime` is polled twice a second, which is fine for a progress readout but makes the
+// highlight advance in visible steps. For singing, the position has to move *continuously*,
+// so karaoke runs its own clock: hold the last real reading and extrapolate from it every
+// frame, snapping back whenever a fresh sample arrives.
+// Null until the first reading — an explicit sentinel, because 0 is a perfectly valid
+// timestamp and a falsy check on it would silently disable extrapolation.
+let clockSample: { pos: number, at: number } | null = null
+const lyricTime = ref(0)
+let raf: number | null = null
+
+/** Extrapolate the held sample to now. Media time advances at the playback rate. */
+function extrapolated(): number {
+  if (!clockSample) return displayTime.value
+  const elapsed = isPlaying.value ? (performance.now() - clockSample.at) / 1000 * speed.value : 0
+  return clockSample.pos + elapsed
+}
+
+function sampleClock(pos: number) {
+  const predicted = extrapolated()
+  // Engine readings jitter by a few tens of milliseconds — snapping straight to each one
+  // makes the highlight twitch, sometimes backwards. Ease across small disagreements and
+  // take only the big ones (a seek, a track change) at face value.
+  const converged = clockSample && Math.abs(pos - predicted) < 0.35
+    ? predicted + (pos - predicted) * 0.25
+    : pos
+  clockSample = { pos: converged, at: performance.now() }
+}
+
+function frame() {
+  lyricTime.value = extrapolated()
+  raf = requestAnimationFrame(frame)
+}
+
+// Only run the animation loop while lyrics are actually on screen. Client-only: this fires
+// immediately, and there's no requestAnimationFrame during SSR.
+watch(wantLyrics, (on) => {
+  if (!import.meta.client) return
+  if (on && raf === null) { clockSample = null; frame() }
+  else if (!on && raf !== null) { cancelAnimationFrame(raf); raf = null }
+}, { immediate: true })
+
+// ---- manual sync nudge -------------------------------------------------
+// LRCLIB's stamps describe *a* recording; the queue is playing whichever version YouTube
+// had. A long intro, a live take or a remaster shifts everything by a second or three —
+// constant, so one offset fixes the whole song. Kept per *video*, not per queue entry, so
+// re-adding a track remembers it, and kept local rather than shared: two listeners on the
+// Spotify and YouTube engines are hearing genuinely different masters.
+const lyricOffsets = useLocalStorage<Record<string, number>>('music:lyricOffset', {})
+const offsetKey = computed(() => current.value?.videoId ?? current.value?.spotifyUri ?? current.value?.id ?? '')
+const lyricOffset = computed(() => lyricOffsets.value[offsetKey.value] ?? 0)
+
+function nudgeLyrics(delta: number) {
+  const key = offsetKey.value
+  if (!key) return
+  // Round to kill floating-point crumbs, and cap it — past ±15s you've got the wrong song,
+  // not a timing problem.
+  const next = Math.max(-15, Math.min(15, Math.round((lyricOffset.value + delta) * 100) / 100))
+  lyricOffsets.value = { ...lyricOffsets.value, [key]: next }
+}
+function resetLyricOffset() {
+  const { [offsetKey.value]: _drop, ...rest } = lyricOffsets.value
+  lyricOffsets.value = rest
+}
+
+// A positive offset means "the lyrics are running late, show them sooner".
+const karaokePosition = computed(() => lyricTime.value + lyricOffset.value)
 
 const linkingSpotify = ref(false)
 async function onConnectSpotify() {
@@ -436,10 +565,13 @@ watch(canUseSpotify, () => { if (joined.value) { ensureSpotifyPlayer(); sync() }
 onMounted(() => {
   ensureLoaded()
   ensureYouTube()
+  // Twice a second is plenty even for karaoke: this only supplies *samples*, and the
+  // karaoke clock interpolates between them every frame.
   ticker = setInterval(tick, 500)
 })
 onBeforeUnmount(() => {
   if (ticker) clearInterval(ticker)
+  if (raf !== null) cancelAnimationFrame(raf)
   try { yt?.destroy?.() } catch { /* gone */ }
   try { sp?.disconnect?.() } catch { /* gone */ }
   yt = null; sp = null
@@ -447,14 +579,29 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <div class="mt-1.5 w-full max-w-md overflow-hidden rounded-xl border bg-gradient-to-b from-muted/50 to-muted/20 shadow-sm">
+  <div
+    class="w-full overflow-hidden rounded-xl border bg-gradient-to-b from-muted/50 to-muted/20 shadow-sm"
+    :class="docked ? 'bg-background' : 'mt-1.5 max-w-md'"
+  >
     <div class="flex items-center gap-1.5 border-b bg-background/40 px-3 py-1.5 text-xs font-semibold uppercase tracking-wide text-primary">
       <ListMusic class="h-3.5 w-3.5" /> Music
-      <span v-if="engine === 'spotify' && joined" class="ml-auto inline-flex items-center gap-1 rounded-full bg-green-500/15 px-1.5 py-px text-[10px] normal-case text-green-600 dark:text-green-400" title="Playing the real track via your Spotify Premium">
-        via Spotify
-      </span>
-      <span v-else-if="state.autoplay" class="ml-auto inline-flex items-center gap-1 rounded-full bg-primary/10 px-1.5 py-px text-[10px] normal-case text-primary" title="Autoplay on">
-        <Radio class="h-3 w-3" /> radio
+      <span class="ml-auto flex items-center gap-1.5">
+        <span v-if="engine === 'spotify' && joined" class="inline-flex items-center gap-1 rounded-full bg-green-500/15 px-1.5 py-px text-[10px] normal-case text-green-600 dark:text-green-400" title="Playing the real track via your Spotify Premium">
+          via Spotify
+        </span>
+        <span v-else-if="state.autoplay" class="inline-flex items-center gap-1 rounded-full bg-primary/10 px-1.5 py-px text-[10px] normal-case text-primary" title="Autoplay on">
+          <Radio class="h-3 w-3" /> radio
+        </span>
+        <!-- Keep the sound when you walk away: pinned, this player is rendered by the dock
+             instead of the timeline, so changing channel/server/DM doesn't unmount it. -->
+        <button
+          class="p-0.5 text-muted-foreground hover:text-foreground"
+          :class="isPinned(widget.id) && 'text-primary'"
+          :title="isPinned(widget.id) ? 'Unpin — playback stops when you leave this chat' : 'Keep playing while I move around'"
+          @click="onTogglePin"
+        >
+          <component :is="isPinned(widget.id) ? PinOff : Pin" class="h-3.5 w-3.5" />
+        </button>
       </span>
     </div>
 
@@ -538,6 +685,16 @@ onBeforeUnmount(() => {
         <div class="mt-2 flex items-center gap-2 text-muted-foreground">
           <Button variant="ghost" size="icon" class="h-7 w-7" :class="state.autoplay && 'text-primary'" title="Autoplay / radio" @click="toggleAutoplay"><Radio class="h-4 w-4" /></Button>
           <Button variant="ghost" size="icon" class="h-7 w-7" title="Stop" @click="stop"><Square class="h-4 w-4" /></Button>
+          <Button
+            variant="ghost"
+            size="icon"
+            class="h-7 w-7"
+            :class="karaokeOpen && 'text-primary'"
+            title="Karaoke — sing along"
+            @click="toggleKaraoke"
+          >
+            <Mic2 class="h-4 w-4" />
+          </Button>
           <!-- Force a fresh Spotify link + device — the manual escape hatch for a wedged player. -->
           <Button
             v-if="spotifyStatus.linked"
@@ -564,9 +721,40 @@ onBeforeUnmount(() => {
           </div>
         </div>
 
+        <!-- Karaoke pane: the lyrics ride the same shared clock the transport does, so
+             every viewer is highlighted on the same line. -->
+        <div v-if="karaokeOpen" class="mt-2.5 rounded-lg border bg-background/60">
+          <div class="flex items-center gap-1.5 border-b px-2 py-1 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+            <Mic2 class="h-3 w-3" /> Karaoke
+            <button class="ml-auto p-0.5 hover:text-foreground" title="Full screen" @click="stageOpen = true">
+              <Maximize2 class="h-3 w-3" />
+            </button>
+            <button class="p-0.5 hover:text-foreground" title="Hide lyrics" @click="karaokeOpen = false">
+              <X class="h-3 w-3" />
+            </button>
+          </div>
+          <KaraokeLyrics
+            :lines="lyricLines"
+            :synced="lyricsSynced"
+            :loading="lyricsLoading"
+            :missing="lyricsMissing"
+            :instrumental="instrumental"
+            :position="karaokePosition"
+            :offset="lyricOffset"
+            @seek="seekTo"
+            @nudge="nudgeLyrics"
+            @reset-offset="resetLyricOffset"
+          />
+        </div>
+
         <!-- Listen-along opt-in: playback only starts from this click. -->
         <Button v-if="!joined" size="sm" class="mt-2.5 w-full gap-1.5" @click="joinListening">
           <Play class="h-3.5 w-3.5" /> Listen along
+        </Button>
+        <!-- Joined, but the player isn't making noise — usually a fresh iframe the browser
+             won't autoplay after a pin hand-off. One click is all it wants. -->
+        <Button v-else-if="blocked" size="sm" variant="secondary" class="mt-2.5 w-full gap-1.5" @click="joinListening">
+          <Play class="h-3.5 w-3.5" /> Resume audio
         </Button>
 
         <!-- Recoverable Spotify failure (rejected token / dead device). A reconnect re-consents
@@ -619,6 +807,30 @@ onBeforeUnmount(() => {
         <p v-if="upcoming.length > 20" class="mt-1 pl-6 text-[10px] text-muted-foreground">+{{ upcoming.length - 20 }} more</p>
       </div>
     </div>
+
+    <!-- Full-screen sing-along. Teleports out of the message list; the transport buttons
+         come back here so there's still one place that drives the shared state. -->
+    <KaraokeStage
+      v-if="stageOpen && current"
+      :track="current"
+      :lines="lyricLines"
+      :synced="lyricsSynced"
+      :loading="lyricsLoading"
+      :missing="lyricsMissing"
+      :instrumental="instrumental"
+      :position="karaokePosition"
+      :offset="lyricOffset"
+      :duration="duration"
+      :playing="isPlaying"
+      :fmt="fmt"
+      @close="stageOpen = false"
+      @toggle="togglePlay"
+      @next="next"
+      @prev="prev"
+      @seek="seekTo"
+      @nudge="nudgeLyrics"
+      @reset-offset="resetLyricOffset"
+    />
 
     <!-- The hidden YouTube player element (the Spotify SDK needs no DOM node). -->
     <div class="pointer-events-none absolute h-0 w-0 overflow-hidden opacity-0"><div ref="mountEl" /></div>

@@ -166,12 +166,29 @@ const mentionQuery = ref('')
 const mentionStart = ref(0) // index of the `@` in the draft
 const activeIndex = ref(0)
 
+/**
+ * Members are offered under their *public* name here — their server/chat nickname if they
+ * have one, otherwise their account name — never a private alias.
+ *
+ * What gets picked is typed into the message body as `@Name`, and the server turns that
+ * text back into a person by matching it against the roster everyone shares. A name only
+ * you can see would match for nobody, so it must not be offered. The hint carries their
+ * real name when the two differ, so a roster of nicknames stays searchable by who people
+ * actually are.
+ */
+const { publicNameFor } = useNicknames()
+
 const options = computed<MentionOption[]>(() => {
   const q = mentionQuery.value.toLowerCase()
   const all: MentionOption = { id: -1, name: 'all', hint: 'Notify everyone here' }
-  const members: MentionOption[] = props.mentionMembers.map(m => ({ id: m.id, name: m.name, hint: '' }))
+  const members: MentionOption[] = props.mentionMembers.map((m) => {
+    const name = publicNameFor(m)
+
+    return { id: m.id, name, hint: name === m.name ? '' : m.name }
+  })
   return [all, ...members]
-    .filter(o => o.name.toLowerCase().includes(q))
+    // `all`'s hint is prose, not a name — only a member's hint is searchable.
+    .filter(o => o.name.toLowerCase().includes(q) || (o.id !== -1 && o.hint.toLowerCase().includes(q)))
     .slice(0, 8)
 })
 

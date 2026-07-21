@@ -116,9 +116,9 @@ export function useMessages() {
     return messages.value.some(m => m.id === id)
   }
 
-  async function send(body: string, replyToId?: number | null, files: File[] = [], gif?: GifResult | null) {
+  async function send(body: string, replyToId?: number | null, files: File[] = [], gif?: GifResult | null, uploadIds: string[] = []) {
     if (!channelId.value) return
-    const payload = buildMessagePayload({ body, replyToId, files, gif })
+    const payload = buildMessagePayload({ body, replyToId, files, gif, uploadIds })
     const res = await api<{ data: Message }>(`/api/channels/${channelId.value}/messages`, {
       method: 'POST',
       body: payload as any,

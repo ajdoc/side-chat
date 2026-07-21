@@ -19,7 +19,7 @@ final class SendSideChatMessageAction
     ) {}
 
     /** @param  array<int, \Illuminate\Http\UploadedFile>  $files */
-    public function handle(SideChat $sideChat, User $user, SendMessageData $data, array $files = []): Message
+    public function handle(SideChat $sideChat, User $user, SendMessageData $data, array $files = [], array $uploadIds = []): Message
     {
         $message = $sideChat->messages()->create([
             // The channel id rides along so pins, attachments and container-membership
@@ -31,6 +31,8 @@ final class SendSideChatMessageAction
         ]);
 
         $this->attachments->storeFor($message, $files);
+        // Large files came up in pieces and are already on disk; claiming moves them into place.
+        $this->attachments->attachUploads($message, $uploadIds, $user);
 
         if ($data->gif !== null) {
             $this->attachments->storeGif($message, $data->gif);

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { CornerUpLeft, Download, Eye, FileText, Image as ImageIcon, Link2, Loader2, Pin, PinOff, Sparkles, Users, X } from 'lucide-vue-next'
+import { CornerUpLeft, Download, Eye, FileText, Image as ImageIcon, Link2, Loader2, Pencil, Pin, PinOff, Sparkles, Users, X } from 'lucide-vue-next'
 import type { Attachment, ChannelLink } from '~/types'
 import { Button } from '~/components/ui/button'
 
@@ -9,6 +9,42 @@ const emit = defineEmits<{ jump: [messageId: number] }>()
 
 // Draggable, remembered width (its left border carries the handle).
 const { width: panelWidth, startResize } = useResizable('channel-info', 360, { min: 300, max: 640 })
+
+// Pinned-message authors, like every other name, follow the nicknames in force here.
+const { nameFor, place: nicknamePlace } = useNicknames()
+
+const { user } = useAuth()
+const { server } = useServer()
+
+/**
+ * Renaming, from the roster.
+ *
+ * Which naming the dialog writes is decided by who you picked and whether you own the
+ * place — see NicknameDialog. This only has to say who's being renamed and hand over the
+ * one fact it can't work out for itself: whether the viewer owns the *server*, which is
+ * false in a DM or group chat because neither has an owner with that kind of authority.
+ */
+const nicknameOpen = ref(false)
+const nicknameTarget = ref<{ id: number, name: string } | null>(null)
+// Checked against the place the nicknames are actually loaded for, not just `server`:
+// that ref holds the last server you visited and survives walking into a DM, where
+// "do you own this?" has to be false for everyone.
+const ownsThisServer = computed(() =>
+  nicknamePlace.value?.kind === 'server'
+  && server.value?.id === nicknamePlace.value.id
+  && server.value.is_owner === true,
+)
+
+function nicknameTitle(member: { id: number, name: string }) {
+  if (member.id === user.value?.id) return 'Change your nickname here'
+
+  return ownsThisServer.value ? `Change ${member.name}'s nickname` : `Set a nickname only you see`
+}
+
+function askNickname(member: { id: number, name: string }) {
+  nicknameTarget.value = member
+  nicknameOpen.value = true
+}
 
 const route = useRoute()
 
@@ -181,7 +217,7 @@ watch([tab, () => props.channelId], ([current, id]) => {
               class="group/pin rounded-md border bg-muted/30 p-2 transition hover:bg-muted/60"
             >
               <div class="flex items-baseline gap-2">
-                <span class="truncate text-sm font-medium">{{ message.user.name }}</span>
+                <span class="truncate text-sm font-medium">{{ nameFor(message.user) }}</span>
                 <span class="shrink-0 text-xs text-muted-foreground">{{ formatSharedAt(message.created_at) }}</span>
                 <button
                   class="ml-auto shrink-0 rounded p-1 text-muted-foreground opacity-0 transition hover:text-destructive group-hover/pin:opacity-100"
@@ -411,7 +447,25 @@ watch([tab, () => props.channelId], ([current, id]) => {
         <p class="mb-2 flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
           <Users class="h-3.5 w-3.5" /> Participants ({{ members.length }})
         </p>
-        <ParticipantList :members="members" empty-text="No one here yet." />
+        <ParticipantList :members="members" empty-text="No one here yet.">
+          <template #actions="{ member }">
+            <button
+              type="button"
+              class="shrink-0 rounded p-1 text-muted-foreground transition hover:bg-muted hover:text-foreground"
+              :title="nicknameTitle(member)"
+              @click="askNickname(member)"
+            >
+              <Pencil class="h-3.5 w-3.5" />
+            </button>
+          </template>
+        </ParticipantList>
+
+        <NicknameDialog
+          v-model:open="nicknameOpen"
+          :member="nicknameTarget"
+          :current-user-id="user?.id ?? null"
+          :can-rename-others="ownsThisServer"
+        />
       </template>
     </div>
 

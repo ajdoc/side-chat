@@ -41,10 +41,13 @@ export function useConversation() {
 
     await roster.loadForConversation(id, res.data.channel_id)
     roster.subscribeConversation(id)
+    // What people are called *in this chat* — see useNicknames.
+    void useNicknames().open({ kind: 'conversation', id })
   }
 
   function closeConversation(id: number) {
     roster.unsubscribeConversation(id)
+    useNicknames().close()
     if (requestedId.value === id) requestedId.value = null
   }
 

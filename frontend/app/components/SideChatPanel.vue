@@ -170,11 +170,11 @@ async function onLeave() {
   await leave(activeId.value)
 }
 
-async function onSend(body: string, files: File[], gif?: GifResult) {
+async function onSend(body: string, files: File[], gif?: GifResult, uploadIds: string[] = []) {
   if (!activeId.value || sending.value) return
   sending.value = true
   try {
-    await send(activeId.value, body, replyingTo.value?.id ?? null, files, gif)
+    await send(activeId.value, body, replyingTo.value?.id ?? null, files, gif, uploadIds)
     stopTyping()
     replyingTo.value = null
     scrollBottom()
@@ -219,6 +219,9 @@ const roster = computed(() => sideChat.value?.participants ?? [])
 const hasHighlights = computed(() =>
   highlights.value.decisions.length > 0 || highlights.value.pinned.length > 0,
 )
+
+// Names follow whatever people are called in this server or chat — see useNicknames.
+const { nameFor } = useNicknames()
 
 function initials(name: string) {
   return name.split(' ').map(w => w[0]).slice(0, 2).join('').toUpperCase()
@@ -312,10 +315,10 @@ function relTime(iso: string) {
               v-for="m in roster.slice(0, 5)"
               :key="m.id"
               class="grid h-6 w-6 place-items-center overflow-hidden rounded-full border-2 border-background bg-primary text-[9px] font-semibold text-primary-foreground"
-              :title="m.name"
+              :title="nameFor(m)"
             >
-              <img v-if="m.avatar" :src="m.avatar" :alt="m.name" class="h-full w-full object-cover">
-              <span v-else>{{ initials(m.name) }}</span>
+              <img v-if="m.avatar" :src="m.avatar" :alt="nameFor(m)" class="h-full w-full object-cover">
+              <span v-else>{{ initials(nameFor(m)) }}</span>
             </span>
             <span
               v-if="(sideChat?.participants_count ?? 0) > 5"
@@ -360,7 +363,7 @@ function relTime(iso: string) {
               :title="d.body ?? ''"
               @click="onJumpToReply(d.id)"
             >
-              <span class="font-medium">{{ d.user.name }}:</span> {{ excerpt(d.body) }}
+              <span class="font-medium">{{ nameFor(d.user) }}:</span> {{ excerpt(d.body) }}
             </button>
           </div>
           <div v-if="highlights.pinned.length">
@@ -374,14 +377,14 @@ function relTime(iso: string) {
               :title="p.body ?? ''"
               @click="onJumpToReply(p.id)"
             >
-              <span class="font-medium">{{ p.user.name }}:</span> {{ excerpt(p.body) }}
+              <span class="font-medium">{{ nameFor(p.user) }}:</span> {{ excerpt(p.body) }}
             </button>
           </div>
         </div>
 
         <div v-if="sideChat?.parent_message" class="m-3 mb-0 shrink-0 rounded-lg border bg-muted/40 p-3 text-sm">
           <div class="mb-1 text-xs font-semibold uppercase text-muted-foreground">Started from</div>
-          <span class="font-medium">{{ sideChat.parent_message.user.name }}</span>
+          <span class="font-medium">{{ nameFor(sideChat.parent_message.user) }}</span>
           <MarkdownBody v-if="sideChat.parent_message.body" :source="sideChat.parent_message.body" />
         </div>
         <div v-else-if="sideChat?.origin_author" class="m-3 mb-0 shrink-0 rounded-lg border border-dashed bg-muted/20 p-3 text-sm">
@@ -476,6 +479,7 @@ function relTime(iso: string) {
         :active-app="spaceApp"
         readonly-hint="Join this side chat to edit"
         @update:active-app="setSpaceApp"
+        @jump="onJumpToReply"
       />
     </template>
 

@@ -108,6 +108,9 @@ export interface StartedThread {
 export interface ReplyRef {
   id: number
   body: string
+  // The id rides along with the name so the author can be shown under whatever they're
+  // called in this server or chat — see useNicknames.
+  user_id: number | null
   user_name: string | null
 }
 
@@ -210,7 +213,7 @@ export interface Message {
   link_previews?: LinkPreview[]
   reply_to?: ReplyRef | null
   /** Set when this message was forwarded — names the original author for the "Forwarded from" line. */
-  forwarded_from?: { user_name: string | null } | null
+  forwarded_from?: { user_id: number | null, user_name: string | null } | null
   started_thread?: StartedThread | null
   /** The living-object card for a side chat spun off this message (channel timeline only). */
   started_side_chat?: SideChat | null
@@ -227,13 +230,13 @@ export interface Message {
 export interface Widget {
   id: number
   channel_id: number
-  type: 'music' | 'kanban' | 'poll' | 'shooter' | 'racing'
+  type: 'music' | 'kanban' | 'poll' | 'shooter' | 'racing' | 'skribbl'
   /**
    * The live state — present on HTTP responses. Absent when the widget arrives as a
    * *reference* over the socket (WidgetUpdated / a MessageSent card): its full state is
    * too big for Pusher's 10KB event cap, so the client fetches it from `/api/widgets/{id}`.
    */
-  state?: MusicState | KanbanState | PollState | ShooterState | RacingState
+  state?: MusicState | KanbanState | PollState | ShooterState | RacingState | SkribblState
   created_at?: string
 }
 
@@ -365,6 +368,73 @@ export interface RacingState {
   log: string[]
 }
 
+/** One player at the Skribbl table, keyed by user id in `players`. */
+export interface SkribblPlayer {
+  name: string
+  score: number
+}
+
+/** A line in the guess feed. A correct guess never carries the word — `text` is the payoff line. */
+export interface SkribblChatLine {
+  name: string
+  text: string
+  /** They got it; the card shows this as a win, not a guess. */
+  ok: boolean
+  /** One letter off — worth a nudge without giving the answer away. */
+  close: boolean
+}
+
+/**
+ * The persisted, shared half of Side Skribbl (see SkribblGame + the SkribblWidget handler).
+ * The picture itself never lives here — strokes travel client-to-client over whispers, like
+ * the racer's ghost cars. This is the turn, the clock, the scoreboard, and the secret.
+ *
+ * `word` is the one field the server hands out selectively: while a turn is live only the
+ * drawer's copy of the state carries it, and everyone else gets `null` plus `mask`. Don't
+ * treat its absence as a bug — it's the game working.
+ */
+export interface SkribblState {
+  status: 'idle' | 'drawing' | 'reveal' | 'over'
+  /** 1-based turn number; also the token that makes `timeup`/`next` actions idempotent. */
+  turn: number
+  turns: number
+  drawerId: number | null
+  drawerName: string | null
+  /** The word — only ever present for the drawer while drawing, and for all once revealed. */
+  word: string | null
+  /** The word as underscores, safe for the table to see. */
+  mask: string | null
+  /** Epoch ms the turn expires — the clock every client counts down against. */
+  endsAt: number
+  /** Epoch ms the reveal gives way to the next turn. */
+  revealEndsAt: number
+  /** The drawing rotation, in join order. */
+  order: number[]
+  /** Who's already guessed it this turn. */
+  correct: number[]
+  players: Record<string, SkribblPlayer>
+  chat: SkribblChatLine[]
+  log: string[]
+}
+
+/**
+ * A whispered chunk of the drawer's pen — never touches Laravel. Coordinates are 0..1
+ * fractions of the canvas so every screen redraws the same picture at its own size, and
+ * segments of one stroke accumulate under its `s` id as the pen moves.
+ */
+export interface SkribblDrawMsg {
+  /** The sender — receivers ignore anything not from the current drawer. */
+  by: number
+  /** Stroke id, unique within a turn. */
+  s: number
+  /** Stroke colour (an eraser is just the canvas colour). */
+  c: string
+  /** Stroke width, in the same 0..1 space as the points. */
+  w: number
+  /** Flat [x0,y0,x1,y1,…], appended to whatever's already under `s`. */
+  p: number[]
+}
+
 /** A rival's whispered car position/state, as received off the channel's Reverb stream. */
 export interface RaceGhostMsg {
   id: number
@@ -430,7 +500,7 @@ export interface Thread {
 }
 
 /** The kinds of mark on a side chat's shared whiteboard. */
-export type WhiteboardStrokeKind = 'pen' | 'rect' | 'ellipse' | 'line' | 'arrow' | 'text' | 'note'
+export type WhiteboardStrokeKind = 'pen' | 'rect' | 'ellipse' | 'line' | 'arrow' | 'text' | 'note' | 'bg'
 
 /**
  * The payload shape depends on `kind` and is the whiteboard engine's contract (see
@@ -474,6 +544,8 @@ export type SideSpaceAppId = 'board' | 'notes' | 'docs' | 'canvas'
  */
 export interface SpaceNote {
   content: string
+  /** The revision this body belongs to; echoed back on save so concurrent edits merge. */
+  version: number
   updated_by: User | null
   updated_at: string | null
 }

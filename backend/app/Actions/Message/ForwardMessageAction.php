@@ -9,6 +9,7 @@ use App\Models\Message;
 use App\Models\User;
 use App\Services\AttachmentService;
 use App\Services\LinkPreviewService;
+use App\Services\NicknameService;
 use App\Support\MentionParser;
 
 /**
@@ -64,8 +65,9 @@ final class ForwardMessageAction
             return ['mentionsAll' => false, 'mentionedUserIds' => []];
         }
 
-        /** @var array<int, string> $names */
-        $names = $container->members()->pluck('name', 'users.id')->all();
+        // Every name each member answers to here — their own, plus the nickname they go
+        // by in this place. See NicknameService::mentionNamesFor.
+        $names = app(NicknameService::class)->mentionNamesFor($container);
         $parsed = MentionParser::parse($message->body, $names);
 
         $userIds = array_values(array_filter(

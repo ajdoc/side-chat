@@ -17,7 +17,12 @@
 /** The board's logical width. A client renders at `scale = cssWidth / LOGICAL_WIDTH`. */
 export const LOGICAL_WIDTH = 1000
 
-export type StrokeKind = 'pen' | 'rect' | 'ellipse' | 'line' | 'arrow' | 'text' | 'note'
+/**
+ * `bg` is the board's own backdrop rather than a mark on it: one full-surface wash, painted
+ * before everything else and hit-testable by nothing (you reach it by clicking empty board
+ * with the fill tool, not by clicking "it").
+ */
+export type StrokeKind = 'pen' | 'rect' | 'ellipse' | 'line' | 'arrow' | 'text' | 'note' | 'bg'
 
 export interface Point { x: number, y: number }
 
@@ -93,6 +98,9 @@ export function simplify(points: Point[], tolerance = 1.5): Point[] {
 /** The logical-space bounding box of a stroke, or null if it has no geometry. */
 export function boundingBox(stroke: Stroke): { x: number, y: number, w: number, h: number } | null {
   const p = stroke.payload
+  // The backdrop is everywhere, which is the same as nowhere for anything that measures the
+  // board's extent or draws a selection around a mark.
+  if (stroke.kind === 'bg') return null
   if (stroke.kind === 'pen') {
     const pts = p.points ?? []
     if (!pts.length) return null
@@ -138,6 +146,10 @@ export function hitStroke(stroke: Stroke, point: Point, threshold = 8): boolean 
     case 'arrow':
       return distToSegment(point, { x: p.x1 ?? 0, y: p.y1 ?? 0 }, { x: p.x2 ?? 0, y: p.y2 ?? 0 })
         <= threshold + (p.width ?? DEFAULT_WIDTH) / 2
+    // Never picked by a click: the eraser must not swallow the backdrop out from under the
+    // board, and the fill tool reaches it by finding *nothing* under the cursor.
+    case 'bg':
+      return false
     case 'rect':
     case 'ellipse':
     case 'text':
@@ -171,6 +183,13 @@ export function renderStroke(ctx: CanvasRenderingContext2D, stroke: Stroke, scal
   ctx.lineJoin = 'round'
 
   switch (stroke.kind) {
+    case 'bg': {
+      // The canvas' own pixels, not logical units — the wash covers the whole surface however
+      // far it has grown, and the device-pixel size is always at least the css one.
+      ctx.fillStyle = p.color ?? '#ffffff'
+      ctx.fillRect(0, 0, ctx.canvas.width, ctx.canvas.height)
+      break
+    }
     case 'pen': {
       const pts = p.points ?? []
       if (pts.length === 1) {

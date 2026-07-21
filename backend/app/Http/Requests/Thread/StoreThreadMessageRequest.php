@@ -4,17 +4,20 @@ namespace App\Http\Requests\Thread;
 
 use App\DTOs\Message\SendMessageData;
 use App\Http\Requests\MemberRequest;
+use App\Http\Requests\Message\UploadRules;
 use Illuminate\Validation\Rule;
 
 class StoreThreadMessageRequest extends MemberRequest
 {
+    use UploadRules;
+
     /** @return array<string, mixed> */
     public function rules(): array
     {
         $thread = $this->route('thread');
 
-        return array_merge(SendMessageData::validationRules(), [
-            'body' => ['required_without_all:attachments,gif', 'nullable', 'string', 'max:2000'],
+        return array_merge(SendMessageData::validationRules(), $this->uploadRules(), [
+            'body' => ['required_without_all:attachments,gif,uploads', 'nullable', 'string', 'max:2000'],
             'attachments' => ['nullable', 'array', 'max:10'],
             'attachments.*' => ['file', 'max:20480'], // 20 MB each
             // A reply must target a message inside this same thread.

@@ -3,6 +3,7 @@
 namespace App\Models;
 
 use App\Contracts\MessageContainer;
+use App\Models\Concerns\HasNicknames;
 use Illuminate\Broadcasting\PrivateChannel;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
@@ -14,7 +15,7 @@ use Illuminate\Support\Str;
 class Server extends Model implements MessageContainer
 {
     /** @use HasFactory<\Database\Factories\ServerFactory> */
-    use HasFactory;
+    use HasFactory, HasNicknames;
 
     protected $fillable = ['name', 'owner_id', 'invite_code'];
 

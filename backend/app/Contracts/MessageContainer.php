@@ -5,6 +5,7 @@ namespace App\Contracts;
 use App\Models\User;
 use Illuminate\Broadcasting\PrivateChannel;
 use Illuminate\Database\Eloquent\Relations\BelongsToMany;
+use Illuminate\Database\Eloquent\Relations\MorphMany;
 
 /**
  * A place channels live in: a Server, or a Conversation (a DM or a group chat).
@@ -66,4 +67,16 @@ interface MessageContainer
 
     /** @return array<int, int> Every member's id. */
     public function memberIds(): array;
+
+    /**
+     * What people are called *here*, as opposed to everywhere else.
+     *
+     * A nickname is scoped to a place and to nothing smaller: you are "aj (backend)" in
+     * one server and yourself in the next, and the channel you happen to be reading has
+     * no say in it. So it hangs off the container, like membership does — which is also
+     * what lets one implementation serve a server, a DM and a group chat alike.
+     *
+     * @return MorphMany<\App\Models\Nickname, \Illuminate\Database\Eloquent\Model>
+     */
+    public function nicknames(): MorphMany;
 }

@@ -22,7 +22,11 @@ const props = defineProps<{
   readonlyHint?: string
 }>()
 
-const emit = defineEmits<{ 'update:activeApp': [SideSpaceAppId] }>()
+const emit = defineEmits<{
+  'update:activeApp': [SideSpaceAppId]
+  /** Docs asking the host timeline to scroll to the message a chat file arrived in. */
+  'jump': [messageId: number]
+}>()
 
 const APPS = [
   { id: 'board', label: 'Board', icon: PenTool },
@@ -88,6 +92,7 @@ const APPS = [
       :stream-name="streamName"
       :can-edit="canEdit"
       :readonly-hint="readonlyHint"
+      @jump="emit('jump', $event)"
     />
   </div>
 </template>

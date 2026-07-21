@@ -78,8 +78,8 @@ export function useSideChatMessages() {
     return messages.value.some(m => m.id === id)
   }
 
-  async function send(sideChatId: number, body: string, replyToId?: number | null, files: File[] = [], gif?: GifResult | null) {
-    const payload = buildMessagePayload({ body, replyToId, files, gif })
+  async function send(sideChatId: number, body: string, replyToId?: number | null, files: File[] = [], gif?: GifResult | null, uploadIds: string[] = []) {
+    const payload = buildMessagePayload({ body, replyToId, files, gif, uploadIds })
     const res = await api<{ data: Message }>(`/api/side-chats/${sideChatId}/messages`, {
       method: 'POST',
       body: payload as any,

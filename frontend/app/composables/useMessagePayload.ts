@@ -11,20 +11,25 @@ export function buildMessagePayload(opts: {
   body?: string | null
   replyToId?: number | null
   files?: File[]
+  /** Ids of files staged through the chunked path — see useChunkedUpload. */
+  uploadIds?: string[]
   removeAttachmentIds?: number[]
   gif?: GifResult | null
   method?: 'PATCH'
 }): FormData | Record<string, unknown> {
   const files = opts.files ?? []
+  const uploads = opts.uploadIds ?? []
   const removals = opts.removeAttachmentIds ?? []
   const gif = opts.gif ?? null
 
-  // A GIF carries no binary, so a GIF-only send stays plain JSON (no multipart needed).
+  // A GIF carries no binary, and a chunked upload has already sent its bytes — so both stay
+  // plain JSON. Multipart is only for files travelling *in* this request.
   if (files.length === 0 && removals.length === 0) {
     return {
       ...(opts.body !== undefined ? { body: opts.body } : {}),
       ...(opts.replyToId !== undefined ? { reply_to_id: opts.replyToId ?? null } : {}),
       ...(gif ? { gif: gifFields(gif) } : {}),
+      ...(uploads.length ? { uploads } : {}),
     }
   }
 
@@ -33,6 +38,7 @@ export function buildMessagePayload(opts: {
   if (opts.body) form.append('body', opts.body)
   if (opts.replyToId) form.append('reply_to_id', String(opts.replyToId))
   files.forEach(file => form.append('attachments[]', file))
+  uploads.forEach(id => form.append('uploads[]', id))
   removals.forEach(id => form.append('remove_attachment_ids[]', String(id)))
   if (gif) {
     Object.entries(gifFields(gif)).forEach(([k, v]) => form.append(`gif[${k}]`, String(v)))

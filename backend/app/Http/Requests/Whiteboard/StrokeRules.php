@@ -18,7 +18,7 @@ trait StrokeRules
     protected function strokeRules(): array
     {
         return array_merge([
-            'kind' => ['required', Rule::in(['pen', 'rect', 'ellipse', 'line', 'arrow', 'text', 'note'])],
+            'kind' => ['required', Rule::in(['pen', 'rect', 'ellipse', 'line', 'arrow', 'text', 'note', 'bg'])],
             'client_id' => ['required', 'string', 'max:64'],
         ], $this->payloadRules());
     }

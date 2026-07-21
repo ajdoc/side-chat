@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ArrowLeft, Check, Download, FileSpreadsheet, FileText, FileType2, Loader2, MessageSquarePlus, Trash2, Upload } from 'lucide-vue-next'
+import { ArrowLeft, Check, CornerUpLeft, Download, FileSpreadsheet, FileText, FileType2, Loader2, MessageSquarePlus, Trash2, Upload } from 'lucide-vue-next'
 import type { SpaceDocument, SpaceDocumentKind } from '~/types'
 
 /**
@@ -11,8 +11,10 @@ import type { SpaceDocument, SpaceDocumentKind } from '~/types'
  * which load their parsers on demand.
  *
  * Only shelf files offer delete and "Send to chat" (a chat file is already in chat, and
- * isn't the shelf's to remove). Narrow-panel friendly: the list is the default view; opening
- * a file swaps to a full-height viewer with a back arrow.
+ * isn't the shelf's to remove); a chat file offers the reverse — "Jump to message", emitted up
+ * to the host timeline, which pages back to the message the file arrived in. Narrow-panel
+ * friendly: the list is the default view; opening a file swaps to a full-height viewer with a
+ * back arrow.
  */
 const props = defineProps<{
   basePath: string
@@ -20,6 +22,8 @@ const props = defineProps<{
   canEdit: boolean
   readonlyHint?: string
 }>()
+
+const emit = defineEmits<{ jump: [messageId: number] }>()
 
 const { documents, uploading, load, upload, remove, sendToChat, subscribe, unsubscribe } = useDocuments(props.basePath, props.streamName)
 
@@ -97,6 +101,14 @@ onBeforeUnmount(unsubscribe)
         </button>
         <component :is="ICONS[selected.kind]" class="h-4 w-4 shrink-0 text-muted-foreground" />
         <span class="min-w-0 flex-1 truncate text-sm font-medium">{{ selected.name }}</span>
+        <button
+          v-if="selected.source === 'chat' && selected.message_id"
+          class="rounded p-1 text-muted-foreground hover:bg-muted hover:text-foreground"
+          title="Jump to message"
+          @click="selected.message_id && emit('jump', selected.message_id)"
+        >
+          <CornerUpLeft class="h-4 w-4" />
+        </button>
         <a :href="selected.download_url" class="rounded p-1 text-muted-foreground hover:bg-muted hover:text-foreground" title="Download">
           <Download class="h-4 w-4" />
         </a>
@@ -166,6 +178,16 @@ onBeforeUnmount(unsubscribe)
               {{ fmtSize(doc.size) }}<template v-if="doc.uploaded_by"> · {{ doc.uploaded_by.name }}</template>
             </span>
           </span>
+
+          <!-- A chat file came in on a message, so it can point back at it. -->
+          <button
+            v-if="doc.source === 'chat' && doc.message_id"
+            class="shrink-0 rounded p-1 text-muted-foreground opacity-0 hover:text-foreground group-hover:opacity-100"
+            title="Jump to message"
+            @click.stop="doc.message_id && emit('jump', doc.message_id)"
+          >
+            <CornerUpLeft class="h-4 w-4" />
+          </button>
 
           <!-- Shelf files can be pushed into the chat timeline (channel surfaces only). -->
           <button

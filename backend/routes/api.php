@@ -6,6 +6,7 @@ use App\Http\Controllers\Auth\SocialAuthController;
 use App\Http\Controllers\CanvasController;
 use App\Http\Controllers\ChannelCanvasController;
 use App\Http\Controllers\ChannelController;
+use App\Http\Controllers\ChunkedUploadController;
 use App\Http\Controllers\ChannelDocumentController;
 use App\Http\Controllers\DocumentController;
 use App\Http\Controllers\ChannelLinkController;
@@ -17,10 +18,13 @@ use App\Http\Controllers\ConversationController;
 use App\Http\Controllers\GifController;
 use App\Http\Controllers\InviteController;
 use App\Http\Controllers\JoinRequestController;
+use App\Http\Controllers\LyricsController;
 use App\Http\Controllers\MessageController;
 use App\Http\Controllers\MessageInfoController;
 use App\Http\Controllers\PinController;
+use App\Http\Controllers\NicknameController;
 use App\Http\Controllers\PreferencesController;
+use App\Http\Controllers\ProfileController;
 use App\Http\Controllers\ReactionController;
 use App\Http\Controllers\ReadReceiptController;
 use App\Http\Controllers\ServerController;
@@ -63,6 +67,7 @@ Route::prefix('auth')->group(function () {
 });
 
 Route::middleware('auth:api')->group(function () {
+    Route::patch('profile', [ProfileController::class, 'update']);
     Route::patch('preferences', [PreferencesController::class, 'update']);
 
     // Spotify account linking, for real Premium playback in the music widget.
@@ -70,6 +75,16 @@ Route::middleware('auth:api')->group(function () {
     Route::get('spotify/status', [SpotifyController::class, 'status']);
     Route::get('spotify/token', [SpotifyController::class, 'token']);
     Route::post('spotify/disconnect', [SpotifyController::class, 'disconnect']);
+});
+
+/**
+ * Large files, staged in pieces before a message claims them. Open an upload, post its chunks
+ * in order, then hand the id to a send as `uploads[]` — see ChunkedUploadController.
+ */
+Route::middleware('auth:api')->group(function () {
+    Route::post('uploads', [ChunkedUploadController::class, 'store']);
+    Route::post('uploads/{upload:uuid}/chunks', [ChunkedUploadController::class, 'update']);
+    Route::delete('uploads/{upload:uuid}', [ChunkedUploadController::class, 'destroy']);
 });
 
 // Servers, channels, and messages.
@@ -83,6 +98,15 @@ Route::middleware('auth:api')->group(function () {
     Route::delete('servers/{server}', [ServerController::class, 'destroy']);
     // Any member. The owner can't leave their own server; they delete it instead.
     Route::post('servers/{server}/leave', [ServerController::class, 'leave']);
+
+    /*
+     * What people are called *in this server*. Any member reads the map; setting your own
+     * public nickname is yours, setting somebody else's is the owner's, and a private
+     * alias is yours about anyone. The matching pair for chats sits with the conversation
+     * routes below — same controller, because a nickname only knows about "the place".
+     */
+    Route::get('servers/{server}/nicknames', [NicknameController::class, 'indexForServer']);
+    Route::put('servers/{server}/nicknames/{member}', [NicknameController::class, 'updateForServer']);
 
     Route::get('servers/{server}/channels', [ChannelController::class, 'index']);
     Route::post('servers/{server}/channels', [ChannelController::class, 'store']);
@@ -120,6 +144,10 @@ Route::middleware('auth:api')->group(function () {
     // `show` is how a client pulls the fresh state after being nudged.
     Route::get('widgets/{widget}', [WidgetController::class, 'show']);
     Route::post('widgets/{widget}/action', [WidgetController::class, 'action']);
+
+    // Karaoke: time-synced lyrics for whatever the music widget is playing. Read-only and
+    // widget-agnostic — it takes a track description, not a widget id.
+    Route::get('lyrics', [LyricsController::class, 'show']);
 
     // Pins: any member may pin or unpin, on channel *and* thread messages.
     Route::get('channels/{channel}/pins', [PinController::class, 'index']);
@@ -175,6 +203,11 @@ Route::middleware('auth:api')->group(function () {
     Route::post('conversations/{conversation}/members', [ConversationController::class, 'addMembers']);
     // Any member. You can't leave a DM; there's nothing to leave it to.
     Route::post('conversations/{conversation}/leave', [ConversationController::class, 'leave']);
+
+    // Nicknames in a chat — see the server pair above. A chat has no owner worth the name,
+    // so here `public` scope only ever means your own.
+    Route::get('conversations/{conversation}/nicknames', [NicknameController::class, 'indexForConversation']);
+    Route::put('conversations/{conversation}/nicknames/{member}', [NicknameController::class, 'updateForConversation']);
     // The call. Joining one is `channels/{channel}/voice/join` like anywhere else — these
     // two are the parts a server's voice channel has no need for.
     Route::get('conversations/{conversation}/voice', [ConversationController::class, 'voice']);

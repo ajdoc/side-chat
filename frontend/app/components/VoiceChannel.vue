@@ -68,6 +68,9 @@ const {
   selfMuted,
   selfDeafened,
   selfSpeaking,
+  pushToTalk,
+  pttHeld,
+  micOpen,
   screenStream,
   cameraStream,
   isSharing,
@@ -133,7 +136,8 @@ const selfPeer = computed<Peer>(() => ({
   screen: null,
   connection: 'connected',
   speaking: selfSpeaking.value,
-  muted: selfMuted.value,
+  // On push-to-talk your own tile shows the line, not the button — the same thing peers see.
+  muted: !micOpen.value,
   deafened: selfDeafened.value,
   screenSharing: isSharing.value,
   cameraOn: isCameraOn.value,
@@ -214,6 +218,9 @@ function onFullscreenChange() {
 onMounted(() => document.addEventListener('fullscreenchange', onFullscreenChange))
 onUnmounted(() => document.removeEventListener('fullscreenchange', onFullscreenChange))
 
+// Names follow whatever people are called in this server or chat — see useNicknames.
+const { nameFor } = useNicknames()
+
 function initials(name: string) {
   return name.split(' ').map(w => w[0]).slice(0, 2).join('').toUpperCase()
 }
@@ -231,14 +238,14 @@ function initials(name: string) {
             v-for="p in waiting"
             :key="p.user.id"
             class="grid h-7 w-7 place-items-center rounded-full border-2 border-background bg-secondary text-[10px] font-semibold text-secondary-foreground"
-            :title="p.user.name"
+            :title="nameFor(p.user)"
           >
-            <img v-if="p.user.avatar" :src="p.user.avatar" :alt="p.user.name" class="h-full w-full rounded-full object-cover">
-            <span v-else>{{ initials(p.user.name) }}</span>
+            <img v-if="p.user.avatar" :src="p.user.avatar" :alt="nameFor(p.user)" class="h-full w-full rounded-full object-cover">
+            <span v-else>{{ initials(nameFor(p.user)) }}</span>
           </div>
         </div>
         <span class="truncate text-xs text-muted-foreground">
-          {{ waiting.length === 1 ? `${waiting[0]!.user.name} is` : `${waiting.length} people are` }} in the call
+          {{ waiting.length === 1 ? `${nameFor(waiting[0]!.user)} is` : `${waiting.length} people are` }} in the call
         </span>
       </template>
       <span v-else class="text-xs text-muted-foreground">Nobody's in voice yet.</span>
@@ -358,7 +365,7 @@ function initials(name: string) {
             :peer="selfPeer"
             self
             :speaking="selfSpeaking"
-            :muted="selfMuted"
+            :muted="!micOpen"
             :sharing="isSharing"
             :watching="watching === 'self'"
             @watch="watching = watching === 'self' ? null : 'self'"
@@ -382,14 +389,23 @@ function initials(name: string) {
       <!-- Controls stay put whether or not the tiles are showing. -->
       <div class="flex items-center justify-center gap-2 border-t px-4 py-2">
         <Button
-          :variant="selfMuted ? 'destructive' : 'secondary'"
+          :variant="micOpen ? 'secondary' : 'destructive'"
           size="icon"
-          :title="selfMuted ? 'Unmute your microphone' : 'Mute your microphone'"
+          :title="selfMuted ? 'Unmute your microphone' : pushToTalk ? 'Push-to-talk — hold Space' : 'Mute your microphone'"
           @click="toggleMute"
         >
-          <MicOff v-if="selfMuted" class="h-4 w-4" />
+          <MicOff v-if="!micOpen" class="h-4 w-4" />
           <Mic v-else class="h-4 w-4" />
         </Button>
+
+        <!-- On push-to-talk the mic button no longer tells the whole story, so say it plainly. -->
+        <span
+          v-if="pushToTalk && !selfMuted"
+          class="rounded px-2 py-1 text-xs transition-colors"
+          :class="pttHeld ? 'bg-green-600/15 font-medium text-green-600 dark:text-green-400' : 'text-muted-foreground'"
+        >
+          {{ pttHeld ? 'Talking…' : 'Hold Space' }}
+        </span>
 
         <Button
           :variant="selfDeafened ? 'destructive' : 'secondary'"

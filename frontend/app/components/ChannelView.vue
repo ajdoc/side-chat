@@ -245,11 +245,11 @@ function closeChannel(id: number) {
   unsubscribe(id)
 }
 
-async function onSend(body: string, files: File[], gif?: GifResult) {
+async function onSend(body: string, files: File[], gif?: GifResult, uploadIds: string[] = []) {
   if (sending.value) return
   sending.value = true
   try {
-    await send(body, replyingTo.value?.id ?? null, files, gif)
+    await send(body, replyingTo.value?.id ?? null, files, gif, uploadIds)
     stopTyping()
     replyingTo.value = null
     scrollToBottom()
@@ -459,6 +459,7 @@ onBeforeUnmount(() => {
     <SideSpacePanel
       v-if="spacePanelOpen && !threadPanelOpen && !sideChatPanelOpen"
       :channel-id="channelId"
+      @jump="onJumpToReply"
     />
 
     <!-- Forward a message from this timeline into another chat or channel. -->

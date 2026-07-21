@@ -29,8 +29,9 @@ class SideChatMessageController extends Controller
             $action->handle(
                 $sideChat,
                 $request->user(),
-                SendMessageData::fromArray($request->safe()->except('attachments')),
+                SendMessageData::fromArray($request->safe()->except('attachments', 'uploads')),
                 $request->file('attachments', []),
+                $request->validated('uploads', []),
             )
         );
     }

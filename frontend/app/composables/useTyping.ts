@@ -30,8 +30,12 @@ export function useTyping() {
   let lastWhisperAt = 0
   let pruneTimer: ReturnType<typeof setInterval> | undefined
 
+  const { nameFor } = useNicknames()
+
   const label = computed(() => {
-    const names = typists.value.map(t => t.name)
+    // Whoever is typing, under whatever they're called here — the whisper carries their
+    // account name, which is the fallback rather than the answer. See useNicknames.
+    const names = typists.value.map(t => nameFor(t))
 
     if (names.length === 0) return ''
     if (names.length === 1) return `${names[0]} is typing…`

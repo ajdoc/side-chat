@@ -29,8 +29,9 @@ class ThreadMessageController extends Controller
             $action->handle(
                 $thread,
                 $request->user(),
-                SendMessageData::fromArray($request->safe()->except('attachments')),
+                SendMessageData::fromArray($request->safe()->except('attachments', 'uploads')),
                 $request->file('attachments', []),
+                $request->validated('uploads', []),
             )
         );
     }
