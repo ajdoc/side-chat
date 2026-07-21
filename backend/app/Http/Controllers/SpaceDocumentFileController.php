@@ -2,9 +2,9 @@
 
 namespace App\Http\Controllers;
 
+use App\Http\Controllers\Concerns\ServesStoredFiles;
 use App\Models\SpaceDocument;
-use Illuminate\Support\Facades\Storage;
-use Symfony\Component\HttpFoundation\StreamedResponse;
+use Symfony\Component\HttpFoundation\BinaryFileResponse;
 
 /**
  * Serves a Side Space document's bytes over a short-lived signed URL — the same pattern
@@ -13,18 +13,20 @@ use Symfony\Component\HttpFoundation\StreamedResponse;
  */
 class SpaceDocumentFileController extends Controller
 {
+    use ServesStoredFiles;
+
     /** Inline — a PDF renders in the browser; other kinds are fetched by their viewer. */
-    public function show(SpaceDocument $document): StreamedResponse
+    public function show(SpaceDocument $document): BinaryFileResponse
     {
-        return Storage::disk($document->disk)->response($document->path, $document->name, [
+        return response()->file($this->storedFilePath($document->disk, $document->path), [
             'Content-Type' => $document->mime_type,
             'Content-Disposition' => 'inline; filename="'.addslashes($document->name).'"',
         ]);
     }
 
     /** Forced download. */
-    public function download(SpaceDocument $document): StreamedResponse
+    public function download(SpaceDocument $document): BinaryFileResponse
     {
-        return Storage::disk($document->disk)->download($document->path, $document->name);
+        return response()->download($this->storedFilePath($document->disk, $document->path), $document->name);
     }
 }

@@ -86,6 +86,26 @@ it('serves an attachment only with a valid signature', function () {
     $this->get("/attachments/{$id}")->assertForbidden();
 });
 
+it('serves a byte range so big video seeks instead of downloading whole', function () {
+    [$user, , $channel] = ownerWithChannel();
+    Passport::actingAs($user);
+
+    $url = $this->post("/api/channels/{$channel->id}/messages", [
+        'body' => 'clip',
+        // Real bytes, not `fake()->create()`: that reports a size but writes an empty file,
+        // and an empty file has no range to satisfy.
+        'attachments' => [UploadedFile::fake()->createWithContent('clip.mov', str_repeat('x', 4096))],
+    ])->json('data.attachments.0.url');
+
+    $this->get($url)
+        ->assertOk()
+        ->assertHeader('Accept-Ranges', 'bytes');
+
+    $this->get($url, ['Range' => 'bytes=0-1023'])
+        ->assertStatus(206)
+        ->assertHeader('Content-Length', '1024');
+});
+
 // ---- editing files ----
 
 it('deletes the old file from disk when an attachment is removed on edit', function () {

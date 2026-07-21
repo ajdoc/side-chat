@@ -15,6 +15,9 @@ export function useMessages() {
   // Likewise for the Pinned tab: this composable owns the channel stream, so it's the one
   // that folds a pin toggle into the shared list. See usePins().
   const { toggle: togglePinRequest, apply: applyPin } = usePins()
+  // The docked music player listens on this same channel and outlives the timeline — see
+  // unsubscribe() for why it has to be handed its subscription back.
+  const { rejoin: rejoinPinnedMusic } = useMusicPin()
 
   function pushUnique(m: Message) {
     if (!messages.value.some(x => x.id === m.id)) {
@@ -231,6 +234,11 @@ export function useMessages() {
 
   function unsubscribe(id: number) {
     echo.leave(`channel.${id}`)
+    // `leave` drops the *whole* channel, including listeners this composable never put
+    // there. A pinned music player keeps listening here long after its timeline closes —
+    // without this it would go deaf on the way out, freeze on its last state, and look for
+    // all the world like its buttons had stopped working. No-op when nothing is pinned here.
+    rejoinPinnedMusic(id)
   }
 
   return { messages, hasMore, loadingOlder, load, loadOlder, ensureLoaded, send, edit, remove, removeAttachment, toggleReaction, togglePin, subscribe, unsubscribe }

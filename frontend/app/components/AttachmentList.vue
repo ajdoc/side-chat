@@ -51,15 +51,29 @@ const EXT_MIME: Record<string, string> = {
   mov: 'video/quicktime',
 }
 
+/**
+ * Containers every engine decodes but only some will admit to. Chrome, Firefox and Edge all
+ * return "" for video/quicktime, yet a .mov off a phone or a Mac screen recording is H.264/AAC
+ * — the same bytes they happily play as .mp4. Probing the payload rather than the wrapper gets
+ * those playing; the `error` fallback below covers the rare ProRes/HEVC clip that really can't.
+ */
+const CONTAINER_PROXY: Record<string, string> = {
+  'video/quicktime': 'video/mp4',
+  'video/x-m4v': 'video/mp4',
+}
+
 // canPlayType needs a document, so nothing is playable until we're on the client. One probe
 // element per kind, reused: creating one per attachment per render adds up in a long timeline.
 const clientReady = ref(false)
 onMounted(() => { clientReady.value = true })
 const probes: Partial<Record<'audio' | 'video', HTMLMediaElement>> = {}
 
+// Files whose player actually failed to decode, so the next render leaves them as plain cards.
+const undecodable = ref(new Set<number>())
+
 /** The media type to play this attachment as, or null to leave it as a plain file card. */
 function playerFor(a: Attachment): 'audio' | 'video' | null {
-  if (!clientReady.value) return null
+  if (!clientReady.value || undecodable.value.has(a.id)) return null
 
   const mime = a.mime_type.startsWith('audio/') || a.mime_type.startsWith('video/')
     ? a.mime_type
@@ -69,7 +83,7 @@ function playerFor(a: Attachment): 'audio' | 'video' | null {
   const kind = mime.startsWith('audio/') ? 'audio' : 'video'
   const probe = probes[kind] ??= document.createElement(kind)
 
-  return probe.canPlayType(mime) ? kind : null
+  return probe.canPlayType(CONTAINER_PROXY[mime] ?? mime) ? kind : null
 }
 
 /** Worked out once per list rather than per read, since the template asks more than once. */
@@ -81,6 +95,10 @@ const players = computed(() => {
   }
   return map
 })
+
+function onPlayerError(id: number) {
+  undecodable.value = new Set(undecodable.value).add(id)
+}
 
 // Lightbox carousel state — opened by clicking an inline image/GIF, paging across the
 // images in this message rather than opening a raw file URL in a new tab.
@@ -218,6 +236,7 @@ function onView(a: Attachment) {
         controls
         preload="metadata"
         class="mt-2 max-h-72 w-full rounded bg-black"
+        @error="onPlayerError(f.id)"
       />
       <audio
         v-else-if="players.get(f.id) === 'audio'"

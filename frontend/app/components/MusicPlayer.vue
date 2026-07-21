@@ -33,7 +33,7 @@ const props = defineProps<{ widget: Widget, docked?: boolean }>()
 
 const { $youtube, $spotify } = useNuxtApp() as any
 const { action } = useWidgets()
-const { isPinned, toggle: togglePin, hasJoined, markJoined } = useMusicPin()
+const { isPinned, toggle: togglePin, refresh: refreshPinned, hasJoined, markJoined } = useMusicPin()
 const { status: spotifyStatus, canUseSpotify, ensureLoaded, connect: connectSpotify, getToken } = useSpotifyAuth()
 
 const state = computed(() => props.widget.state as MusicState)
@@ -114,6 +114,18 @@ let spTokenCache: { token: string, exp: number } | null = null
 let ticker: ReturnType<typeof setInterval> | null = null
 const displayTime = ref(0)
 const duration = ref(0)
+
+/**
+ * Fire a widget action and, when docked, pull the state it produced.
+ *
+ * Everything this component does to the shared state comes back to it as a broadcast the
+ * *timeline* folds in. The dock has no timeline behind it, so it resyncs itself — see the
+ * note in send().
+ */
+async function report(name: string, payload: Record<string, unknown> = {}) {
+  await action(props.widget.id, name, payload)
+  if (props.docked) await refreshPinned()
+}
 
 // Where the current track should be *right now*, extrapolating from the server snapshot.
 // Spotify is only ever chosen at 1× speed, so this stays correct for both engines.
@@ -305,7 +317,7 @@ function detectSpotifyEnd(st: { position: number, duration: number, paused: bool
   const stoppedAtEnd = st.paused && spLastPos > 0 && st.duration - spLastPos < 2.5
   if ((!st.paused && nearEnd) || stoppedAtEnd) {
     spEndedFor.add(id)
-    action(props.widget.id, 'ended', { id })
+    void report('ended', { id })
   }
 }
 
@@ -322,7 +334,7 @@ function maybeReportDuration() {
   const t = current.value
   if (!t || t.duration || reportedDuration.has(t.id)) return
   const d = Math.round(yt?.getDuration?.() || 0)
-  if (d > 0) { reportedDuration.add(t.id); action(props.widget.id, 'meta', { id: t.id, duration: d }) }
+  if (d > 0) { reportedDuration.add(t.id); void report('meta', { id: t.id, duration: d }) }
 }
 
 async function ensureYouTube() {
@@ -336,7 +348,7 @@ async function ensureYouTube() {
       onReady: () => { ytReady = true; applyVolume(); sync() },
       onStateChange: (e: any) => {
         if (e.data === YT.PlayerState.ENDED && engine.value === 'youtube' && current.value) {
-          action(props.widget.id, 'ended', { id: current.value.id })
+          void report('ended', { id: current.value.id })
         }
       },
     },
@@ -378,7 +390,9 @@ const busy = ref(false)
 async function send(name: string, payload: Record<string, unknown> = {}) {
   if (busy.value) return
   busy.value = true
-  try { await action(props.widget.id, name, payload) }
+  // A card in a timeline gets its new state folded back in by useMessages when the
+  // broadcast lands; the dock resyncs itself instead. See report().
+  try { await report(name, payload) }
   finally { busy.value = false }
 }
 const togglePlay = () => send(isPlaying.value ? 'pause' : 'resume')

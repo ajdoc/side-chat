@@ -77,6 +77,33 @@ export function useMusicPin() {
     listen(null)
   }
 
+  /** Pull the pinned widget's current state. Also the recovery path after a lost listener. */
+  async function refresh() {
+    const id = widget.value?.id
+    if (id == null) return
+    const w = await fetchWidget(id)
+    if (w && widget.value?.id === w.id) widget.value = w
+  }
+
+  /**
+   * Put our listener back on the pinned widget's channel.
+   *
+   * `echo.leave()` is all-or-nothing: when the timeline closes (useMessages.unsubscribe) it
+   * takes the whole channel subscription with it, ours included — and a dock that stops
+   * hearing `.WidgetUpdated` freezes on its last state, which looks exactly like the
+   * transport buttons having stopped working. So the code that leaves calls this after.
+   * A no-op unless the pinned widget actually lives on `channelId`.
+   */
+  function rejoin(channelId: number) {
+    if (widget.value?.channel_id !== channelId) return
+    channel = null
+    handler = null
+    listeningOn = null
+    listen(channelId)
+    // The gap between leaving and re-joining can swallow an update — resync from HTTP.
+    void refresh()
+  }
+
   const isPinned = (id: number) => widget.value?.id === id
   const toggle = (w: Widget) => (isPinned(w.id) ? unpin() : pin(w))
 
@@ -93,5 +120,5 @@ export function useMusicPin() {
     if (!hasJoined(id)) joinedIds.value = [...joinedIds.value, id]
   }
 
-  return { widget, pin, unpin, toggle, isPinned, restore, hasJoined, markJoined }
+  return { widget, pin, unpin, toggle, isPinned, restore, refresh, rejoin, hasJoined, markJoined }
 }
