@@ -23,6 +23,9 @@ const { threads, sideChatThreads, loadThreads, createThread, loadSideChatThreads
 const scoped = computed(() => props.sideChatId != null)
 const list = computed(() => (scoped.value ? sideChatThreads.value : threads.value))
 const { thread, messages, gone, hasMore, loadingOlder, loadThread, loadOlder, ensureLoaded, send, edit, remove, toggleReaction, togglePin, subscribe, unsubscribe } = useThreadMessages()
+
+// Which replies open a new calendar day, and the label to print above them.
+const daySeparators = useDaySeparators(messages)
 // A thread has no roster of its own — its participants are the people in the parent channel.
 const { members: participants, load: loadParticipants } = useChannelMembers()
 const {
@@ -262,8 +265,17 @@ onBeforeUnmount(teardown)
                 <DynamicScrollerItem
                   :item="item"
                   :active="active"
-                  :size-dependencies="[item.body, item.reply_to, item.edited, item.attachments, item.reactions, item.comments, item.link_previews, item.pinned]"
+                  :size-dependencies="[item.body, item.reply_to, item.edited, item.attachments, item.reactions, item.comments, item.link_previews, item.pinned, daySeparators.get(item.id)]"
                 >
+                  <!-- Day divider above the first reply of each calendar day, so a thread read
+                       long after the fact still says when it happened. -->
+                  <div v-if="daySeparators.get(item.id)" class="relative my-2 flex items-center justify-center">
+                    <div class="absolute inset-x-2 top-1/2 h-px bg-border" />
+                    <span class="relative rounded-full border bg-background px-2.5 py-0.5 text-[11px] font-medium text-muted-foreground">
+                      {{ daySeparators.get(item.id) }}
+                    </span>
+                  </div>
+
                   <MessageItem
                     :message="item"
                     :current-user-id="user?.id ?? null"

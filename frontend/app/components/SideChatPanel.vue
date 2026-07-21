@@ -33,6 +33,9 @@ const {
   send, edit, remove, toggleReaction, togglePin, toggleDecision,
   subscribe, unsubscribe,
 } = useSideChatMessages()
+
+// Which messages open a new calendar day, and the label to print above them.
+const daySeparators = useDaySeparators(messages)
 const {
   label: typingLabel,
   notifyTyping,
@@ -414,8 +417,17 @@ function relTime(iso: string) {
                 <DynamicScrollerItem
                   :item="item"
                   :active="active"
-                  :size-dependencies="[item.body, item.reply_to, item.started_thread, item.edited, item.attachments, item.reactions, item.comments, item.link_previews, item.pinned, item.decided]"
+                  :size-dependencies="[item.body, item.reply_to, item.started_thread, item.edited, item.attachments, item.reactions, item.comments, item.link_previews, item.pinned, item.decided, daySeparators.get(item.id)]"
                 >
+                  <!-- Day divider above the first message of each calendar day, matching the
+                       main timeline so a side chat read later keeps its bearings. -->
+                  <div v-if="daySeparators.get(item.id)" class="relative my-2 flex items-center justify-center">
+                    <div class="absolute inset-x-2 top-1/2 h-px bg-border" />
+                    <span class="relative rounded-full border bg-background px-2.5 py-0.5 text-[11px] font-medium text-muted-foreground">
+                      {{ daySeparators.get(item.id) }}
+                    </span>
+                  </div>
+
                   <MessageItem
                     :message="item"
                     :current-user-id="user?.id ?? null"
