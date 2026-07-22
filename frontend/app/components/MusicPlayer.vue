@@ -31,10 +31,14 @@ import { Button } from '~/components/ui/button'
  */
 const props = defineProps<{ widget: Widget, docked?: boolean }>()
 
-const { $youtube, $spotify } = useNuxtApp() as any
+const { $youtube } = useNuxtApp() as any
 const { action } = useWidgets()
 const { isPinned, toggle: togglePin, refresh: refreshPinned, hasJoined, markJoined } = useMusicPin()
-const { status: spotifyStatus, canUseSpotify, ensureLoaded, connect: connectSpotify, getToken } = useSpotifyAuth()
+const { status: spotifyStatus, canUseSpotify, ensureLoaded, connect: connectSpotify } = useSpotifyAuth()
+// The Spotify SDK lives in an app-wide singleton so its device survives the pin hand-off
+// (a rebuilt player registers a fresh device and 404s against its own stale id). See the
+// composable for the full story; this component just drives it.
+const spotify = useSpotifyEngine()
 
 const state = computed(() => props.widget.state as MusicState)
 const queue = computed<MusicTrack[]>(() => state.value.queue ?? [])
@@ -76,19 +80,10 @@ const blocked = ref(false)
 let stalledTicks = 0
 
 // --- engine selection ---------------------------------------------------
-// Spotify's SDK reported this account can't stream (not Premium) — stop offering it.
-const spAccountError = ref(false)
-// The account *can* stream, but its token can't — the SDK rejected auth, or a playback call
-// came back 401/403. Almost always a stale link: the token was minted before the current
-// scope set, so a full re-consent (reconnect) is what fixes it. Fall back to YouTube and
-// surface a "Reconnect Spotify" prompt until they do.
-const spAuthError = ref(false)
-// The SDK's device_id isn't playable for this token even after a transfer — a 404 that
-// survives the retry. Usually a ghost/stale device from an account or session mismatch; a
-// reconnect re-registers a fresh one. Fall back to YouTube instead of looping the 404.
-const spDeviceError = ref(false)
+// The Spotify failure modes (not-Premium, rejected token, unplayable device) live on the
+// shared engine now, so every mounted player agrees on whether Spotify is usable.
 const spotifyEligible = computed(() =>
-  canUseSpotify.value && !spAccountError.value && !spAuthError.value && !spDeviceError.value
+  canUseSpotify.value && !spotify.accountError.value && !spotify.authError.value && !spotify.deviceError.value
   && !!current.value?.spotifyUri && (state.value.speed ?? 1) === 1,
 )
 // Which engine actually plays for *this* viewer right now.
@@ -101,15 +96,7 @@ let ytReady = false
 let loadedVideoId: string | null = null
 const reportedDuration = new Set<string>()
 
-// --- Spotify engine -----------------------------------------------------
-let sp: any = null
-let spReady = false
-let spDeviceId: string | null = null
-let loadedUri: string | null = null
-let spState: { position: number, duration: number, paused: boolean } | null = null
-let spLastPos = 0
-const spEndedFor = new Set<string>()
-let spTokenCache: { token: string, exp: number } | null = null
+// --- Spotify engine: driven through the app-wide singleton (see `spotify` above) ---
 
 let ticker: ReturnType<typeof setInterval> | null = null
 const displayTime = ref(0)
@@ -176,117 +163,24 @@ function idleYouTube() {
   if (ytReady && yt && loadedVideoId) yt.pauseVideo?.()
 }
 
-async function syncSpotify() {
-  await ensureSpotifyPlayer()
-  if (!spReady || !sp || !spDeviceId || !current.value?.spotifyUri) return
-
-  if (loadedUri !== current.value.spotifyUri) {
-    loadedUri = current.value.spotifyUri
-    spEndedFor.delete(current.value.id)
-    await startSpotifyTrack(current.value.spotifyUri, targetPosition())
-    return
-  }
-
-  // Coarse reconcile off the last polled state (getCurrentState is async — see tick()).
-  const cur = spState
-  if (isPlaying.value) {
-    if (cur?.paused) sp.resume()
-    if (cur && Math.abs(cur.position - targetPosition()) > 2) sp.seek(Math.round(targetPosition() * 1000))
-  } else if (cur && !cur.paused) {
-    sp.pause()
-  }
+function syncSpotify() {
+  if (!current.value?.spotifyUri) return
+  void spotify.reconcile(current.value.spotifyUri, current.value.id, targetPosition(), isPlaying.value)
 }
 
 function idleSpotify(hard = false) {
-  if (sp && spReady && loadedUri) {
-    sp.pause?.()
-    if (hard) loadedUri = null
-  }
-}
-
-async function ensureSpotifyPlayer() {
-  if (sp || !canUseSpotify.value) return
-  const Spotify = await $spotify.ready()
-  sp = new Spotify.Player({
-    name: 'Side Chat',
-    // Share the one cached token with the playback calls below — the SDK registers its
-    // device under whatever token this returns, so if the two diverged (e.g. after relinking
-    // a different account) the device would 404. One source keeps them on one identity.
-    getOAuthToken: (cb: (t: string) => void) => { cachedSpotifyToken().then(t => t && cb(t)) },
-    volume: (muted.value ? 0 : volume.value) / 100,
-  })
-  sp.addListener('ready', ({ device_id }: any) => { spDeviceId = device_id; spReady = true; sync() })
-  sp.addListener('not_ready', () => { spReady = false })
-  sp.addListener('player_state_changed', (st: any) => {
-    if (st) spState = { position: st.position / 1000, duration: st.duration / 1000, paused: st.paused }
-  })
-  // The decisive "you can't stream" signal — free accounts land here. Fall back for good.
-  sp.addListener('account_error', () => { spAccountError.value = true; idleSpotify(true); sync() })
-  // The token was rejected outright — needs a fresh consent, not a refresh. Prompt reconnect.
-  sp.addListener('authentication_error', () => { spReady = false; spAuthError.value = true })
-  sp.connect()
-}
-
-async function startSpotifyTrack(uri: string, posSec: number) {
-  const token = await cachedSpotifyToken()
-  if (!token || !spDeviceId) return
-  const auth = { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }
-  const play = () => $fetch(`https://api.spotify.com/v1/me/player/play?device_id=${spDeviceId}`, {
-    method: 'PUT',
-    headers: auth,
-    body: { uris: [uri], position_ms: Math.round(posSec * 1000) },
-  })
-  try {
-    await play()
-  } catch (err) {
-    // A rejected token (stale scopes) — fall back and prompt a reconnect, don't retry.
-    if (isAuthError(err)) { spAuthError.value = true; loadedUri = null; return }
-    // A just-`ready` SDK device is registered but not yet the *active* device, so the first
-    // /play can 404 ("Device not found") — deployed latency loses the race localhost wins.
-    // Activate it with a transfer, then retry once. If that still fails, let the next sync try.
-    try {
-      await $fetch('https://api.spotify.com/v1/me/player', {
-        method: 'PUT',
-        headers: auth,
-        body: { device_ids: [spDeviceId], play: false },
-      })
-      await new Promise(r => setTimeout(r, 400))
-      await play()
-    } catch (err2) {
-      // Still failing after activating the device. Stop hammering Spotify — fall back to
-      // YouTube and flag it so a reconnect (fresh device/consent) is offered.
-      if (isAuthError(err2)) spAuthError.value = true
-      else spDeviceError.value = true
-      loadedUri = null
-      return
-    }
-  }
-  if (!isPlaying.value) setTimeout(() => sp?.pause?.(), 300)
-}
-
-// 401 (token expired/invalid) or 403 (insufficient scope) from a playback call — the link
-// is there but the token can't act. ofetch surfaces the code on the thrown error.
-function isAuthError(err: any): boolean {
-  const status = err?.status ?? err?.statusCode ?? err?.response?.status
-  return status === 401 || status === 403
-}
-
-async function cachedSpotifyToken(): Promise<string | null> {
-  if (spTokenCache && spTokenCache.exp > Date.now() + 5000) return spTokenCache.token
-  const t = await getToken()
-  if (t) spTokenCache = { token: t, exp: Date.now() + 50 * 60 * 1000 }
-  return t
+  spotify.idle(hard)
 }
 
 // ---- ticker: progress readout + end-of-track detection for the active engine ----
 function tick() {
-  if (engine.value === 'spotify' && joined.value && sp) {
-    sp.getCurrentState?.().then((st: any) => {
+  if (engine.value === 'spotify' && joined.value) {
+    void spotify.poll().then((st) => {
       if (!st) return
-      spState = { position: st.position / 1000, duration: st.duration / 1000, paused: st.paused }
-      setPosition(spState.position)
-      duration.value = spState.duration || current.value?.duration || 0
-      detectSpotifyEnd(spState)
+      setPosition(st.position)
+      duration.value = st.duration || current.value?.duration || 0
+      const ended = spotify.takeEndedTrack(current.value?.id)
+      if (ended) void report('ended', { id: ended })
     })
     return
   }
@@ -305,20 +199,6 @@ function tick() {
 function setPosition(pos: number) {
   displayTime.value = pos
   sampleClock(pos)
-}
-
-// Spotify plays a single uri with no "up next", so it just stops at the end. Detect that
-// (near the end while playing, or paused right after) and ask the room to advance — once.
-function detectSpotifyEnd(st: { position: number, duration: number, paused: boolean }) {
-  const id = current.value?.id
-  if (!id || !st.duration || spEndedFor.has(id)) return
-  if (!st.paused) spLastPos = st.position
-  const nearEnd = st.duration - st.position < 1.2
-  const stoppedAtEnd = st.paused && spLastPos > 0 && st.duration - spLastPos < 2.5
-  if ((!st.paused && nearEnd) || stoppedAtEnd) {
-    spEndedFor.add(id)
-    void report('ended', { id })
-  }
 }
 
 // PLAYING (1) and BUFFERING (3) are the healthy states; anything else while the room is
@@ -358,16 +238,15 @@ async function ensureYouTube() {
 function applyVolume() {
   const v = muted.value ? 0 : volume.value
   if (ytReady) yt?.setVolume?.(v)
-  if (spReady) sp?.setVolume?.(v / 100)
+  spotify.setVolume(v)
 }
 
 function joinListening() {
   markJoined(props.widget.id)
   blocked.value = false
   loadedVideoId = null
-  loadedUri = null
   stalledTicks = 0
-  ensureSpotifyPlayer()
+  spotify.ensure()
   sync()
   // Inside the click, so the gesture is still the browser's reason to allow sound. sync()
   // has just reloaded the video; nudging play covers the case where it only cued it.
@@ -512,20 +391,17 @@ async function onConnectSpotify() {
   finally { linkingSpotify.value = false }
 }
 
-// Re-consent a stale link (see spAuthError). connect() re-runs the OAuth popup, minting a
-// token with today's scopes; then we tear down the errored player so a fresh token and
-// device register cleanly, and hand playback back to Spotify.
+// Re-consent a stale link (see the engine's authError). connect() re-runs the OAuth popup,
+// minting a token with today's scopes; then we tear the errored player down so a fresh token
+// and device register cleanly, and hand playback back to Spotify.
 const reconnecting = ref(false)
 async function onReconnectSpotify() {
   if (reconnecting.value) return
   reconnecting.value = true
   try {
     await connectSpotify()
-    spAuthError.value = false
-    spDeviceError.value = false
-    try { sp?.disconnect?.() } catch { /* already gone */ }
-    sp = null; spReady = false; spDeviceId = null; loadedUri = null; spTokenCache = null
-    if (joined.value) { await ensureSpotifyPlayer(); sync() }
+    spotify.teardown()
+    if (joined.value) { await spotify.ensure(); sync() }
   }
   finally { reconnecting.value = false }
 }
@@ -563,8 +439,8 @@ const spotifyOffer = computed(() =>
 // A recoverable Spotify failure a reconnect can fix — a rejected token or an unplayable
 // (ghost/mismatched) device. Drives the auto "Reconnect" banner and its wording.
 const reconnectPrompt = computed(() =>
-  spAuthError.value ? 'Spotify needs reconnecting — click to fix'
-    : spDeviceError.value ? 'Spotify device unavailable — reconnect to fix'
+  spotify.authError.value ? 'Spotify needs reconnecting — click to fix'
+    : spotify.deviceError.value ? 'Spotify device unavailable — reconnect to fix'
       : null,
 )
 
@@ -574,7 +450,10 @@ const syncKey = computed(() =>
 watch(syncKey, () => sync())
 watch([volume, muted], applyVolume)
 // If the link status flips (just connected / went Premium), re-evaluate the engine.
-watch(canUseSpotify, () => { if (joined.value) { ensureSpotifyPlayer(); sync() } })
+watch(canUseSpotify, () => { if (joined.value) { spotify.ensure(); sync() } })
+// The shared player may connect (or already be connected) after this component mounts — its
+// `ready` listener only updates refs, so react here to seek it to the room and set volume.
+watch(spotify.ready, (on: boolean) => { if (on) { applyVolume(); sync() } })
 
 onMounted(() => {
   ensureLoaded()
@@ -586,16 +465,21 @@ onMounted(() => {
 onBeforeUnmount(() => {
   if (ticker) clearInterval(ticker)
   if (raf !== null) cancelAnimationFrame(raf)
+  // YouTube's iframe dies with the component (a pinned card gets a fresh one in the dock).
   try { yt?.destroy?.() } catch { /* gone */ }
-  try { sp?.disconnect?.() } catch { /* gone */ }
-  yt = null; sp = null
+  yt = null
+  // The Spotify player is the shared singleton — never disconnect it here, or the pin
+  // hand-off would tear down the very device it exists to preserve. Just pause it when this
+  // player is going away *without* being pinned (navigating off a card): the sound should
+  // stop. A pin hand-off leaves it playing for the dock to pick up seamlessly.
+  if (!isPinned(props.widget.id)) spotify.idle()
 })
 </script>
 
 <template>
   <div
-    class="w-full overflow-hidden rounded-xl border bg-gradient-to-b from-muted/50 to-muted/20 shadow-sm"
-    :class="docked ? 'bg-background' : 'mt-1.5 max-w-md'"
+    class="w-full overflow-hidden"
+    :class="docked ? 'bg-transparent' : 'mt-1.5 max-w-md rounded-xl border bg-gradient-to-b from-muted/50 to-muted/20 shadow-sm'"
   >
     <div class="flex items-center gap-1.5 border-b bg-background/40 px-3 py-1.5 text-xs font-semibold uppercase tracking-wide text-primary">
       <ListMusic class="h-3.5 w-3.5" /> Music
