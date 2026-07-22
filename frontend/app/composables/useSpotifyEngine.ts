@@ -1,3 +1,5 @@
+import type { Ref } from 'vue'
+
 /**
  * The Spotify Web Playback SDK engine, held as one app-wide singleton.
  *
@@ -15,6 +17,7 @@
  */
 
 // --- the singleton, at module scope so it outlives every component ---
+// Non-reactive, client-only bits (the SDK never exists on the server), safe at module scope.
 let player: any = null
 let creating: Promise<void> | null = null
 let $spotify: any = null
@@ -22,16 +25,30 @@ let getTokenFn: (() => Promise<string | null>) | null = null
 let canUseRef: { value: boolean } | null = null
 let tokenCache: { token: string, exp: number } | null = null
 
-const ready = ref(false)
-const deviceId = ref<string | null>(null)
-const playbackState = ref<{ position: number, duration: number, paused: boolean } | null>(null)
+// The reactive truth is read inside SSR-rendered computeds (spotifyEligible, reconnectPrompt),
+// so it must be created with useState, not a module-scope ref: useState is per-request on the
+// server (no cross-request pollution) and a stable per-tab singleton on the client — which is
+// exactly the "one engine per tab" we want, and it survives dev-server hot reloads cleanly.
+// Captured into these module vars on the first useSpotifyEngine() call so the helpers below —
+// which live outside any component — can reach it.
+let ready: Ref<boolean>
+let deviceId: Ref<string | null>
+let playbackState: Ref<{ position: number, duration: number, paused: boolean } | null>
+let accountError: Ref<boolean>
+let authError: Ref<boolean>
+let deviceError: Ref<boolean>
 
-// The SDK reported this account can't stream (not Premium). Fall back to YouTube for good.
-const accountError = ref(false)
-// The token was rejected outright (stale scopes) — needs a fresh consent, not a refresh.
-const authError = ref(false)
-// The device 404s even after a transfer — a ghost/mismatched device. A reconnect re-registers.
-const deviceError = ref(false)
+function bindState() {
+  // The SDK reported this account can't stream (not Premium) — fall back to YouTube for good.
+  accountError ??= useState('spotify:accountError', () => false)
+  // The token was rejected outright (stale scopes) — needs a fresh consent, not a refresh.
+  authError ??= useState('spotify:authError', () => false)
+  // The device 404s even after a transfer — a ghost/mismatched device; a reconnect re-registers.
+  deviceError ??= useState('spotify:deviceError', () => false)
+  ready ??= useState('spotify:ready', () => false)
+  deviceId ??= useState<string | null>('spotify:deviceId', () => null)
+  playbackState ??= useState<{ position: number, duration: number, paused: boolean } | null>('spotify:playbackState', () => null)
+}
 
 // What uri the singleton currently has loaded. Module scope on purpose: a fresh MusicPlayer
 // mount must NOT restart a track the shared player is already playing.
@@ -243,6 +260,8 @@ function teardown(): void {
 export function useSpotifyEngine() {
   const nuxt = useNuxtApp() as any
   const { canUseSpotify, getToken } = useSpotifyAuth()
+  // useState must run inside the Nuxt context — do it here, once, before any helper reads it.
+  bindState()
   // Capture the per-tab dependencies once; useState/plugins hand back stable references.
   if (!$spotify) $spotify = nuxt.$spotify
   getTokenFn = getToken
