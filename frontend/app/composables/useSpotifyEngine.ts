@@ -91,37 +91,80 @@ async function ensure(): Promise<void> {
   finally { creating = null }
 }
 
+/**
+ * Ask Spotify which device is *actually* ours right now.
+ *
+ * The SDK's `ready` device_id can desync from what Spotify has registered (a stale/ghost id
+ * after a reconnect), and playing to that id 404s no matter how many times we reconnect. The
+ * live /devices list is the source of truth: prefer the entry that matches our SDK id, else
+ * fall back to our named device. Returns null if neither is present.
+ */
+async function resolveDeviceId(token: string): Promise<string | null> {
+  try {
+    const res: any = await $fetch('https://api.spotify.com/v1/me/player/devices', {
+      headers: { Authorization: `Bearer ${token}` },
+    })
+    const devices: any[] = res?.devices ?? []
+    return devices.find(d => d.id === deviceId.value)?.id
+      ?? devices.find(d => d.name === 'Side Chat')?.id
+      ?? null
+  } catch {
+    return null
+  }
+}
+
 async function start(uri: string, posSec: number, wantPlaying: boolean): Promise<void> {
   const token = await cachedToken()
   if (!token || !deviceId.value) return
   const auth = { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }
-  const play = () => $fetch(`https://api.spotify.com/v1/me/player/play?device_id=${deviceId.value}`, {
+  const playTo = (id: string) => $fetch(`https://api.spotify.com/v1/me/player/play?device_id=${id}`, {
     method: 'PUT',
     headers: auth,
     body: { uris: [uri], position_ms: Math.round(posSec * 1000) },
   })
+  const transferTo = (id: string) => $fetch('https://api.spotify.com/v1/me/player', {
+    method: 'PUT',
+    headers: auth,
+    body: { device_ids: [id], play: false },
+  })
+  const sleep = (ms: number) => new Promise(r => setTimeout(r, ms))
+
   try {
-    await play()
+    await playTo(deviceId.value)
   } catch (err) {
     // A rejected token (stale scopes) — fall back and prompt a reconnect, don't retry.
     if (isAuthError(err)) { authError.value = true; loadedUri = null; return }
     // A just-`ready` SDK device is registered but not yet the *active* device, so the first
     // /play can 404 ("Device not found"). Activate it with a transfer, then retry once.
     try {
-      await $fetch('https://api.spotify.com/v1/me/player', {
-        method: 'PUT',
-        headers: auth,
-        body: { device_ids: [deviceId.value], play: false },
-      })
-      await new Promise(r => setTimeout(r, 400))
-      await play()
+      await transferTo(deviceId.value)
+      await sleep(400)
+      await playTo(deviceId.value)
     } catch (err2) {
-      // Still failing after activating the device. Stop hammering Spotify — the caller falls
-      // back to YouTube and offers a reconnect (fresh device/consent).
-      if (isAuthError(err2)) authError.value = true
-      else deviceError.value = true
-      loadedUri = null
-      return
+      if (isAuthError(err2)) { authError.value = true; loadedUri = null; return }
+      // Still 404ing after a transfer: the SDK id has desynced from what Spotify actually
+      // has. Resolve the live device and try *that* — this is what a reconnect alone can't
+      // fix, because reconnecting just mints another mismatched id.
+      const live = await resolveDeviceId(token)
+      if (live && live !== deviceId.value) {
+        deviceId.value = live
+        try {
+          await transferTo(live)
+          await sleep(400)
+          await playTo(live)
+        } catch (err3) {
+          if (isAuthError(err3)) authError.value = true
+          else deviceError.value = true
+          loadedUri = null
+          return
+        }
+      } else {
+        // The device genuinely isn't in Spotify's list (or is the same dead id) — give up and
+        // let the caller fall back to YouTube and offer a reconnect.
+        deviceError.value = true
+        loadedUri = null
+        return
+      }
     }
   }
   if (!wantPlaying) setTimeout(() => player?.pause?.(), 300)
