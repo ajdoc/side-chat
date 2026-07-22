@@ -29,9 +29,15 @@ export function useSpotifyAuth() {
     if (!loaded.value) await refreshStatus()
   }
 
-  /** Open the Spotify authorisation popup; resolves once it closes, status refreshed. */
-  async function connect(): Promise<boolean> {
-    const { url } = await api<{ url: string }>('/api/spotify/connect')
+  /**
+   * Open the Spotify authorisation popup; resolves once it closes, status refreshed.
+   * `reconnect` forces Spotify's approval screen so a wedged/under-scoped grant is replaced
+   * with a fresh, fully-scoped token rather than silently reusing the broken one.
+   */
+  async function connect(reconnect = false): Promise<boolean> {
+    const { url } = await api<{ url: string }>('/api/spotify/connect', {
+      query: reconnect ? { reconnect: 1 } : undefined,
+    })
     const popup = window.open(url, 'spotify-link', 'width=480,height=760')
 
     return new Promise((resolve) => {

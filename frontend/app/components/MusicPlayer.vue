@@ -34,7 +34,7 @@ const props = defineProps<{ widget: Widget, docked?: boolean }>()
 const { $youtube } = useNuxtApp() as any
 const { action } = useWidgets()
 const { isPinned, toggle: togglePin, refresh: refreshPinned, hasJoined, markJoined } = useMusicPin()
-const { status: spotifyStatus, canUseSpotify, ensureLoaded, connect: connectSpotify } = useSpotifyAuth()
+const { status: spotifyStatus, ensureLoaded, connect: connectSpotify } = useSpotifyAuth()
 // The Spotify SDK lives in an app-wide singleton so its device survives the pin hand-off
 // (a rebuilt player registers a fresh device and 404s against its own stale id). See the
 // composable for the full story; this component just drives it.
@@ -85,10 +85,15 @@ const blocked = ref(false)
 let stalledTicks = 0
 
 // --- engine selection ---------------------------------------------------
+// Try Spotify for anyone who has *linked* an account, and let the SDK be the judge of whether
+// it can actually stream — it fires `account_error` for non-Premium accounts, which demotes
+// them to YouTube. We deliberately don't gate on the backend's stored `premium` flag: that's
+// read once from /me at link time and never refreshed, so a single failed call (a timeout, a
+// missing scope) permanently — and wrongly — locks a real Premium listener out of Spotify.
 // The Spotify failure modes (not-Premium, rejected token, unplayable device) live on the
-// shared engine now, so every mounted player agrees on whether Spotify is usable.
+// shared engine, so every mounted player agrees on whether Spotify is usable.
 const spotifyEligible = computed(() =>
-  canUseSpotify.value && !spotify.accountError.value && !spotify.authError.value && !spotify.deviceError.value
+  spotifyStatus.value.linked && !spotify.accountError.value && !spotify.authError.value && !spotify.deviceError.value
   && !!current.value?.spotifyUri && (state.value.speed ?? 1) === 1,
 )
 // Which engine actually plays for *this* viewer right now.
@@ -419,7 +424,7 @@ async function onReconnectSpotify() {
   if (reconnecting.value) return
   reconnecting.value = true
   try {
-    await connectSpotify()
+    await connectSpotify(true) // force the approval screen — replace the wedged grant
     spotify.teardown()
     if (joined.value) { await spotify.ensure(); sync() }
   }
@@ -451,11 +456,14 @@ function fmt(secs: number | null | undefined): string {
 
 const loopIcon = computed(() => (state.value.loop === 'track' ? Repeat1 : Repeat))
 // Show a "connect for the real track" nudge when this track *could* be Spotify but isn't for us.
-const spotifyOffer = computed(() =>
-  !!current.value?.spotifyUri && !canUseSpotify.value
-    ? (spotifyStatus.value.linked ? 'premium' : 'connect')
-    : null,
-)
+// The "Premium required" line is driven by the SDK's account_error — the authority on whether
+// the account can stream — not the backend's stored flag, so a genuine Premium listener whose
+// flag never synced is never wrongly told to use YouTube.
+const spotifyOffer = computed(() => {
+  if (!current.value?.spotifyUri) return null
+  if (!spotifyStatus.value.linked) return 'connect'
+  return spotify.accountError.value ? 'premium' : null
+})
 // A recoverable Spotify failure a reconnect can fix — a rejected token or an unplayable
 // (ghost/mismatched) device. Drives the auto "Reconnect" banner and its wording.
 const reconnectPrompt = computed(() =>
@@ -469,8 +477,8 @@ const syncKey = computed(() =>
 )
 watch(syncKey, () => sync())
 watch([volume, muted], applyVolume)
-// If the link status flips (just connected / went Premium), re-evaluate the engine.
-watch(canUseSpotify, () => { if (joined.value) { spotify.ensure(); sync() } })
+// If the link status flips (just connected / reconnected), re-evaluate the engine.
+watch(() => spotifyStatus.value.linked, () => { if (joined.value) { spotify.ensure(); sync() } })
 // The shared player may connect (or already be connected) after this component mounts — its
 // `ready` listener only updates refs, so react here to seek it to the room and set volume.
 watch(spotify.ready, (on: boolean) => { if (on) { applyVolume(); sync() } })

@@ -26,7 +26,8 @@ class SpotifyController extends Controller
             return response()->json(['message' => 'Spotify is not configured.'], 422);
         }
 
-        return response()->json(['url' => $this->spotify->authorizeUrl($request->user())]);
+        // Reconnect forces the approval screen so a wedged/under-scoped grant is actually replaced.
+        return response()->json(['url' => $this->spotify->authorizeUrl($request->user(), $request->boolean('reconnect'))]);
     }
 
     /** Where Spotify sends the browser back to. Public — the encrypted state is the identity. */

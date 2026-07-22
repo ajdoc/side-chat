@@ -31,8 +31,16 @@ class SpotifyOAuth
     /** Everything the Web Playback SDK + playback control needs; nothing more. */
     private const SCOPES = 'streaming user-read-email user-read-private user-read-playback-state user-modify-playback-state';
 
-    /** The URL to send a user to so they can authorise the link. */
-    public function authorizeUrl(User $user): string
+    /**
+     * The URL to send a user to so they can authorise the link.
+     *
+     * `forceConsent` shows Spotify's approval screen even for a returning user. Reconnect uses
+     * it: with `show_dialog=false` an already-approved user can be bounced straight back with
+     * the *same* grant, so a token that's missing a scope (or wedged) never actually gets
+     * replaced — which looks exactly like "reconnect does nothing". Forcing the dialog mints a
+     * fresh token carrying today's full scope set.
+     */
+    public function authorizeUrl(User $user, bool $forceConsent = false): string
     {
         return self::AUTHORIZE.'?'.http_build_query([
             'client_id' => $this->clientId(),
@@ -42,7 +50,7 @@ class SpotifyOAuth
             // Encrypted so the callback can trust which user it belongs to, with a timestamp
             // so a stale/leaked link can't be replayed days later.
             'state' => Crypt::encryptString($user->id.'|'.now()->timestamp),
-            'show_dialog' => 'false',
+            'show_dialog' => $forceConsent ? 'true' : 'false',
         ]);
     }
 
@@ -130,6 +138,13 @@ class SpotifyOAuth
         }
 
         $this->store($user, $res->json());
+
+        // Re-read the profile so `spotify_product` self-heals: it's set once at link time, and
+        // if that first /me call failed (a prod timeout, a transient error) the user is left
+        // wrongly flagged non-Premium forever. A refresh happens ~hourly, so this converges.
+        if ($user->spotify_product !== 'premium') {
+            $this->syncProfile($user);
+        }
 
         return $user->spotify_access_token;
     }

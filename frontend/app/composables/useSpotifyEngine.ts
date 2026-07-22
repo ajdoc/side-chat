@@ -22,7 +22,10 @@ let player: any = null
 let creating: Promise<void> | null = null
 let $spotify: any = null
 let getTokenFn: (() => Promise<string | null>) | null = null
-let canUseRef: { value: boolean } | null = null
+// Whether this viewer has *linked* Spotify at all — the gate for building the player. We do
+// not require the backend's "premium" flag here: the SDK itself rejects non-Premium accounts
+// with account_error, and that's the authority (see MusicPlayer.spotifyEligible).
+let linkedRef: { value: boolean } | null = null
 let tokenCache: { token: string, exp: number } | null = null
 
 // The reactive truth is read inside SSR-rendered computeds (spotifyEligible, reconnectPrompt),
@@ -74,7 +77,7 @@ async function cachedToken(): Promise<string | null> {
 }
 
 async function ensure(): Promise<void> {
-  if (player || !canUseRef?.value) return
+  if (player || !linkedRef?.value) return
   if (creating) return creating
   creating = (async () => {
     const Spotify = await $spotify.ready()
@@ -259,13 +262,13 @@ function teardown(): void {
 
 export function useSpotifyEngine() {
   const nuxt = useNuxtApp() as any
-  const { canUseSpotify, getToken } = useSpotifyAuth()
+  const { status, getToken } = useSpotifyAuth()
   // useState must run inside the Nuxt context — do it here, once, before any helper reads it.
   bindState()
   // Capture the per-tab dependencies once; useState/plugins hand back stable references.
   if (!$spotify) $spotify = nuxt.$spotify
   getTokenFn = getToken
-  canUseRef = canUseSpotify
+  linkedRef = computed(() => status.value.linked)
 
   return {
     ready,
