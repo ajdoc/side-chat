@@ -7,11 +7,15 @@
 export function useWidgets() {
   const api = useApi()
 
-  async function action(widgetId: number, action: string, payload: Record<string, unknown> = {}) {
-    await api(`/api/widgets/${widgetId}/action`, {
+  // Returns an actor-only note when the action failed softly (a quota'd search, an unreadable
+  // link) — the caller surfaces it, since the button that fired this has no chat line. Most
+  // actions just change state and resolve to null.
+  async function action(widgetId: number, action: string, payload: Record<string, unknown> = {}): Promise<string | null> {
+    const res = await api<{ reply?: string } | null>(`/api/widgets/${widgetId}/action`, {
       method: 'POST',
       body: { action, payload },
     })
+    return res?.reply ?? null
   }
 
   return { action }

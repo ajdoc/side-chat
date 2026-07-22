@@ -125,6 +125,40 @@ it('resolves a Spotify track from its embed page, keeping its name and art', fun
         ->and($track['duration'])->toBe(213);
 });
 
+it('still seats a Spotify track for Premium playback when the YouTube search is out of quota', function () {
+    config(['services.youtube.key' => 'test-key']);
+    Http::fake([
+        'open.spotify.com/embed/track/*' => Http::response(spotifyEmbed([
+            'title' => 'Di Na Babalik',
+            'artists' => [['name' => 'Leanne & Naara']],
+            'duration' => 203000,
+            'uri' => 'spotify:track:7gVqH4q3t5YotpHeCwzKhx',
+        ])),
+        // The Data API is over its daily quota — every search 403s.
+        'www.googleapis.com/youtube/v3/search*' => Http::response(
+            ['error' => ['errors' => [['reason' => 'quotaExceeded']]]], 403,
+        ),
+    ]);
+
+    [$user, , $channel] = ownerWithChannel();
+    Passport::actingAs($user);
+
+    $this->postJson("/api/channels/{$channel->id}/messages", [
+        'body' => 'm!p https://open.spotify.com/track/7gVqH4q3t5YotpHeCwzKhx',
+    ])->assertCreated();
+
+    $state = Widget::where('type', 'music')->sole()->state;
+
+    // No YouTube id (the search failed) — but it's seated and playing regardless, because a
+    // Premium listener streams the spotifyUri directly. The whole queue no longer refuses to
+    // start just because the fallback search is unavailable.
+    expect($state['currentIndex'])->toBe(0)
+        ->and($state['status'])->toBe('playing')
+        ->and($state['queue'][0]['videoId'])->toBeNull()
+        ->and($state['queue'][0]['spotifyUri'])->toBe('spotify:track:7gVqH4q3t5YotpHeCwzKhx')
+        ->and($state['queue'][0]['unresolved'] ?? false)->toBeFalse();
+});
+
 it('expands a Spotify playlist from its embed page, resolving only the first track', function () {
     config(['services.youtube.key' => 'test-key']);
     Http::fake([

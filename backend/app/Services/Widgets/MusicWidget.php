@@ -286,8 +286,14 @@ final class MusicWidget implements WidgetHandler
     }
 
     /**
-     * Make sure the track at $index has a playable YouTube videoId, searching for it now if
-     * it's a shell. Returns false (and flags the track) when nothing suitable turns up.
+     * Make the track at $index playable, resolving a shell to a YouTube videoId now if it can.
+     *
+     * A track is playable to *someone* if it has a YouTube id (everyone) or a Spotify uri
+     * (Premium listeners, who stream it directly through the Web Playback SDK). We still try to
+     * find a YouTube match for the shell — that's what non-Spotify listeners hear — but a
+     * Spotify track no longer *depends* on that search succeeding. So when the Data API is out
+     * of quota, a Spotify link still seats and plays for Premium listeners instead of the whole
+     * queue silently refusing to start. Only a track with neither fallback is truly unplayable.
      */
     private function resolveAt(array &$state, int $index): bool
     {
@@ -296,27 +302,37 @@ final class MusicWidget implements WidgetHandler
             return false;
         }
         if (! empty($track['videoId'])) {
-            return true; // already playable (a real YouTube track)
+            return true; // already playable on YouTube (everyone can hear it)
         }
 
+        // Best-effort YouTube match for the shell, so non-Spotify listeners have something.
         $query = $track['query'] ?? trim(($track['artist'] ?? '').' '.($track['title'] ?? ''));
         $result = $query === '' ? ['tracks' => [], 'error' => 'empty'] : $this->resolver->searchMany($query, 1);
         $match = $result['tracks'][0] ?? null;
 
-        if ($match === null) {
-            $state['queue'][$index]['unresolved'] = true; // a client can grey it out
+        if ($match !== null) {
+            $state['queue'][$index]['videoId'] = $match['videoId'];
+            // Keep the shell's own (Spotify) title/artist/art; only borrow a duration if it lacked one.
+            if (empty($state['queue'][$index]['duration'])) {
+                $state['queue'][$index]['duration'] = $match['duration'];
+            }
+            unset($state['queue'][$index]['unresolved']);
 
-            return false;
+            return true;
         }
 
-        $state['queue'][$index]['videoId'] = $match['videoId'];
-        // Keep the shell's own (Spotify) title/artist/art; only borrow a duration if it lacked one.
-        if (empty($state['queue'][$index]['duration'])) {
-            $state['queue'][$index]['duration'] = $match['duration'];
-        }
-        unset($state['queue'][$index]['unresolved']);
+        // No YouTube match (often: search quota exhausted). A Spotify track is still playable
+        // for Premium listeners, so seat it anyway — only YouTube-only listeners miss this one,
+        // and the card tells them why. Anything with no Spotify fallback stays unresolved.
+        if (! empty($track['spotifyUri'])) {
+            unset($state['queue'][$index]['unresolved']);
 
-        return true;
+            return true;
+        }
+
+        $state['queue'][$index]['unresolved'] = true; // a client can grey it out
+
+        return false;
     }
 
     // --- transport ----------------------------------------------------------

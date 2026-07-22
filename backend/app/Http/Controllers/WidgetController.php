@@ -7,6 +7,7 @@ use App\Http\Requests\Widget\WidgetShowRequest;
 use App\Http\Resources\WidgetResource;
 use App\Models\Widget;
 use App\Services\Widgets\WidgetService;
+use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Response;
 
 /**
@@ -28,16 +29,21 @@ class WidgetController extends Controller
         return new WidgetResource($widget);
     }
 
-    public function action(WidgetActionRequest $request, Widget $widget): Response
+    public function action(WidgetActionRequest $request, Widget $widget): Response|JsonResponse
     {
-        $this->widgets->handleAction(
+        $reply = $this->widgets->handleAction(
             $widget,
             $request->user(),
             $request->string('action'),
             $request->array('payload'),
         );
 
-        // The effect is broadcast as WidgetUpdated; the caller just needs the ack.
-        return response()->noContent();
+        // A state change is broadcast as WidgetUpdated — the caller just needs the ack. But an
+        // action can also fail softly (a quota'd search, an unreadable link): the handler hands
+        // back an ephemeral note the caller shows to the actor, since the UI that fired this —
+        // the player's own add field — has no chat line to fall back to.
+        return $reply !== null
+            ? response()->json(['reply' => $reply])
+            : response()->noContent();
     }
 }

@@ -101,8 +101,12 @@ final class YouTubeResolver
             return $this->error('Couldn\'t reach YouTube. Try again in a moment.');
         }
 
+        if (! $res->successful()) {
+            return $this->error($this->apiError($res, 'Couldn\'t search YouTube right now. Try again in a moment.'));
+        }
+
         $ids = [];
-        foreach ($res->successful() ? $res->json('items', []) : [] as $item) {
+        foreach ($res->json('items', []) as $item) {
             $id = data_get($item, 'id.videoId');
             if (is_string($id) && $id !== '') {
                 $ids[] = $id;
@@ -186,7 +190,7 @@ final class YouTubeResolver
         }
 
         if (! $res->successful()) {
-            return $this->error('Couldn\'t read that playlist — is it public?');
+            return $this->error($this->apiError($res, 'Couldn\'t read that playlist — is it public?'));
         }
 
         $ids = [];
@@ -367,6 +371,22 @@ final class YouTubeResolver
         $key = config('services.youtube.key');
 
         return is_string($key) && $key !== '' ? $key : null;
+    }
+
+    /**
+     * Turn a failed Data API response into a message for the actor. The one worth calling out
+     * is the daily quota (403 quotaExceeded/dailyLimitExceeded) — it's not "no results" or a
+     * bad link, it's the whole search engine being down for the day, and it silently takes out
+     * every text search and playlist add until the quota resets. Everything else is transient.
+     */
+    private function apiError(\Illuminate\Http\Client\Response $res, string $fallback): string
+    {
+        $reason = data_get($res->json(), 'error.errors.0.reason');
+        if ($res->status() === 403 && in_array($reason, ['quotaExceeded', 'dailyLimitExceeded'], true)) {
+            return 'YouTube search is out of quota for the day. You can still paste a YouTube or Spotify link to queue it.';
+        }
+
+        return $fallback;
     }
 
     /** @param  array<int, array>  $tracks @return Result */

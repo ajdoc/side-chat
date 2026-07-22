@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { useLocalStorage } from '@vueuse/core'
-import { ArrowDown, ArrowUp, FastForward, ListMusic, Maximize2, Mic2, Pause, Pin, PinOff, Play, Radio, RefreshCw, Repeat, Repeat1, Rewind, Search, Shuffle, SkipBack, SkipForward, Square, Volume2, VolumeX, X } from 'lucide-vue-next'
+import { ArrowDown, ArrowUp, FastForward, ListMusic, Maximize2, Mic2, Pause, Pin, PinOff, Play, Radio, RefreshCw, Repeat, Repeat1, Rewind, Search, Shuffle, SkipBack, SkipForward, Square, TriangleAlert, Volume2, VolumeX, X } from 'lucide-vue-next'
 import type { MusicState, MusicTrack, Widget } from '~/types'
 import { Button } from '~/components/ui/button'
 
@@ -46,9 +46,14 @@ const currentIndex = computed(() => state.value.currentIndex)
 const current = computed<MusicTrack | null>(() =>
   currentIndex.value != null ? queue.value[currentIndex.value] ?? null : null,
 )
+// Everything after the current track — or the whole queue when nothing is seated yet (e.g. a
+// Spotify link whose YouTube match hasn't resolved), so freshly-added tracks are always visible.
 const upcoming = computed(() =>
-  currentIndex.value == null ? [] : queue.value.slice(currentIndex.value + 1),
+  currentIndex.value == null ? queue.value : queue.value.slice(currentIndex.value + 1),
 )
+// Absolute queue index of the i-th "up next" row. With nothing seated (currentIndex null) the
+// list starts at 0; otherwise it starts just after the current track.
+const upcomingIndex = (i: number) => (currentIndex.value ?? -1) + 1 + i
 const isPlaying = computed(() => state.value.status === 'playing')
 const speed = computed(() => state.value.speed ?? 1)
 const pending = computed(() => state.value.pendingSearch ?? null)
@@ -109,9 +114,10 @@ const duration = ref(0)
  * *timeline* folds in. The dock has no timeline behind it, so it resyncs itself — see the
  * note in send().
  */
-async function report(name: string, payload: Record<string, unknown> = {}) {
-  await action(props.widget.id, name, payload)
+async function report(name: string, payload: Record<string, unknown> = {}): Promise<string | null> {
+  const reply = await action(props.widget.id, name, payload)
   if (props.docked) await refreshPinned()
+  return reply
 }
 
 // Where the current track should be *right now*, extrapolating from the server snapshot.
@@ -205,6 +211,10 @@ function setPosition(pos: number) {
 // playing means our sound isn't coming. Give it a couple of seconds — loading a video passes
 // through UNSTARTED legitimately — before admitting it and asking for a click.
 function detectBlocked() {
+  // A Spotify-only track (no YouTube match — e.g. search was out of quota) genuinely can't
+  // play on this engine; that's not a stalled autoplay, and the "connect Spotify" note below
+  // already explains it. Don't nag with a Resume button that wouldn't help.
+  if (!current.value?.videoId) { stalledTicks = 0; blocked.value = false; return }
   const st = yt?.getPlayerState?.()
   if (!isPlaying.value || st === 1 || st === 3) { stalledTicks = 0; blocked.value = false; return }
   if (++stalledTicks >= 6) blocked.value = true
@@ -266,12 +276,19 @@ function onTogglePin() {
 
 // --- transport (drives the shared state for everyone) ---
 const busy = ref(false)
-async function send(name: string, payload: Record<string, unknown> = {}) {
-  if (busy.value) return
+// The last soft failure from an action (a quota'd search, an unreadable link). Actions that
+// mutate state clear it; the add field renders it inline — there's no chat line here.
+const feedback = ref<string | null>(null)
+async function send(name: string, payload: Record<string, unknown> = {}): Promise<string | null> {
+  if (busy.value) return null
   busy.value = true
   // A card in a timeline gets its new state folded back in by useMessages when the
   // broadcast lands; the dock resyncs itself instead. See report().
-  try { await report(name, payload) }
+  try {
+    const reply = await report(name, payload)
+    feedback.value = reply
+    return reply
+  }
   finally { busy.value = false }
 }
 const togglePlay = () => send(isPlaying.value ? 'pause' : 'resume')
@@ -295,9 +312,12 @@ const addQuery = ref('')
 async function addMusic() {
   const q = addQuery.value.trim()
   if (!q) return
-  await send('add', { query: q })
-  addQuery.value = ''
+  const reply = await send('add', { query: q })
+  // Keep the text when it failed so they can tweak and retry; clear it on a clean add.
+  if (!reply) addQuery.value = ''
 }
+// Editing after an error dismisses the stale note.
+watch(addQuery, () => { if (feedback.value) feedback.value = null })
 
 // --- karaoke ------------------------------------------------------------
 // Lyrics are a *view* on playback, not new shared state: every viewer's highlight rides the
@@ -517,6 +537,12 @@ onBeforeUnmount(() => {
         <Button type="submit" size="sm" class="h-8 flex-none" :disabled="busy || !addQuery.trim()">Add</Button>
       </form>
 
+      <!-- Soft failures (a quota'd search, an unreadable link). The add button has no chat
+           line to fall back to, so the note lands here. -->
+      <p v-if="feedback" class="mb-3 -mt-2 flex items-start gap-1 text-[11px] text-amber-600 dark:text-amber-400">
+        <TriangleAlert class="mt-px h-3 w-3 flex-none" /> <span>{{ feedback }}</span>
+      </p>
+
       <!-- Search picker -->
       <div v-if="pending" class="mb-3 rounded-lg border bg-background/60 p-2">
         <div class="mb-1.5 flex items-center gap-1.5 text-xs font-medium">
@@ -682,7 +708,7 @@ onBeforeUnmount(() => {
 
       <!-- Up next -->
       <div v-if="upcoming.length" class="mt-3 border-t pt-2">
-        <p class="mb-1 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">Up next · {{ upcoming.length }}</p>
+        <p class="mb-1 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">{{ current ? 'Up next' : 'In queue' }} · {{ upcoming.length }}</p>
         <ul class="space-y-0.5">
           <li
             v-for="(track, i) in upcoming.slice(0, 20)"
@@ -690,7 +716,7 @@ onBeforeUnmount(() => {
             class="group flex items-center gap-2 rounded px-1 py-1 text-xs hover:bg-muted"
           >
             <span class="w-4 flex-none text-right text-[10px] text-muted-foreground">{{ i + 1 }}</span>
-            <button class="min-w-0 flex-1 text-left" :class="track.unresolved && 'opacity-40'" :title="track.unresolved ? 'Not found on YouTube' : track.title" @click="jump((currentIndex ?? 0) + 1 + i)">
+            <button class="min-w-0 flex-1 text-left" :class="track.unresolved && 'opacity-40'" :title="track.unresolved ? 'Not found on YouTube' : track.title" @click="jump(upcomingIndex(i))">
               <span class="block truncate" :class="track.unresolved && 'line-through'">{{ track.title }}</span>
               <span v-if="track.artist" class="block truncate text-muted-foreground">{{ track.artist }}</span>
             </button>

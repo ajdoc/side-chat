@@ -80,11 +80,12 @@ final class WidgetService
      *
      * @param  array<string, mixed>  $payload
      */
-    public function handleAction(Widget $widget, User $user, string $action, array $payload): void
+    /** @return string|null the actor-only note to surface, when the action produced one */
+    public function handleAction(Widget $widget, User $user, string $action, array $payload): ?string
     {
         $handler = $this->handlerForType($widget->type);
         if ($handler === null) {
-            return;
+            return null;
         }
 
         $outcome = $handler->action($widget, $user, $action, $payload);
@@ -92,6 +93,8 @@ final class WidgetService
             $widget->save();
             broadcast(new WidgetUpdated($widget));
         }
+
+        return $outcome->reply;
     }
 
     /** The channel's widget of this kind, created (with the handler's initial state) on first use. */
