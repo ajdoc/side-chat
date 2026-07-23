@@ -1,10 +1,14 @@
 <?php
 
+use App\Events\VoiceEffectsUpdated;
+use App\Events\VoiceMuteEnforced;
 use App\Events\VoiceParticipantDisconnected;
 use App\Events\VoiceStateUpdated;
 use App\Models\Channel;
+use App\Models\Conversation;
 use App\Models\Message;
 use App\Models\User;
+use App\Models\VoiceEffectAssignment;
 use App\Models\VoiceParticipant;
 use Illuminate\Support\Facades\Event;
 use Laravel\Passport\Passport;
@@ -365,4 +369,346 @@ it('lets either person disconnect the other in a DM', function () {
 
     expect(VoiceParticipant::where('channel_id', $channel->id)->pluck('user_id')->all())
         ->toBe([$a->id]);
+});
+
+/*
+ * Moving somebody else's microphone. Unlike disconnecting — which any member may do, because
+ * it only empties a seat — this reaches a switch on another person's machine, so it stops
+ * with whoever owns the place, and the person it happens to has to be told.
+ */
+it('lets the owner mute a participant and tells that person', function () {
+    [$owner, $server, $channel] = ownerWithVoiceChannel();
+    $member = User::factory()->create();
+    $server->members()->attach($member->id, ['role' => 'member']);
+
+    foreach ([$owner, $member] as $user) {
+        Passport::actingAs($user);
+        $this->postJson("/api/channels/{$channel->id}/voice/join")->assertOk();
+    }
+
+    Event::fake([VoiceMuteEnforced::class, VoiceStateUpdated::class]);
+
+    Passport::actingAs($owner);
+    $this->postJson("/api/channels/{$channel->id}/voice/mute", ['user_id' => $member->id, 'muted' => true])
+        ->assertOk()
+        ->assertJsonPath('applied', true);
+
+    // Written straight away, so nobody's sidebar waits on the target's browser to answer.
+    expect(VoiceParticipant::where('channel_id', $channel->id)->where('user_id', $member->id)->value('muted'))
+        ->toBeTrue();
+
+    Event::assertDispatched(
+        VoiceMuteEnforced::class,
+        fn (VoiceMuteEnforced $e) => $e->target->id === $member->id
+            && $e->channel->id === $channel->id
+            && $e->muted === true,
+    );
+    Event::assertDispatched(VoiceStateUpdated::class);
+});
+
+it('lets the owner unmute someone who muted themselves', function () {
+    [$owner, $server, $channel] = ownerWithVoiceChannel();
+    $member = User::factory()->create();
+    $server->members()->attach($member->id, ['role' => 'member']);
+
+    foreach ([$owner, $member] as $user) {
+        Passport::actingAs($user);
+        $this->postJson("/api/channels/{$channel->id}/voice/join")->assertOk();
+    }
+
+    Passport::actingAs($member);
+    $this->patchJson("/api/channels/{$channel->id}/voice/state", ['muted' => true])->assertOk();
+
+    Event::fake([VoiceMuteEnforced::class]);
+
+    Passport::actingAs($owner);
+    $this->postJson("/api/channels/{$channel->id}/voice/mute", ['user_id' => $member->id, 'muted' => false])
+        ->assertOk()
+        ->assertJsonPath('applied', true);
+
+    expect(VoiceParticipant::where('channel_id', $channel->id)->where('user_id', $member->id)->value('muted'))
+        ->toBeFalse();
+
+    Event::assertDispatched(
+        VoiceMuteEnforced::class,
+        fn (VoiceMuteEnforced $e) => $e->target->id === $member->id && $e->muted === false,
+    );
+});
+
+it('tells the target even when the row already said what the owner is asking for', function () {
+    // The row is only what the server last *heard*. A client that has drifted out of step is
+    // exactly the one that needs the message, so this is not treated as a no-op.
+    [$owner, $server, $channel] = ownerWithVoiceChannel();
+    $member = User::factory()->create();
+    $server->members()->attach($member->id, ['role' => 'member']);
+
+    foreach ([$owner, $member] as $user) {
+        Passport::actingAs($user);
+        $this->postJson("/api/channels/{$channel->id}/voice/join")->assertOk();
+    }
+
+    Event::fake([VoiceMuteEnforced::class]);
+
+    Passport::actingAs($owner);
+    $this->postJson("/api/channels/{$channel->id}/voice/mute", ['user_id' => $member->id, 'muted' => false])
+        ->assertOk()
+        ->assertJsonPath('applied', true);
+
+    Event::assertDispatched(VoiceMuteEnforced::class);
+});
+
+it('refuses to let a plain member mute anyone', function () {
+    [$owner, $server, $channel] = ownerWithVoiceChannel();
+    $member = User::factory()->create();
+    $server->members()->attach($member->id, ['role' => 'member']);
+
+    foreach ([$owner, $member] as $user) {
+        Passport::actingAs($user);
+        $this->postJson("/api/channels/{$channel->id}/voice/join")->assertOk();
+    }
+
+    Passport::actingAs($member);
+    $this->postJson("/api/channels/{$channel->id}/voice/mute", ['user_id' => $owner->id, 'muted' => true])
+        ->assertForbidden();
+
+    expect(VoiceParticipant::where('channel_id', $channel->id)->where('user_id', $owner->id)->value('muted'))
+        ->toBeFalse();
+});
+
+it("lets a group's owner mute someone in its call", function () {
+    [$a, $b] = twoMembers();
+
+    $conversation = Conversation::factory()->group()->withMembers([$a, $b])->create(['owner_id' => $a->id]);
+    $channel = $conversation->load('channel')->channel;
+
+    foreach ([$a, $b] as $user) {
+        Passport::actingAs($user);
+        $this->postJson("/api/channels/{$channel->id}/voice/join")->assertOk();
+    }
+
+    Passport::actingAs($a);
+    $this->postJson("/api/channels/{$channel->id}/voice/mute", ['user_id' => $b->id, 'muted' => true])
+        ->assertOk();
+
+    expect(VoiceParticipant::where('channel_id', $channel->id)->where('user_id', $b->id)->value('muted'))
+        ->toBeTrue();
+});
+
+it('refuses in a DM, which has nobody to be its owner', function () {
+    [$a, $b, $conversation] = dmBetween();
+    $channel = $conversation->channel;
+
+    foreach ([$a, $b] as $user) {
+        Passport::actingAs($user);
+        $this->postJson("/api/channels/{$channel->id}/voice/join")->assertOk();
+    }
+
+    Passport::actingAs($a);
+    $this->postJson("/api/channels/{$channel->id}/voice/mute", ['user_id' => $b->id, 'muted' => true])
+        ->assertForbidden();
+});
+
+it('reports that nothing was applied when the target has already left', function () {
+    [$owner, $server, $channel] = ownerWithVoiceChannel();
+    $member = User::factory()->create();
+    $server->members()->attach($member->id, ['role' => 'member']);
+
+    Passport::actingAs($owner);
+    $this->postJson("/api/channels/{$channel->id}/voice/join")->assertOk();
+
+    $this->postJson("/api/channels/{$channel->id}/voice/mute", ['user_id' => $member->id, 'muted' => true])
+        ->assertOk()
+        ->assertJsonPath('applied', false);
+});
+
+/*
+|--------------------------------------------------------------------------
+| Sharing sound without a picture
+|--------------------------------------------------------------------------
+*/
+
+it('publishes an audio-only share separately from a screen share', function () {
+    [$user, , $channel] = ownerWithVoiceChannel();
+
+    Passport::actingAs($user);
+    $this->postJson("/api/channels/{$channel->id}/voice/join")->assertOk();
+
+    $this->patchJson("/api/channels/{$channel->id}/voice/state", ['audio_sharing' => true])
+        ->assertOk()
+        ->assertJsonPath('data.audio_sharing', true)
+        // The distinction is the point: nobody should be offered a screen to watch.
+        ->assertJsonPath('data.screen_sharing', false);
+});
+
+it('forgets an audio share you died in the middle of', function () {
+    [$user, , $channel] = ownerWithVoiceChannel();
+
+    VoiceParticipant::factory()->create([
+        'channel_id' => $channel->id,
+        'user_id' => $user->id,
+        'audio_sharing' => true,
+    ]);
+
+    Passport::actingAs($user);
+
+    $this->postJson("/api/channels/{$channel->id}/voice/join")
+        ->assertOk()
+        ->assertJsonPath('data.0.audio_sharing', false);
+});
+
+/*
+|--------------------------------------------------------------------------
+| Entrance and exit effects
+|--------------------------------------------------------------------------
+*/
+
+it('hands the effects over on join — the room\'s, and each person\'s', function () {
+    [$owner, $server, $channel] = ownerWithVoiceChannel();
+    $friend = User::factory()->create();
+    $server->members()->attach($friend->id, ['role' => 'member']);
+
+    $channel->update(['join_effect' => 'sparkles', 'leave_effect' => null]);
+    VoiceEffectAssignment::create([
+        'channel_id' => $channel->id,
+        'user_id' => $friend->id,
+        'join_effect' => 'fireworks',
+        'leave_effect' => 'confetti',
+    ]);
+
+    Passport::actingAs($owner);
+
+    // Everything has to be in the browser *before* the door opens, so it all rides the join.
+    $this->postJson("/api/channels/{$channel->id}/voice/join")
+        ->assertOk()
+        ->assertJsonPath('effects.default.join', 'sparkles')
+        ->assertJsonPath('effects.default.leave', null)
+        ->assertJsonPath('effects.people.0.user_id', $friend->id)
+        ->assertJsonPath('effects.people.0.join', 'fireworks')
+        ->assertJsonPath('effects.people.0.leave', 'confetti');
+});
+
+it('lets the owner attach an effect to one person, and tells everyone', function () {
+    Event::fake([VoiceEffectsUpdated::class]);
+
+    [$owner, $server, $channel] = ownerWithVoiceChannel();
+    $friend = User::factory()->create();
+    $server->members()->attach($friend->id, ['role' => 'member']);
+
+    Passport::actingAs($owner);
+
+    $this->patchJson("/api/channels/{$channel->id}/voice/effects", [
+        'user_id' => $friend->id,
+        'join_effect' => 'fireworks',
+        'leave_effect' => null,
+    ])
+        ->assertOk()
+        ->assertJsonPath('data.people.0.user_id', $friend->id)
+        ->assertJsonPath('data.people.0.join', 'fireworks')
+        // One person being singled out says nothing about the room.
+        ->assertJsonPath('data.default.join', null);
+
+    expect(VoiceEffectAssignment::where('channel_id', $channel->id)->where('user_id', $friend->id)->value('join_effect'))
+        ->toBe('fireworks');
+
+    Event::assertDispatched(VoiceEffectsUpdated::class);
+});
+
+it("sets the room's default when no one is named", function () {
+    [$owner, , $channel] = ownerWithVoiceChannel();
+
+    Passport::actingAs($owner);
+
+    $this->patchJson("/api/channels/{$channel->id}/voice/effects", [
+        'join_effect' => 'confetti',
+        'leave_effect' => 'sparkles',
+    ])
+        ->assertOk()
+        ->assertJsonPath('data.default.join', 'confetti')
+        ->assertJsonPath('data.default.leave', 'sparkles')
+        ->assertJsonPath('data.people', []);
+
+    expect($channel->fresh()->join_effect)->toBe('confetti');
+});
+
+it('forgets a person entirely when both their effects are cleared', function () {
+    [$owner, $server, $channel] = ownerWithVoiceChannel();
+    $friend = User::factory()->create();
+    $server->members()->attach($friend->id, ['role' => 'member']);
+
+    VoiceEffectAssignment::create([
+        'channel_id' => $channel->id,
+        'user_id' => $friend->id,
+        'join_effect' => 'fireworks',
+    ]);
+
+    Passport::actingAs($owner);
+
+    // A row saying "nothing" and no row at all behave the same today — they would stop
+    // behaving the same the moment the room's default changed underneath it.
+    $this->patchJson("/api/channels/{$channel->id}/voice/effects", [
+        'user_id' => $friend->id,
+        'join_effect' => null,
+        'leave_effect' => null,
+    ])
+        ->assertOk()
+        ->assertJsonPath('data.people', []);
+
+    expect(VoiceEffectAssignment::where('channel_id', $channel->id)->count())->toBe(0);
+});
+
+it('refuses an effect nobody can draw', function () {
+    [$owner, , $channel] = ownerWithVoiceChannel();
+
+    Passport::actingAs($owner);
+
+    $this->patchJson("/api/channels/{$channel->id}/voice/effects", [
+        'join_effect' => 'airhorn',
+        'leave_effect' => null,
+    ])->assertJsonValidationErrors('join_effect');
+});
+
+it('refuses to decorate somebody who is not a member here', function () {
+    [$owner, , $channel] = ownerWithVoiceChannel();
+    $stranger = User::factory()->create();
+
+    Passport::actingAs($owner);
+
+    $this->patchJson("/api/channels/{$channel->id}/voice/effects", [
+        'user_id' => $stranger->id,
+        'join_effect' => 'fireworks',
+        'leave_effect' => null,
+    ])->assertJsonValidationErrors('user_id');
+
+    expect(VoiceEffectAssignment::count())->toBe(0);
+});
+
+it('keeps the effects with the owner — a member in the call may not attach one', function () {
+    [, $server, $channel] = ownerWithVoiceChannel();
+    $member = User::factory()->create();
+    $server->members()->attach($member->id, ['role' => 'member']);
+
+    Passport::actingAs($member);
+    $this->postJson("/api/channels/{$channel->id}/voice/join")->assertOk();
+
+    $this->patchJson("/api/channels/{$channel->id}/voice/effects", [
+        'user_id' => $member->id,
+        'join_effect' => 'fireworks',
+        'leave_effect' => null,
+    ])->assertForbidden();
+
+    expect(VoiceEffectAssignment::count())->toBe(0);
+
+    // Reading them is another matter: everyone in the call has to know what will play.
+    $this->getJson("/api/channels/{$channel->id}/voice/effects")->assertOk();
+});
+
+it('refuses effects in a chat, which is not a venue with an owner', function () {
+    [$a, , $conversation] = dmBetween();
+
+    Passport::actingAs($a);
+
+    $this->patchJson("/api/channels/{$conversation->channel->id}/voice/effects", [
+        'join_effect' => 'fireworks',
+        'leave_effect' => null,
+    ])->assertForbidden();
 });

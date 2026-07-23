@@ -230,13 +230,13 @@ export interface Message {
 export interface Widget {
   id: number
   channel_id: number
-  type: 'music' | 'kanban' | 'poll' | 'shooter' | 'racing' | 'skribbl'
+  type: 'music' | 'video' | 'kanban' | 'poll' | 'shooter' | 'racing' | 'skribbl'
   /**
    * The live state — present on HTTP responses. Absent when the widget arrives as a
    * *reference* over the socket (WidgetUpdated / a MessageSent card): its full state is
    * too big for Pusher's 10KB event cap, so the client fetches it from `/api/widgets/{id}`.
    */
-  state?: MusicState | KanbanState | PollState | ShooterState | RacingState | SkribblState
+  state?: MusicState | VideoState | KanbanState | PollState | ShooterState | RacingState | SkribblState
   created_at?: string
 }
 
@@ -279,6 +279,84 @@ export interface MusicState {
   /** Radio mode: keep going with a related track when the queue empties. */
   autoplay: boolean
   pendingSearch: MusicSearch | null
+}
+
+/**
+ * Which player a video source needs, decided server-side by VideoResolver. This is the whole
+ * reason the widget can be "universal": the card keeps one player of each kind and shows the
+ * one the current source asks for.
+ *
+ * - `youtube` — the IFrame Player API. Driveable, so the room stays in lockstep.
+ * - `file`    — a plain <video>: an uploaded clip, or a direct link to .mp4/.webm/… Driveable.
+ * - `embed`   — the provider's own iframe (Vimeo, Dailymotion, Twitch, Streamable). Everyone
+ *               starts at the same offset and then it's on its own; a third-party iframe won't
+ *               take a seek from us, and the card says so instead of faking it.
+ */
+export type VideoKind = 'youtube' | 'file' | 'embed'
+
+export interface VideoSource {
+  id: string
+  kind: VideoKind
+  /** The provider's own id — a YouTube video id, a Vimeo id. Null for direct files. */
+  key: string | null
+  /**
+   * What a <video> should open, for `kind: 'file'`. Both local kinds get a short-lived
+   * *signed* URL minted per viewer (neither the disk path nor the attachment id leaves the
+   * server), so don't cache it past a reload. Null when the file has gone — see `missing`.
+   */
+  url: string | null
+  /** The iframe src, for `kind: 'embed'`. */
+  embedUrl: string | null
+  /**
+   * Where it came from — drives the badge. Two are local: `upload` is a clip the widget hosts
+   * itself, `attachment` one already posted in this chat and added by reference.
+   */
+  provider: 'youtube' | 'vimeo' | 'dailymotion' | 'twitch' | 'streamable' | 'direct' | 'upload' | 'attachment' | string
+  title: string
+  /** For a borrowed attachment, whoever posted it originally — `addedBy` is who queued it. */
+  author: string | null
+  /** Length in seconds — may be null until a viewer's player backfills it. */
+  duration: number | null
+  thumbnail: string | null
+  /** A borrowed attachment whose message has since been deleted. Shown greyed out, unplayable. */
+  missing?: boolean
+  addedBy: string
+}
+
+/** A video already posted in this chat, as the card's "in this chat" picker lists it. */
+export interface ChannelVideoFile {
+  id: number
+  name: string
+  mime_type: string
+  size: number
+  uploaded_by?: string | null
+  created_at?: string
+}
+
+/** The search picker: top YouTube matches awaiting a choice, shown in the card. */
+export interface VideoSearch {
+  query: string
+  by: string
+  results: VideoSource[]
+}
+
+/**
+ * The watch-along video widget's shared state. Like {@link MusicState}, the server owns the
+ * transport and is not a clock: `position` is where the current video was at `updated_at`, so
+ * every viewer — including one who just arrived — extrapolates from there (× `speed`) and puts
+ * their own player at the same spot.
+ */
+export interface VideoState {
+  status: 'idle' | 'playing' | 'paused'
+  playlist: VideoSource[]
+  /** Index into `playlist` of what's on screen, or null when nothing is seated. */
+  currentIndex: number | null
+  position: number
+  updated_at: string
+  loop: 'off' | 'one' | 'all'
+  /** Playback rate, 0.25–2. Shared, so the room stays together. */
+  speed: number
+  pendingSearch: VideoSearch | null
 }
 
 export interface KanbanCard {
@@ -649,7 +727,44 @@ export interface VoiceParticipant {
   deafened: boolean
   screen_sharing: boolean
   camera_on: boolean
+  /** Sharing sound with nothing to look at — a track, or a video's audio. */
+  audio_sharing: boolean
   joined_at: string
+}
+
+/**
+ * What a room does when somebody arrives or leaves: drawn and synthesised in the browser,
+ * so the wire only ever carries the name of one. Kept in step with Channel::VOICE_EFFECTS
+ * on the backend, which is what actually refuses anything else.
+ */
+export type VoiceEffect = 'fireworks' | 'confetti' | 'sparkles'
+
+/** What a call plays for one person, or — as `default` below — for anybody in particular. */
+export interface VoiceEffectPair {
+  join: VoiceEffect | null
+  leave: VoiceEffect | null
+}
+
+/**
+ * Everything a channel's call does about arrivals and departures.
+ *
+ * A default plus a list of exceptions, which is the shape of the feature: the owner can give
+ * one person a fanfare without having decided anything about the other twenty members.
+ */
+export interface VoiceEffects {
+  default: VoiceEffectPair
+  people: (VoiceEffectPair & { user_id: number })[]
+}
+
+/** One effect going off right now, queued for the overlay to draw. See useVoiceEffects. */
+export interface VoiceEffectEvent {
+  /** Unique per firing, so two people arriving together animate as two separate effects. */
+  id: number
+  effect: VoiceEffect
+  /** Arriving or leaving — the same effect plays outward for one and inward for the other. */
+  phase: 'join' | 'leave'
+  /** Who it's about, for the line of text under it. */
+  name: string
 }
 
 /** Everything the browser needs to hand to RTCPeerConnection, served on join. */
@@ -689,14 +804,23 @@ export interface Peer {
   deafened: boolean
   screenSharing: boolean
   cameraOn: boolean
+  /** Sharing sound and nothing else — there is no picture of theirs to watch. */
+  audioSharing: boolean
   localMuted: boolean
   /** 0–1, applied to their microphone audio element alone. */
   volume: number
   /**
-   * 0–1, applied to the audio *of what they're sharing* — kept apart from `volume` so a
-   * loud shared video can be turned down without also quietening the person talking over it.
+   * 0–1, applied to the audio *of what they're sharing* — their screen's sound or an
+   * audio-only share, which arrive over the same slot. Kept apart from `volume` so a loud
+   * shared video can be turned down without also quietening the person talking over it.
    */
   screenVolume: number
+  /**
+   * You've stopped listening to what they're sharing, while still listening to them. Local
+   * like `localMuted`, and independent of it: silencing someone's music is not the same
+   * decision as silencing them.
+   */
+  screenMuted: boolean
 }
 
 export interface ServerJoinRequest {

@@ -29,6 +29,7 @@ const { isPinned, unpin } = useMusicPin()
     </button>
   </div>
   <MusicPlayer v-else-if="widget.type === 'music'" :widget="widget" />
+  <VideoPlayer v-else-if="widget.type === 'video'" :widget="widget" />
   <KanbanBoard v-else-if="widget.type === 'kanban'" :widget="widget" />
   <PollWidget v-else-if="widget.type === 'poll'" :widget="widget" />
   <CoopShooter v-else-if="widget.type === 'shooter'" :widget="widget" />

@@ -1,3 +1,5 @@
+import type { VoiceEffects } from '~/types'
+
 /**
  * Deletions, as they happen to *other* people's screens.
  *
@@ -15,7 +17,7 @@ export function useServerLifecycle() {
   const { user } = useAuth()
   const { channels, forgetChannel, patchChannel, patchServer } = useServer()
   const { forget: forgetServer, patch: patchServerInRail } = useServers()
-  const { channelId: callChannelId, disconnect } = useVoice()
+  const { channelId: callChannelId, disconnect, applyChannelEffects } = useVoice()
 
   /**
    * Hang up if the call we're in was in the server that just went away.
@@ -41,6 +43,12 @@ export function useServerLifecycle() {
       // unread_count, a server's is_owner) and must not be allowed to overwrite them.
       .listen('.ChannelUpdated', (c: { id: number, name: string }) => {
         patchChannel(c.id, { name: c.name })
+      })
+      // What the room plays when people come and go. Everybody gets it, not just the people
+      // currently talking: an effect has to be in your browser before you walk through the
+      // door. useVoice keeps whichever one is about the call you're actually in.
+      .listen('.VoiceEffectsUpdated', (p: { channel_id: number, effects: VoiceEffects }) => {
+        applyChannelEffects(p.channel_id, p.effects)
       })
       .listen('.ServerUpdated', (p: { server_id: number, name: string }) => {
         patchServer(p.server_id, { name: p.name })
@@ -83,6 +91,7 @@ export function useServerLifecycle() {
     // Not echo.leave() — useJoinRequests shares this channel and owns tearing it down.
     echo?.private(`server.${serverId}`)
       .stopListening('.ChannelUpdated')
+      .stopListening('.VoiceEffectsUpdated')
       .stopListening('.ServerUpdated')
       .stopListening('.ChannelDeleted')
       .stopListening('.ServerDeleted')

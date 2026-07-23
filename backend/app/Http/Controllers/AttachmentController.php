@@ -47,6 +47,18 @@ class AttachmentController extends Controller
         return AttachmentResource::collection($this->attachments->gifsForChannel($channel));
     }
 
+    /**
+     * Video files posted anywhere in a channel — the video widget's "in this chat" picker.
+     * Optionally filtered by `q` on the filename. Membership is the only gate, the same one
+     * the Files tab uses: these are files the caller can already see in the timeline.
+     */
+    public function indexForChannelVideos(IndexChannelAttachmentRequest $request, Channel $channel): AnonymousResourceCollection
+    {
+        return AttachmentResource::collection(
+            $this->attachments->videosForChannel($channel, $request->query('q')),
+        );
+    }
+
     /** Delete one attachment (and its file). */
     public function destroy(DeleteAttachmentRequest $request, Attachment $attachment, DeleteAttachmentAction $action): MessageResource
     {

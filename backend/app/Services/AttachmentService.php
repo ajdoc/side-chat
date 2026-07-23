@@ -2,6 +2,7 @@
 
 namespace App\Services;
 
+use App\Http\Controllers\ChunkedUploadController;
 use App\Models\Attachment;
 use App\Models\Channel;
 use App\Models\ChunkedUpload;
@@ -45,7 +46,7 @@ final class AttachmentService
     }
 
     /**
-     * Claim files staged by {@see \App\Http\Controllers\ChunkedUploadController} — the large-file
+     * Claim files staged by {@see ChunkedUploadController} — the large-file
      * path — as attachments on a message.
      *
      * The bytes are already on our disk under the uploader's name, so this *moves* them into the
@@ -281,6 +282,41 @@ final class AttachmentService
             ->with(['message.user'])
             ->orderByDesc('id')
             ->paginate(50);
+    }
+
+    /**
+     * Every *video* file posted anywhere in a channel — what the video widget's "in this chat"
+     * picker browses, so a clip someone already dropped in the conversation can be played
+     * without re-uploading it.
+     *
+     * One `channel_id` filter is the whole scope, and that isn't a simplification: a message
+     * carries the channel it lives in whether it's on the main timeline, inside a thread, or
+     * inside a side chat (the column is NOT NULL — see the side-chat migration). So this
+     * reaches every surface a channel contains, which is exactly what the picker offers.
+     *
+     * Matched on the declared MIME type *or* the extension, because browsers post `.mkv` and
+     * the odd `.mov` as `application/octet-stream` — going on MIME alone would hide files that
+     * play perfectly well. Remote references (picked GIFs) are excluded: there are no bytes of
+     * ours behind them and none of them are video anyway.
+     *
+     * @return Collection<int, Attachment>
+     */
+    public function videosForChannel(Channel $channel, ?string $query = null): Collection
+    {
+        return Attachment::query()
+            ->whereIn('message_id', Message::where('channel_id', $channel->id)->select('id'))
+            ->where('disk', '!=', 'remote')
+            ->where(fn ($q) => $q
+                ->where('mime_type', 'like', 'video/%')
+                ->orWhereIn('extension', ['mp4', 'm4v', 'webm', 'ogv', 'mov', 'mkv']))
+            ->when(
+                is_string($query) && trim($query) !== '',
+                fn ($q) => $q->where('name', 'ilike', '%'.trim($query).'%'),
+            )
+            ->with(['message.user'])
+            ->orderByDesc('id')
+            ->limit(50)
+            ->get();
     }
 
     /** Every GIF posted in a channel (main timeline + threads) - the Info > GIFs tab. */

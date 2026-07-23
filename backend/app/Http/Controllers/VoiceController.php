@@ -5,11 +5,16 @@ namespace App\Http\Controllers;
 use App\Actions\Voice\DisconnectVoiceParticipantsAction;
 use App\Actions\Voice\JoinVoiceChannelAction;
 use App\Actions\Voice\LeaveVoiceChannelAction;
+use App\Actions\Voice\MuteVoiceParticipantAction;
+use App\Actions\Voice\UpdateVoiceEffectsAction;
 use App\Actions\Voice\UpdateVoiceStateAction;
+use App\DTOs\Voice\UpdateVoiceEffectsData;
 use App\DTOs\Voice\UpdateVoiceStateData;
 use App\Http\Requests\Voice\DisconnectVoiceParticipantsRequest;
 use App\Http\Requests\Voice\IndexVoiceRequest;
 use App\Http\Requests\Voice\JoinVoiceChannelRequest;
+use App\Http\Requests\Voice\MuteVoiceParticipantRequest;
+use App\Http\Requests\Voice\UpdateVoiceEffectsRequest;
 use App\Http\Requests\Voice\UpdateVoiceStateRequest;
 use App\Http\Requests\Voice\VoiceChannelRequest;
 use App\Http\Resources\VoiceParticipantResource;
@@ -57,6 +62,10 @@ class VoiceController extends Controller
             'data' => VoiceParticipantResource::collection($this->voice->participants($channel))->resolve(),
             'ice_servers' => $this->voice->iceServers(),
             'max_participants' => (int) config('webrtc.max_participants'),
+            // What the room plays when somebody arrives or leaves. Handed over on join so
+            // the very first arrival after yours already has it — an effect that had to be
+            // fetched would miss the event it exists for.
+            'effects' => $channel->voiceEffects(),
         ]);
     }
 
@@ -90,6 +99,39 @@ class VoiceController extends Controller
         $action->handle($channel, $request->user(), UpdateVoiceStateData::fromArray([]));
 
         return response()->noContent();
+    }
+
+    /**
+     * What this call plays for each person, and what it does for everybody else. Read by the
+     * owner's settings dialog; the people in a call get the same payload handed to them on
+     * join, and on VoiceEffectsUpdated after that.
+     */
+    public function effects(VoiceChannelRequest $request, Channel $channel): JsonResponse
+    {
+        return response()->json(['data' => $channel->voiceEffects()]);
+    }
+
+    /**
+     * Attach an effect to one person — or, with no `user_id`, set the room's default for
+     * everybody nobody has singled out. Owner only; see UpdateVoiceEffectsRequest for why
+     * this one isn't open to the room the way muting and disconnecting are.
+     */
+    public function updateEffects(UpdateVoiceEffectsRequest $request, Channel $channel, UpdateVoiceEffectsAction $action): JsonResponse
+    {
+        return response()->json([
+            'data' => $action->handle($channel, UpdateVoiceEffectsData::fromArray($request->validated())),
+        ]);
+    }
+
+    /**
+     * Mute or unmute somebody else's microphone. Owner only — see MuteVoiceParticipantRequest
+     * for why this one is not open to the room the way disconnecting is.
+     */
+    public function mute(MuteVoiceParticipantRequest $request, Channel $channel, MuteVoiceParticipantAction $action): JsonResponse
+    {
+        $applied = $action->handle($channel, $request->integer('user_id'), $request->boolean('muted'));
+
+        return response()->json(['applied' => $applied]);
     }
 
     /**

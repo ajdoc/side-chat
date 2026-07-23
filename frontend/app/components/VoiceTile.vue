@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { Loader2, MicOff, PhoneOff, ScreenShare, Volume2, VolumeX, WifiOff } from 'lucide-vue-next'
+import { AudioLines, HeadphoneOff, Loader2, Mic, MicOff, PhoneOff, ScreenShare, Volume2, VolumeX, WifiOff } from 'lucide-vue-next'
 import type { Peer } from '~/types'
 
 /**
@@ -19,13 +19,21 @@ const props = defineProps<{
   sharing?: boolean
   /** Set when this tile's screen is the one on the stage. */
   watching?: boolean
+  /**
+   * You own the place this call is in, so you may move this person's microphone — the one
+   * control here that changes what somebody *else* hears, rather than what you do.
+   */
+  canModerate?: boolean
 }>()
 
 const emit = defineEmits<{
   toggleMute: []
   setVolume: [value: number]
+  setScreenVolume: [value: number]
+  toggleScreenMute: []
   watch: []
   disconnect: []
+  forceMute: [muted: boolean]
 }>()
 
 function initials(name: string) {
@@ -38,6 +46,7 @@ const { nameFor } = useNicknames()
 const peerName = computed(() => nameFor(props.peer))
 
 const volumeLabel = computed(() => `${Math.round(props.peer.volume * 100)}%`)
+const shareLabel = computed(() => `${Math.round(props.peer.screenVolume * 100)}%`)
 </script>
 
 <template>
@@ -80,6 +89,19 @@ const volumeLabel = computed(() => `${Math.round(props.peer.volume * 100)}%`)
         <MicOff class="h-3.5 w-3.5" />
       </span>
 
+      <!--
+        Deafened gets its own badge rather than being folded into the mute one. Deafening
+        does close your microphone too, so the two nearly always appear together — but they
+        say different things, and this is the one that means "saying it again won't help".
+      -->
+      <span
+        v-if="peer.deafened"
+        class="absolute -bottom-1 -left-1 grid h-7 w-7 place-items-center rounded-full bg-destructive text-destructive-foreground"
+        :title="self ? 'You have everyone silenced' : `${peerName} is deafened — they can't hear the call`"
+      >
+        <HeadphoneOff class="h-3.5 w-3.5" />
+      </span>
+
       <span
         v-if="!self && peer.connection === 'connecting'"
         class="absolute -left-1 -top-1 grid h-6 w-6 place-items-center rounded-full bg-muted text-muted-foreground"
@@ -99,6 +121,53 @@ const volumeLabel = computed(() => `${Math.round(props.peer.volume * 100)}%`)
     <div class="flex min-w-0 items-center gap-1.5">
       <span class="truncate text-sm font-medium">{{ peerName }}</span>
       <span v-if="self" class="text-xs text-muted-foreground">(you)</span>
+    </div>
+
+    <!--
+      Sharing sound and nothing else. Not a "watch" button, because there is nothing to
+      watch — it's a statement plus the one control that matters, which is how loud their
+      track is against their voice.
+    -->
+    <div v-if="peer.audioSharing" class="flex w-full flex-col items-center gap-1">
+      <span class="flex items-center gap-1.5 rounded-full bg-primary/10 px-2 py-0.5 text-xs font-medium text-primary">
+        <AudioLines class="h-3.5 w-3.5" />
+        {{ self ? 'You\'re sharing audio' : 'Sharing audio' }}
+      </span>
+
+      <!--
+        Two controls, because they answer two different questions: how loud their track is
+        against their voice, and whether you want to hear it at all. Muting it leaves them
+        perfectly audible — that's the whole point of it being its own switch.
+      -->
+      <div v-if="!self" class="flex w-full items-center gap-2">
+        <button
+          type="button"
+          class="shrink-0 rounded p-1 transition"
+          :class="peer.screenMuted ? 'text-destructive' : 'text-muted-foreground hover:text-foreground'"
+          :title="peer.screenMuted
+            ? `Listen to ${peerName}'s shared audio again`
+            : `Stop hearing ${peerName}'s shared audio — you'll still hear them`"
+          @click="emit('toggleScreenMute')"
+        >
+          <VolumeX v-if="peer.screenMuted" class="h-3.5 w-3.5" />
+          <AudioLines v-else class="h-3.5 w-3.5" />
+        </button>
+        <input
+          type="range"
+          min="0"
+          max="1"
+          step="0.01"
+          :value="peer.screenVolume"
+          :disabled="peer.screenMuted"
+          class="h-1 w-full cursor-pointer appearance-none rounded-full bg-muted accent-primary disabled:cursor-not-allowed disabled:opacity-40"
+          :aria-label="`Shared audio volume for ${peerName}`"
+          :title="`${peerName}'s shared audio: ${shareLabel}`"
+          @input="emit('setScreenVolume', Number(($event.target as HTMLInputElement).value))"
+        >
+        <span class="w-9 shrink-0 text-right text-[10px] tabular-nums text-muted-foreground">
+          {{ peer.screenMuted ? 'off' : shareLabel }}
+        </span>
+      </div>
     </div>
 
     <button
@@ -145,6 +214,35 @@ const volumeLabel = computed(() => `${Math.round(props.peer.volume * 100)}%`)
         {{ peer.localMuted ? 'off' : volumeLabel }}
       </span>
     </div>
+
+    <!--
+      Owner only, and unlike everything above it this reaches across the room: it moves the
+      switch on their machine, so the whole call hears the result. One button that follows
+      the person — it reads Unmute exactly when they're muted — because "mute" and "unmute"
+      are the same decision seen from either side, and two buttons would leave one of them
+      permanently doing nothing.
+
+      Owner only because unmuting opens a line somebody had deliberately closed. Disconnecting
+      is next to it and open to anyone, which looks inconsistent until you notice that being
+      turned out of a call is *visible* to the person it happens to, and a mic coming back on
+      is not.
+    -->
+    <button
+      v-if="!self && canModerate"
+      type="button"
+      class="flex w-full items-center justify-center gap-1.5 rounded-md border px-2 py-1 text-xs font-medium transition"
+      :class="peer.muted
+        ? 'border-primary/30 text-primary hover:bg-primary hover:text-primary-foreground'
+        : 'border-border text-muted-foreground hover:bg-muted hover:text-foreground'"
+      :title="peer.muted
+        ? `Turn ${peerName}'s microphone back on for everyone`
+        : `Mute ${peerName}'s microphone for everyone`"
+      @click="emit('forceMute', !peer.muted)"
+    >
+      <Mic v-if="peer.muted" class="h-3.5 w-3.5" />
+      <MicOff v-else class="h-3.5 w-3.5" />
+      {{ peer.muted ? 'Unmute' : 'Mute' }}
+    </button>
 
     <!--
       Unlike the volume and local-mute above — which change only what *you* hear — this

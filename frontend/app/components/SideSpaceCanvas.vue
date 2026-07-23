@@ -1,11 +1,19 @@
 <script setup lang="ts">
-import { Columns3, Flag, Gamepad2, GripVertical, ListChecks, Music, Palette, StickyNote, Trash2, Vote } from 'lucide-vue-next'
+import { Columns3, Film, Flag, Gamepad2, GripVertical, ListChecks, Music, Palette, StickyNote, Trash2, Vote } from 'lucide-vue-next'
 import type { CanvasItem } from '~/types'
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from '~/components/ui/dropdown-menu'
 
 /**
  * The Open Canvas app — a scrollable 2D board of freely-placed cards: a markdown note, a
- * checklist, or one of the interactive widgets we already have (music player, kanban, poll,
- * Galaga, racing) rendered live. Cards are absolutely positioned in the canvas's logical
+ * checklist, or one of the interactive widgets we already have rendered live. The toolbar
+ * splits those two ways: the tools (music, video, kanban, poll) sit in the row as icons, and
+ * the games (Galaga, racing, Skribbl) are gathered under one labelled Games menu — see
+ * {@link WIDGET_TYPES}. Cards are absolutely positioned in the canvas's logical
  * pixels; drag the header to move, the corner to resize, both applied locally for smoothness
  * and persisted on drop (see {@link useCanvas}). A widget card places the channel's shared
  * widget — the same one the timeline uses — so its state stays in lockstep. Surface-agnostic
@@ -74,20 +82,38 @@ function onChange(item: CanvasItem, content: Record<string, any>) {
   void patch(item.id, { content })
 }
 
-// The interactive widgets that can be dropped on the canvas — the ones we already have.
+/**
+ * The interactive widgets that can be dropped on the canvas.
+ *
+ * `group` splits the toolbar in two. The tools are one-click icons — they're what a canvas is
+ * usually for. The games are three of seven widgets and growing, and a row of unlabelled
+ * icons stops being readable at that point (a flag and a gamepad don't say "racing" and
+ * "Galaga" on sight), so they live behind one labelled Games menu instead.
+ */
 const WIDGET_TYPES = [
-  { type: 'music', label: 'Music', icon: Music, w: 300, h: 190 },
-  { type: 'kanban', label: 'Kanban', icon: Columns3, w: 340, h: 320 },
-  { type: 'poll', label: 'Poll', icon: Vote, w: 280, h: 260 },
-  { type: 'shooter', label: 'Galaga', icon: Gamepad2, w: 320, h: 420 },
-  { type: 'racing', label: 'Racing', icon: Flag, w: 340, h: 380 },
-  { type: 'skribbl', label: 'Skribbl', icon: Palette, w: 360, h: 520 },
+  { type: 'music', label: 'Music', icon: Music, group: 'tool', w: 300, h: 190 },
+  // Taller than the rest: the card leads with a 16:9 screen, so a short one would clip it.
+  { type: 'video', label: 'Video', icon: Film, group: 'tool', w: 400, h: 520 },
+  { type: 'kanban', label: 'Kanban', icon: Columns3, group: 'tool', w: 340, h: 320 },
+  { type: 'poll', label: 'Poll', icon: Vote, group: 'tool', w: 280, h: 260 },
+  { type: 'shooter', label: 'Galaga', icon: Gamepad2, group: 'game', w: 320, h: 420 },
+  { type: 'racing', label: 'Racing', icon: Flag, group: 'game', w: 340, h: 380 },
+  { type: 'skribbl', label: 'Skribbl', icon: Palette, group: 'game', w: 360, h: 520 },
 ] as const
+
+const TOOL_WIDGETS = WIDGET_TYPES.filter(w => w.group === 'tool')
+const GAME_WIDGETS = WIDGET_TYPES.filter(w => w.group === 'game')
+
+const gamesOpen = ref(false)
 
 // One widget per (channel, type), so a type already on the canvas can't be added again.
 const placedWidgetTypes = computed(
   () => new Set(items.value.filter(i => i.kind === 'widget' && i.widget).map(i => i.widget!.type)),
 )
+
+// Every game already on the board: the menu would open on nothing but disabled rows, so the
+// trigger itself goes dead — the same rule each individual button follows.
+const allGamesPlaced = computed(() => GAME_WIDGETS.every(w => placedWidgetTypes.value.has(w.type)))
 
 // Fresh cards cascade down-right from the current scroll corner so they don't stack exactly.
 let cascade = 0
@@ -156,7 +182,7 @@ onBeforeUnmount(() => {
 
       <!-- Drop one of the interactive widgets onto the board (one of each per channel). -->
       <button
-        v-for="w in WIDGET_TYPES"
+        v-for="w in TOOL_WIDGETS"
         :key="w.type"
         type="button"
         class="grid h-7 w-7 place-items-center rounded border text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:opacity-40"
@@ -166,6 +192,33 @@ onBeforeUnmount(() => {
       >
         <component :is="w.icon" class="h-4 w-4" />
       </button>
+
+      <!-- The games, together and labelled. Three unlabelled icons in the row above read as
+           noise; one Games menu reads as a shelf you go to on purpose. -->
+      <DropdownMenu v-model:open="gamesOpen">
+        <DropdownMenuTrigger as-child>
+          <button
+            type="button"
+            class="flex items-center gap-1.5 rounded border px-2 py-1 text-sm text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:opacity-40"
+            :title="allGamesPlaced ? 'Every game is already on the canvas' : 'Add a game'"
+            :disabled="!canEdit || allGamesPlaced"
+          >
+            <Gamepad2 class="h-4 w-4" /> Games
+          </button>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="start" class="w-44">
+          <DropdownMenuItem
+            v-for="g in GAME_WIDGETS"
+            :key="g.type"
+            :disabled="placedWidgetTypes.has(g.type)"
+            @select="addWidget(g)"
+          >
+            <component :is="g.icon" class="h-4 w-4" />
+            {{ g.label }}
+            <span v-if="placedWidgetTypes.has(g.type)" class="ml-auto text-[10px] text-muted-foreground">on canvas</span>
+          </DropdownMenuItem>
+        </DropdownMenuContent>
+      </DropdownMenu>
 
       <span v-if="!canEdit && readonlyHint" class="ml-auto text-xs text-muted-foreground">{{ readonlyHint }}</span>
     </div>

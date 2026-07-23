@@ -21,6 +21,7 @@ class VoiceParticipant extends Model
         'deafened',
         'screen_sharing',
         'camera_on',
+        'audio_sharing',
         'last_seen_at',
     ];
 
@@ -31,6 +32,7 @@ class VoiceParticipant extends Model
             'deafened' => 'boolean',
             'screen_sharing' => 'boolean',
             'camera_on' => 'boolean',
+            'audio_sharing' => 'boolean',
             'last_seen_at' => 'datetime',
         ];
     }

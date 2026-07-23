@@ -21,6 +21,9 @@ class VoiceParticipantResource extends JsonResource
             'deafened' => $this->deafened,
             'screen_sharing' => $this->screen_sharing,
             'camera_on' => $this->camera_on,
+            // Sound without a picture — see the audio-share migration. Distinct from
+            // screen_sharing so nothing offers to 'watch' a screen that isn't coming.
+            'audio_sharing' => $this->audio_sharing,
             'joined_at' => $this->created_at,
         ];
     }

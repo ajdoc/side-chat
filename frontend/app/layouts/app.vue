@@ -1,7 +1,9 @@
 <script setup lang="ts">
 import {
-  Check, ChevronDown, ChevronRight, Copy, DoorOpen, Hash, LogOut, MessageSquarePlus, MicOff,
-  Monitor, Moon, Pencil, Phone, Plus, ScreenShare, Sun, Trash2, User, UserPlus, Users, Volume2,
+  AudioLines,
+  Check, ChevronDown, ChevronRight, Copy, DoorOpen, Hash, HeadphoneOff, LogOut,
+  MessageSquarePlus, MicOff, Monitor, Moon, Pencil, Phone, Plus, ScreenShare, Sun, Trash2,
+  User, UserPlus, Users, Volume2,
 } from 'lucide-vue-next'
 import { useLocalStorage } from '@vueuse/core'
 import type { Channel, Conversation, Server, ThemeColor, ThemeMode } from '~/types'
@@ -645,8 +647,21 @@ onBeforeUnmount(() => userStream.unsubscribe())
                       <span v-else>{{ initialsOf(nameFor(p.user)) }}</span>
                     </span>
                     <span class="truncate">{{ nameFor(p.user) }}</span>
-                    <MicOff v-if="p.muted" class="ml-auto h-3 w-3 shrink-0 text-destructive" :title="`${nameFor(p.user)} is muted`" />
-                    <ScreenShare v-if="p.screen_sharing" class="ml-auto h-3 w-3 shrink-0 text-primary" :title="`${nameFor(p.user)} is sharing their screen`" />
+                    <!--
+                      What they're doing, as they've told everybody. One `ml-auto` on the
+                      group rather than on each icon: hung on the icons themselves, whichever
+                      came second won the margin and the pair sat apart.
+
+                      Mute and deafen get an icon each. Deafening does shut your own mic as
+                      well, so the two travel together most of the time — but they aren't the
+                      same fact, and only one of them means "can't hear you either".
+                    -->
+                    <span class="ml-auto flex shrink-0 items-center gap-1">
+                      <ScreenShare v-if="p.screen_sharing" class="h-3 w-3 text-primary" :title="`${nameFor(p.user)} is sharing their screen`" />
+                      <AudioLines v-if="p.audio_sharing" class="h-3 w-3 text-primary" :title="`${nameFor(p.user)} is sharing audio`" />
+                      <MicOff v-if="p.muted" class="h-3 w-3 text-destructive" :title="`${nameFor(p.user)} is muted`" />
+                      <HeadphoneOff v-if="p.deafened" class="h-3 w-3 text-destructive" :title="`${nameFor(p.user)} is deafened — they can't hear the call`" />
+                    </span>
                   </NuxtLink>
                 </div>
 
@@ -925,5 +940,10 @@ onBeforeUnmount(() => userStream.unsubscribe())
         </AlertDialogFooter>
       </AlertDialogContent>
     </AlertDialog>
+
+    <!-- Entrance and exit effects, drawn over everything. Here rather than on the call's
+         own page for the same reason VoiceBar is: somebody arriving while you're off
+         reading another channel still has to be seen to arrive. -->
+    <VoiceEffects />
   </div>
 </template>

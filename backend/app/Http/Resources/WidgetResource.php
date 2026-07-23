@@ -39,7 +39,7 @@ class WidgetResource extends JsonResource
         $handler = app(WidgetService::class)->handlerForType($this->type);
 
         return ($handler instanceof RedactsState && is_array($state))
-            ? $handler->forViewer($state, $request->user())
+            ? $handler->forViewer($this->resource, $state, $request->user())
             : $state;
     }
 }

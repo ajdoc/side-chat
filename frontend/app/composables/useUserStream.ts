@@ -23,7 +23,7 @@ export function useUserStream() {
   const { conversations, upsert, patch, forget, byChannel } = useConversations()
   const { incoming, ringingFor, stopRinging } = useCall()
   const { notify } = useDesktopNotifications()
-  const { channelId: callChannelId, disconnect, disconnectedByModerator } = useVoice()
+  const { channelId: callChannelId, disconnect, disconnectedByModerator, mutedByModerator } = useVoice()
 
   const subscribed = useState<number | null>('user-stream:id', () => null)
 
@@ -129,6 +129,12 @@ export function useUserStream() {
       // actually in; a stale event for a room you already left is nothing to act on.
       .listen('.VoiceParticipantDisconnected', (p: { channel_id: number }) => {
         if (callChannelId.value === p.channel_id) disconnectedByModerator()
+      })
+
+      // The owner moved your microphone. Same road, and for the same reason: the mic track
+      // is on this machine and no amount of server state can reach it.
+      .listen('.VoiceMuteEnforced', (p: { channel_id: number, muted: boolean }) => {
+        if (callChannelId.value === p.channel_id) mutedByModerator(p.muted)
       })
   }
 

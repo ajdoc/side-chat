@@ -1,4 +1,4 @@
-import type { IceServer, Peer, PeerConnectionState, VoiceParticipant } from '~/types'
+import type { IceServer, Peer, PeerConnectionState, VoiceEffectPair, VoiceEffects, VoiceParticipant } from '~/types'
 
 /**
  * A voice call: a full mesh of WebRTC peer connections, signalled over Reverb.
@@ -173,20 +173,33 @@ interface StatePayload {
   deafened: boolean
   screen_sharing: boolean
   camera_on: boolean
+  audio_sharing: boolean
 }
 
 interface JoinResponse {
   data: VoiceParticipant[]
   ice_servers: IceServer[]
   max_participants: number
+  effects: VoiceEffects
 }
+
+/** Nothing attached to anybody — the shape of a room that has never been decorated. */
+const NO_EFFECTS: VoiceEffects = { default: { join: null, leave: null }, people: [] }
 
 /** How loud you like each person, remembered between calls. */
 interface LocalPrefs {
   volume: number
   muted: boolean
-  /** How loud you like *their shared screen* — independent of their voice. */
+  /** How loud you like *what they're sharing* — independent of their voice. */
   screenVolume?: number
+  /**
+   * Whether you've silenced what they're sharing while still listening to *them*.
+   *
+   * Its own switch rather than a volume of zero, because the two are different intentions
+   * and a slider can't hold both: turning a share down to nothing loses where you had it,
+   * and coming back needs you to guess. This remembers.
+   */
+  screenMuted?: boolean
 }
 
 // Module scope, not component scope: one call, however many components are looking at it.
@@ -304,6 +317,21 @@ export function useVoice() {
   const screenStream = useState<MediaStream | null>('voice:screenStream', () => null)
   const cameraStream = useState<MediaStream | null>('voice:cameraStream', () => null)
   /**
+   * The sound you're sharing with nothing to look at — a track playing in a tab, a video
+   * everyone is listening to rather than watching.
+   *
+   * It rides the *same* pre-negotiated slot a screen share's audio does, which is what makes
+   * it nearly free to add: the transceiver, the second <audio> element per peer and its own
+   * volume control were all already there. The one thing that had to be new is saying so, so
+   * that nobody is offered a screen to watch that is never coming.
+   */
+  const audioShareStream = useState<MediaStream | null>('voice:audioShareStream', () => null)
+  /**
+   * What this call plays for each person, and what it does for everyone else. Handed over on
+   * join, and kept current by VoiceEffectsUpdated (see applyChannelEffects).
+   */
+  const voiceEffects = useState<VoiceEffects>('voice:channelEffects', () => ({ ...NO_EFFECTS }))
+  /**
    * Which shared screen is on the stage right now — a peer id, `'self'`, or null when you're
    * watching nobody. Only this screen's audio is allowed to play (see applyAudio); the stage
    * UI keeps it in step via setWatchedScreen.
@@ -336,8 +364,83 @@ export function useVoice() {
   const inCall = computed(() => status.value === 'connected' || status.value === 'connecting')
   const isSharing = computed(() => screenStream.value !== null)
   const isCameraOn = computed(() => cameraStream.value !== null)
+  const isAudioSharing = computed(() => audioShareStream.value !== null)
   /** Whoever is sharing right now — at most one screen is on the stage at a time. */
   const sharingPeer = computed(() => peers.value.find(p => p.screenSharing && p.screen) ?? null)
+
+  // --- entrance and exit effects ---
+
+  const effects = useVoiceEffects()
+  // A call happens inside a server or a chat like everything else, so an effect announcing
+  // somebody should call them whatever this place calls them.
+  const { nameOf } = useNicknames()
+
+  /**
+   * What this call does about *this person* coming or going: whatever the owner attached to
+   * them, and failing that whatever the room does for anybody.
+   */
+  function effectFor(userId: number, phase: 'join' | 'leave'): VoiceEffectPair['join'] {
+    const mine = voiceEffects.value.people.find(p => p.user_id === userId)
+
+    return (mine ? mine[phase] : null) ?? voiceEffects.value.default[phase]
+  }
+
+  /**
+   * Somebody arrived or left: play whatever this room does about them.
+   *
+   * Everyone in the call runs this off their own presence event, so the effect goes off for
+   * all of them within a frame or two of each other without a single message being sent about
+   * it. Deafening yourself takes the sound and leaves the picture — you silenced the room's
+   * speakers, not its lights.
+   */
+  function fireEffect(phase: 'join' | 'leave', userId: number, name: string) {
+    const effect = effectFor(userId, phase)
+    if (!effect) return
+
+    effects.fire(effect, phase, name, { silent: selfDeafened.value })
+  }
+
+  /**
+   * Adopt an effect change made while the call is already running — the owner may not even be
+   * in it, which is why this arrives on the container's broadcast rather than a whisper
+   * between the people talking. Ignored unless it's about the call we're actually in.
+   */
+  function applyChannelEffects(id: number, next: VoiceEffects) {
+    if (channelId.value !== id) return
+
+    voiceEffects.value = {
+      default: { join: next.default?.join ?? null, leave: next.default?.leave ?? null },
+      people: next.people ?? [],
+    }
+  }
+
+  /** Everything this channel plays, for the owner's settings dialog. Any member may read it. */
+  function loadChannelEffects(id: number) {
+    return api<{ data: VoiceEffects }>(`/api/channels/${id}/voice/effects`).then(res => res.data)
+  }
+
+  /**
+   * Attach an effect to one person — or, with `userId` null, set what the room does for
+   * everybody nobody has singled out. Owner only: the server refuses anyone else, and the
+   * settings UI is only offered to them.
+   *
+   * Nothing is applied locally here. The server broadcasts the new payload to every member,
+   * ourselves included, so the one that lands is the one everybody has.
+   */
+  async function setChannelEffects(id: number, target: { userId: number | null } & VoiceEffectPair) {
+    const { data } = await api<{ data: VoiceEffects }>(`/api/channels/${id}/voice/effects`, {
+      method: 'PATCH',
+      body: {
+        user_id: target.userId,
+        join_effect: target.join,
+        leave_effect: target.leave,
+      },
+    })
+
+    applyChannelEffects(id, data)
+
+    return data
+  }
 
   // --- local preferences (yours, about other people) ---
 
@@ -350,9 +453,16 @@ export function useVoice() {
     }
   }
 
-  function savePref(userId: number, pref: LocalPrefs) {
+  /**
+   * Remember one thing you've decided about somebody, leaving the rest alone.
+   *
+   * Merged rather than replaced: these are four independent decisions (how loud they are,
+   * whether you've muted them, and the same pair for what they're sharing), and a caller
+   * that has to restate all four to change one is a caller that will eventually drop one.
+   */
+  function savePref(userId: number, pref: Partial<LocalPrefs>) {
     const prefs = loadPrefs()
-    prefs[userId] = pref
+    prefs[userId] = { volume: 1, muted: false, ...prefs[userId], ...pref }
     localStorage.setItem('voice:prefs', JSON.stringify(prefs))
   }
 
@@ -437,8 +547,17 @@ export function useVoice() {
     // switching the stage to someone else) hides the picture, and this is what stops the
     // sound coming with it — otherwise a screen you'd closed kept playing audio out of a
     // stream you couldn't see. See setWatchedScreen.
+    //
+    // An audio-only share is exempt, and has to be: there is no picture, so there is nothing
+    // to be watching, and gating it on the stage would mean nobody ever heard it. Someone
+    // sharing sound alone is heard the moment they start, like a person talking.
+    //
+    // `screenMuted` is the listener's own veto on top of all that — "keep talking, but I've
+    // heard enough of your music". Yours alone, never sent, and remembered for next time.
     handle.screenAudio.volume = peer.screenVolume
-    handle.screenAudio.muted = muted || watchedScreen.value !== id
+    handle.screenAudio.muted = muted
+      || peer.screenMuted
+      || (peer.screenSharing && watchedScreen.value !== id)
   }
 
   // --- signalling ---
@@ -471,6 +590,7 @@ export function useVoice() {
       deafened: selfDeafened.value,
       screen_sharing: isSharing.value,
       camera_on: isCameraOn.value,
+      audio_sharing: isAudioSharing.value,
     } satisfies StatePayload)
   }
 
@@ -486,6 +606,7 @@ export function useVoice() {
           deafened: selfDeafened.value,
           screen_sharing: isSharing.value,
           camera_on: isCameraOn.value,
+          audio_sharing: isAudioSharing.value,
         },
       })
     } catch {
@@ -668,7 +789,18 @@ export function useVoice() {
           : !transceiver.sender.track
 
         if (isScreenAudio) {
-          if (!handle.screenAudioTransceiver) handle.screenAudioTransceiver = transceiver
+          if (!handle.screenAudioTransceiver) {
+            handle.screenAudioTransceiver = transceiver
+
+            // We may already be sharing when this slot finally becomes known to us — the
+            // polite peer only learns it here, and somebody who joins mid-share has to be
+            // sent the sound too, not just be able to receive it. The renegotiation that
+            // needs is raised by onnegotiationneeded, which is free to fire by now.
+            if (screenAudioTrack) {
+              if (transceiver.direction !== 'sendrecv') transceiver.direction = 'sendrecv'
+              void transceiver.sender.replaceTrack(screenAudioTrack)
+            }
+          }
 
           handle.screenAudioStream.addTrack(track)
           handle.screenAudio.play().catch(() => {})
@@ -719,9 +851,11 @@ export function useVoice() {
       deafened: false,
       screenSharing: false,
       cameraOn: false,
+      audioSharing: false,
       localMuted: pref?.muted ?? false,
       volume: pref?.volume ?? 1,
       screenVolume: pref?.screenVolume ?? 1,
+      screenMuted: pref?.screenMuted ?? false,
     }]
   }
 
@@ -942,6 +1076,10 @@ export function useVoice() {
     }
 
     iceServers = joined.ice_servers
+    voiceEffects.value = {
+      default: joined.effects?.default ?? { join: null, leave: null },
+      people: joined.effects?.people ?? [],
+    }
 
     audioCtx = new AudioContext()
     await audioCtx.resume()
@@ -974,18 +1112,31 @@ export function useVoice() {
               deafened: state.deafened,
               screenSharing: state.screen_sharing,
               cameraOn: state.camera_on,
+              audioSharing: state.audio_sharing,
             })
           }
         }
         status.value = 'connected'
+
+        // Your own arrival, for you. `here` is the one place we know we've actually landed —
+        // and deliberately *only* your own: everyone in this list arrived before you did, and
+        // firing an effect for each of them would greet you with six fireworks at once.
+        if (user.value) fireEffect('join', user.value.id, 'You')
       })
       .joining((member: { id: number, name: string, avatar: string | null }) => {
         createPeer(member.id, member.name, member.avatar)
         // They joined after our last state change, so their roster snapshot may predate
         // it. Say where we stand; it's one whisper.
         whisperState()
+        fireEffect('join', member.id, nameOf(member.id, member.name))
       })
-      .leaving((member: { id: number }) => destroyPeer(member.id))
+      .leaving((member: { id: number, name: string }) => {
+        // Read before the teardown: destroyPeer drops them from `peers`, and the effect
+        // wants to say whose exit it is.
+        const name = peers.value.find(p => p.id === member.id)?.name ?? member.name
+        destroyPeer(member.id)
+        fireEffect('leave', member.id, nameOf(member.id, name))
+      })
       .listenForWhisper('signal', onSignal)
       .listenForWhisper('state', (state: StatePayload) => {
         patchPeer(state.id, {
@@ -993,6 +1144,7 @@ export function useVoice() {
           deafened: state.deafened,
           screenSharing: state.screen_sharing,
           cameraOn: state.camera_on,
+          audioSharing: state.audio_sharing,
         })
       })
 
@@ -1038,6 +1190,7 @@ export function useVoice() {
     screenAudioTrack?.stop()
     screenAudioTrack = null
     screenStream.value = null
+    audioShareStream.value = null
 
     cameraTrack?.stop()
     cameraTrack = null
@@ -1071,6 +1224,10 @@ export function useVoice() {
     status.value = 'idle'
     error.value = null
     channelId.value = null
+    voiceEffects.value = { ...NO_EFFECTS }
+    // An effect must not outlive the room it belongs to: hanging up mid-firework should
+    // take the firework with it.
+    effects.clear()
     selfMuted.value = false
     selfDeafened.value = false
     selfSpeaking.value = false
@@ -1164,7 +1321,7 @@ export function useVoice() {
     const localMuted = !peer.localMuted
     patchPeer(id, { localMuted })
     applyAudio(id)
-    savePref(id, { volume: peer.volume, muted: localMuted, screenVolume: peer.screenVolume })
+    savePref(id, { muted: localMuted })
   }
 
   /** Turn one person up or down, for you alone. `volume` is 0–1. */
@@ -1175,7 +1332,25 @@ export function useVoice() {
     const clamped = Math.min(1, Math.max(0, volume))
     patchPeer(id, { volume: clamped })
     applyAudio(id)
-    savePref(id, { volume: clamped, muted: peer.localMuted, screenVolume: peer.screenVolume })
+    savePref(id, { volume: clamped })
+  }
+
+  /**
+   * Stop (or start) hearing what one person is sharing, without touching their voice.
+   *
+   * The counterpart to togglePeerMute, and separate from it on purpose: someone playing music
+   * over a conversation you still want to follow is exactly the case neither the per-person
+   * mute nor "stop watching" covers. Yours alone — they are never told, and everyone else
+   * still hears it.
+   */
+  function togglePeerScreenMute(id: number) {
+    const peer = peers.value.find(p => p.id === id)
+    if (!peer) return
+
+    const screenMuted = !peer.screenMuted
+    patchPeer(id, { screenMuted })
+    applyAudio(id)
+    savePref(id, { screenMuted })
   }
 
   /** Turn one person's *shared screen* up or down, for you alone. `volume` is 0–1. */
@@ -1186,7 +1361,7 @@ export function useVoice() {
     const clamped = Math.min(1, Math.max(0, volume))
     patchPeer(id, { screenVolume: clamped })
     applyAudio(id)
-    savePref(id, { volume: peer.volume, muted: peer.localMuted, screenVolume: clamped })
+    savePref(id, { screenVolume: clamped })
   }
 
   /**
@@ -1295,6 +1470,11 @@ export function useVoice() {
   async function startScreenShare() {
     if (!inCall.value || isSharing.value) return
 
+    // Both kinds of share send their sound down the one screen-audio slot, so they take
+    // turns. A screen share is the fuller thing — it brings its own audio — so starting one
+    // supersedes an audio-only share rather than being refused because of it.
+    if (isAudioSharing.value) await stopAudioShare()
+
     let display: MediaStream
     try {
       display = await navigator.mediaDevices.getDisplayMedia({
@@ -1392,6 +1572,93 @@ export function useVoice() {
 
   function toggleScreenShare() {
     return isSharing.value ? stopScreenShare() : startScreenShare()
+  }
+
+  // --- sharing sound, and nothing else ---
+
+  /**
+   * Play something to the room without showing it: a track, a video's soundtrack, whatever a
+   * tab is making noise about.
+   *
+   * It reuses the screen-audio path wholesale — same transceiver, same <audio> element at the
+   * far end, same per-peer volume — so from the network's point of view this is a screen share
+   * with the expensive half left out. What it doesn't reuse is `screen_sharing`: telling peers
+   * that would put a "watch my screen" tile in front of them for a picture that never arrives,
+   * and would leave the sound gated behind a stage nobody can open (see applyAudio).
+   *
+   * The picture is not optional at the *capture* end, which is the wrinkle. No browser will
+   * hand over tab or system audio on its own — getDisplayMedia only offers sound alongside a
+   * video track — so we ask for both and stop the video the instant it arrives. It is never
+   * encoded and never sent: the cost of an audio share is the audio.
+   */
+  async function startAudioShare() {
+    if (!inCall.value || isAudioSharing.value) return
+    if (isSharing.value) await stopScreenShare()
+
+    let display: MediaStream
+    try {
+      display = await navigator.mediaDevices.getDisplayMedia({
+        // Asked for as cheaply as the browser will allow, since it's stopped a line later.
+        video: { frameRate: { max: 1 }, height: { max: 240 } },
+        audio: true,
+      })
+    } catch {
+      return // the picker was dismissed; that isn't an error
+    }
+
+    const track = display.getAudioTracks()[0] ?? null
+
+    // Stopped immediately and unconditionally — including when there turned out to be no
+    // audio, or the capture would quietly keep a tab marked as being shared.
+    display.getVideoTracks().forEach(video => video.stop())
+
+    if (!track) {
+      // Overwhelmingly the common mistake, and worth naming precisely: the tick box is in
+      // the browser's own picker, where we can neither set it nor see it.
+      error.value = 'That source had no sound to share. Pick a tab or window and tick "Also share tab audio".'
+      return
+    }
+
+    screenAudioTrack = track
+    // The browser's own "Stop sharing" bar never touches our button.
+    track.onended = () => { void stopAudioShare() }
+
+    // The direction bump matters for the polite peer, whose slot was adopted recvonly: without
+    // it they can hear a share but never send one. See createPeer.
+    await Promise.all([...handles.values()].map(async (handle) => {
+      const sound = handle.screenAudioTransceiver
+      if (!sound) return
+
+      if (sound.direction !== 'sendrecv') sound.direction = 'sendrecv'
+      await sound.sender.replaceTrack(track)
+    }))
+    // Not optional: the slot was negotiated empty, and a far end that wasn't told a track
+    // arrived drops its packets. See renegotiate().
+    await renegotiateAll()
+
+    // A stream of its own rather than the capture, which still holds the stopped video track.
+    audioShareStream.value = markRaw(new MediaStream([track]))
+    await publishState()
+  }
+
+  async function stopAudioShare() {
+    if (!isAudioSharing.value) return
+
+    await Promise.all(
+      [...handles.values()].map(handle => handle.screenAudioTransceiver?.sender.replaceTrack(null)),
+    )
+    await renegotiateAll()
+
+    // Stopped, not merely un-sent — this is what drops the browser's "sharing" indicator.
+    screenAudioTrack?.stop()
+    screenAudioTrack = null
+    audioShareStream.value = null
+
+    await publishState()
+  }
+
+  function toggleAudioShare() {
+    return isAudioSharing.value ? stopAudioShare() : startAudioShare()
   }
 
   /**
@@ -1623,6 +1890,53 @@ export function useVoice() {
   }
 
   /**
+   * Move somebody else's microphone. Owner only — the server refuses anyone else, and the
+   * button that calls this is only drawn for the owner in the first place.
+   */
+  async function muteUser(userId: number, muted: boolean) {
+    if (!channelId.value) return
+    try {
+      await api(`/api/channels/${channelId.value}/voice/mute`, {
+        method: 'POST',
+        body: { user_id: userId, muted },
+      })
+    } catch {
+      error.value = muted ? 'Couldn\'t mute that person.' : 'Couldn\'t unmute that person.'
+    }
+  }
+
+  /**
+   * The owner moved *your* microphone. Nothing on the server can reach a mic track, so this
+   * is where it actually happens — the same three steps toggleMute takes, so the room finds
+   * out through the ordinary channels and there's no second path for a mute to travel.
+   *
+   * Push-to-talk has to give way when the line is being opened for you: leaving it on would
+   * make an "unmute" that unmuted nothing, since the mic would stay shut until you held the
+   * key. Deafening is left alone — it's about your speakers, not your microphone, and being
+   * unmuted while deafened is a perfectly coherent thing to be.
+   */
+  function mutedByModerator(muted: boolean) {
+    // Unmuting has a second thing to undo (push-to-talk), so "already in that state" isn't
+    // simply a matter of the mute flag — otherwise a re-send would leave the key mode on.
+    const releasingPtt = !muted && pushToTalk.value
+    if (muted === selfMuted.value && !releasingPtt) return
+
+    selfMuted.value = muted
+
+    // setPushToTalk does the applying and publishing itself, so don't do it twice.
+    if (releasingPtt) setPushToTalk(false)
+    else {
+      applyMic()
+      void publishState()
+    }
+
+    notice.value = muted
+      ? 'You were muted by the owner.'
+      : 'The owner turned your microphone on.'
+    setTimeout(() => { notice.value = null }, 8000)
+  }
+
+  /**
    * Someone in the call turned you out of it. Tear the call down and leave a word behind —
    * otherwise the audio just stops and the tiles vanish with nothing said about why.
    */
@@ -1649,10 +1963,17 @@ export function useVoice() {
     releaseTalk,
     screenStream,
     cameraStream,
+    audioShareStream,
     inCall,
     isSharing,
     isCameraOn,
+    isAudioSharing,
     sharingPeer,
+    voiceEffects,
+    effectFor,
+    loadChannelEffects,
+    setChannelEffects,
+    applyChannelEffects,
     connect,
     disconnect,
     toggleMute,
@@ -1660,6 +1981,7 @@ export function useVoice() {
     togglePeerMute,
     setPeerVolume,
     setPeerScreenVolume,
+    togglePeerScreenMute,
     setWatchedScreen,
     inputDevices,
     outputDevices,
@@ -1675,9 +1997,12 @@ export function useVoice() {
     setScreenResolution,
     setScreenMode,
     toggleScreenShare,
+    toggleAudioShare,
     toggleCamera,
     disconnectUser,
     disconnectAll,
     disconnectedByModerator,
+    muteUser,
+    mutedByModerator,
   }
 }

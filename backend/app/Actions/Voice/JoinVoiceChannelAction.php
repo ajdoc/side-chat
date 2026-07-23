@@ -47,6 +47,7 @@ final class JoinVoiceChannelAction
                 'deafened' => false,
                 'screen_sharing' => false,
                 'camera_on' => false,
+                'audio_sharing' => false,
                 'last_seen_at' => now(),
             ],
         );

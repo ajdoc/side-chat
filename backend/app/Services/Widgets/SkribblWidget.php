@@ -114,7 +114,7 @@ final class SkribblWidget implements WidgetHandler, RedactsState
      * The state minus anything this viewer hasn't earned. Only the live word is secret, and
      * only while it's being drawn — once the turn is revealed or over, everyone sees it.
      */
-    public function forViewer(array $state, ?User $viewer): array
+    public function forViewer(Widget $widget, array $state, ?User $viewer): array
     {
         $isDrawer = $viewer !== null && (int) ($state['drawerId'] ?? 0) === $viewer->id;
         if (($state['status'] ?? '') === 'drawing' && ! $isDrawer) {

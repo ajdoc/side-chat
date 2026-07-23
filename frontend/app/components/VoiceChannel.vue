@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import {
+  AudioLines,
   ChevronDown,
   ChevronUp,
   Headphones,
@@ -16,9 +17,10 @@ import {
   Video,
   VideoOff,
   Volume2,
+  VolumeX,
   X,
 } from 'lucide-vue-next'
-import type { Channel, Peer } from '~/types'
+import type { Channel, Peer, VoiceParticipant } from '~/types'
 import { Button } from '~/components/ui/button'
 import {
   AlertDialog,
@@ -75,6 +77,7 @@ const {
   cameraStream,
   isSharing,
   isCameraOn,
+  isAudioSharing,
   connect,
   disconnect,
   toggleMute,
@@ -82,12 +85,37 @@ const {
   togglePeerMute,
   setPeerVolume,
   setPeerScreenVolume,
+  togglePeerScreenMute,
   setWatchedScreen,
   toggleScreenShare,
+  toggleAudioShare,
   toggleCamera,
   disconnectUser,
   disconnectAll,
+  muteUser,
 } = useVoice()
+
+/**
+ * Whether you own the place this call is in — the one permission the call itself doesn't
+ * grant everybody. Worked out here rather than passed in, because both pages that mount
+ * this already hold the answer in shared state and neither should have to remember to
+ * hand it over.
+ *
+ * A server asks its owner flag; a group chat asks who made it. A DM's `owner_id` is null,
+ * so it falls out as false for both people, which is right — neither owns the other.
+ */
+const { server } = useServer()
+const { conversation } = useConversation()
+
+const canModerate = computed(() => {
+  if (props.channel.server_id) {
+    return server.value?.id === props.channel.server_id && !!server.value?.is_owner
+  }
+
+  return !!conversation.value
+    && conversation.value.channel_id === props.channel.id
+    && conversation.value.owner_id === user.value?.id
+})
 
 /** Are we in *this* channel's call? You can be in another one and just reading this one. */
 const here = computed(() => channelId.value === props.channel.id && status.value !== 'idle')
@@ -100,6 +128,16 @@ const waiting = computed(() => participantsIn(props.channel.id))
 const hidden = computed(() => props.quietWhenEmpty && !here.value && !waiting.value.length)
 
 const collapsed = ref(false)
+
+/**
+ * Who gets to decorate the room: the owner, and only in a server.
+ *
+ * Narrower than `canModerate` on purpose. Moderating a chat's call is something the person
+ * who started the chat can do; an entrance effect is a property of a *venue*, and a DM isn't
+ * one — the backend refuses it there in any case, so this just declines to offer a button
+ * that would 403.
+ */
+const canSetEffects = computed(() => props.channel.server_id !== null && canModerate.value)
 
 /**
  * Forcing someone out of the call is a moderator action you can't take back without them
@@ -141,9 +179,11 @@ const selfPeer = computed<Peer>(() => ({
   deafened: selfDeafened.value,
   screenSharing: isSharing.value,
   cameraOn: isCameraOn.value,
+  audioSharing: isAudioSharing.value,
   localMuted: false,
   volume: 1,
   screenVolume: 1,
+  screenMuted: false,
 }))
 
 // --- the screen-share stage ---
@@ -224,6 +264,32 @@ const { nameFor } = useNicknames()
 function initials(name: string) {
   return name.split(' ').map(w => w[0]).slice(0, 2).join('').toUpperCase()
 }
+
+// --- what the people already in there are up to, for the bar you see before joining ---
+
+/** One waiting face's tooltip: their name, and anything worth knowing about them. */
+function stateOf(p: VoiceParticipant) {
+  const notes = [
+    p.screen_sharing ? 'sharing a screen' : null,
+    p.deafened ? 'deafened' : p.muted ? 'muted' : null,
+  ].filter(Boolean)
+
+  return notes.length ? `${nameFor(p.user)} — ${notes.join(', ')}` : nameFor(p.user)
+}
+
+/** "Ana is" / "Ana and Ben are" / "3 people are" — whoever has a screen up right now. */
+const sharingNames = computed(() => {
+  const names = waiting.value.filter(p => p.screen_sharing).map(p => nameFor(p.user))
+
+  if (!names.length) return null
+  if (names.length === 1) return `${names[0]} is`
+  if (names.length === 2) return `${names[0]} and ${names[1]} are`
+
+  return `${names.length} people are`
+})
+
+const mutedCount = computed(() => waiting.value.filter(p => p.muted && !p.deafened).length)
+const deafenedCount = computed(() => waiting.value.filter(p => p.deafened).length)
 </script>
 
 <template>
@@ -238,7 +304,7 @@ function initials(name: string) {
             v-for="p in waiting"
             :key="p.user.id"
             class="grid h-7 w-7 place-items-center rounded-full border-2 border-background bg-secondary text-[10px] font-semibold text-secondary-foreground"
-            :title="nameFor(p.user)"
+            :title="stateOf(p)"
           >
             <img v-if="p.user.avatar" :src="p.user.avatar" :alt="nameFor(p.user)" class="h-full w-full rounded-full object-cover">
             <span v-else>{{ initials(nameFor(p.user)) }}</span>
@@ -247,10 +313,26 @@ function initials(name: string) {
         <span class="truncate text-xs text-muted-foreground">
           {{ waiting.length === 1 ? `${nameFor(waiting[0]!.user)} is` : `${waiting.length} people are` }} in the call
         </span>
+
+        <!--
+          Faces this small overlap, so a badge per avatar would be half-hidden under the next
+          one — the per-person detail is in each avatar's tooltip instead, and what's worth
+          seeing without hovering is summarised here. A screen already up in there is the one
+          that changes whether you bother joining.
+        -->
+        <span class="flex shrink-0 items-center gap-1.5 text-muted-foreground">
+          <ScreenShare v-if="sharingNames" class="h-3.5 w-3.5 text-primary" :title="`${sharingNames} sharing a screen`" />
+          <MicOff v-if="mutedCount" class="h-3.5 w-3.5" :title="`${mutedCount} muted`" />
+          <HeadphoneOff v-if="deafenedCount" class="h-3.5 w-3.5" :title="`${deafenedCount} deafened`" />
+        </span>
       </template>
       <span v-else class="text-xs text-muted-foreground">Nobody's in voice yet.</span>
 
-      <Button size="sm" class="ml-auto gap-2" @click="connect(channel.id)">
+      <div v-if="canSetEffects" class="ml-auto">
+        <VoiceEffectSettings :channel="channel" />
+      </div>
+
+      <Button size="sm" :class="canSetEffects ? 'gap-2' : 'ml-auto gap-2'" @click="connect(channel.id)">
         <Volume2 class="h-4 w-4" /> {{ joinLabel }}
       </Button>
     </div>
@@ -266,9 +348,14 @@ function initials(name: string) {
           {{ connecting ? 'Connecting…' : `Voice connected · ${peers.length + 1}` }}
         </span>
 
+        <div v-if="canSetEffects" class="ml-auto">
+          <VoiceEffectSettings :channel="channel" />
+        </div>
+
         <button
           type="button"
-          class="ml-auto flex items-center gap-1 rounded px-2 py-0.5 text-xs text-muted-foreground transition hover:bg-muted hover:text-foreground"
+          class="flex items-center gap-1 rounded px-2 py-0.5 text-xs text-muted-foreground transition hover:bg-muted hover:text-foreground"
+          :class="canSetEffects ? '' : 'ml-auto'"
           :title="collapsed ? 'Show the call' : 'Hide the call and make room for the chat'"
           @click="collapsed = !collapsed"
         >
@@ -328,18 +415,31 @@ function initials(name: string) {
           <div class="flex items-center gap-2">
             <span class="shrink-0 text-xs text-muted-foreground">{{ stage.name }}</span>
 
-            <!-- How loud their shared screen plays, for you alone — separate from their voice. -->
+            <!-- How loud their shared screen plays, for you alone — separate from their voice,
+                 and with its own switch for turning the sound off while you keep watching. -->
             <div v-if="stagePeer" class="flex min-w-0 items-center gap-1.5">
-              <Volume2 class="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+              <button
+                type="button"
+                class="shrink-0 rounded p-0.5 transition"
+                :class="stagePeer.screenMuted ? 'text-destructive' : 'text-muted-foreground hover:text-foreground'"
+                :title="stagePeer.screenMuted
+                  ? 'Hear this screen again'
+                  : 'Mute this screen\'s sound — you\'ll still hear everyone talking'"
+                @click="togglePeerScreenMute(stagePeer.id)"
+              >
+                <VolumeX v-if="stagePeer.screenMuted" class="h-3.5 w-3.5" />
+                <Volume2 v-else class="h-3.5 w-3.5" />
+              </button>
               <input
                 type="range"
                 min="0"
                 max="1"
                 step="0.01"
                 :value="stagePeer.screenVolume"
-                class="h-1 w-24 cursor-pointer appearance-none rounded-full bg-muted accent-primary"
+                :disabled="stagePeer.screenMuted"
+                class="h-1 w-24 cursor-pointer appearance-none rounded-full bg-muted accent-primary disabled:cursor-not-allowed disabled:opacity-40"
                 :aria-label="`Shared screen volume for ${stagePeer.name}`"
-                :title="`Screen sound: ${Math.round(stagePeer.screenVolume * 100)}%`"
+                :title="stagePeer.screenMuted ? 'Screen sound: off' : `Screen sound: ${Math.round(stagePeer.screenVolume * 100)}%`"
                 @input="setPeerScreenVolume(stagePeer.id, Number(($event.target as HTMLInputElement).value))"
               >
             </div>
@@ -378,10 +478,14 @@ function initials(name: string) {
             :muted="peer.muted"
             :sharing="peer.screenSharing"
             :watching="watching === peer.id"
+            :can-moderate="canModerate"
             @toggle-mute="togglePeerMute(peer.id)"
             @set-volume="setPeerVolume(peer.id, $event)"
+            @set-screen-volume="setPeerScreenVolume(peer.id, $event)"
+            @toggle-screen-mute="togglePeerScreenMute(peer.id)"
             @watch="watching = watching === peer.id ? null : peer.id"
             @disconnect="askKick(peer)"
+            @force-mute="muteUser(peer.id, $event)"
           />
         </div>
       </div>
@@ -437,6 +541,22 @@ function initials(name: string) {
           <ScreenShareOff v-if="isSharing" class="h-4 w-4" />
           <ScreenShare v-else class="h-4 w-4" />
           {{ isSharing ? 'Stop sharing' : 'Share screen' }}
+        </Button>
+
+        <!-- Sound with nothing to look at: a track, or a video everyone is listening to.
+             Its own button rather than a mode of the one above, because from the room's
+             side it is a different thing to be offered — there is no screen to watch. -->
+        <Button
+          :variant="isAudioSharing ? 'default' : 'secondary'"
+          size="sm"
+          class="gap-2"
+          :title="isAudioSharing
+            ? 'Stop sharing audio'
+            : 'Share a tab\'s sound with the call, without sharing the picture'"
+          @click="toggleAudioShare"
+        >
+          <AudioLines class="h-4 w-4" />
+          {{ isAudioSharing ? 'Stop audio' : 'Share audio' }}
         </Button>
 
         <!-- Only when there's actually anyone to clear out. Turns everyone but you out of

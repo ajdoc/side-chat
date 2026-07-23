@@ -1,28 +1,29 @@
 <?php
 
-use App\Http\Controllers\Auth\AuthController;
 use App\Http\Controllers\AttachmentController;
+use App\Http\Controllers\Auth\AuthController;
 use App\Http\Controllers\Auth\SocialAuthController;
 use App\Http\Controllers\CanvasController;
 use App\Http\Controllers\ChannelCanvasController;
 use App\Http\Controllers\ChannelController;
-use App\Http\Controllers\ChunkedUploadController;
 use App\Http\Controllers\ChannelDocumentController;
-use App\Http\Controllers\DocumentController;
 use App\Http\Controllers\ChannelLinkController;
 use App\Http\Controllers\ChannelMemberController;
 use App\Http\Controllers\ChannelSpaceNoteController;
 use App\Http\Controllers\ChannelWhiteboardController;
+use App\Http\Controllers\ChunkedUploadController;
 use App\Http\Controllers\CommentController;
 use App\Http\Controllers\ConversationController;
+use App\Http\Controllers\DecisionController;
+use App\Http\Controllers\DocumentController;
 use App\Http\Controllers\GifController;
 use App\Http\Controllers\InviteController;
 use App\Http\Controllers\JoinRequestController;
 use App\Http\Controllers\LyricsController;
 use App\Http\Controllers\MessageController;
 use App\Http\Controllers\MessageInfoController;
-use App\Http\Controllers\PinController;
 use App\Http\Controllers\NicknameController;
+use App\Http\Controllers\PinController;
 use App\Http\Controllers\PreferencesController;
 use App\Http\Controllers\ProfileController;
 use App\Http\Controllers\ReactionController;
@@ -32,7 +33,6 @@ use App\Http\Controllers\SideChatController;
 use App\Http\Controllers\SideChatMessageController;
 use App\Http\Controllers\SpaceNoteController;
 use App\Http\Controllers\SpotifyController;
-use App\Http\Controllers\DecisionController;
 use App\Http\Controllers\ThreadController;
 use App\Http\Controllers\ThreadMessageController;
 use App\Http\Controllers\VoiceController;
@@ -168,6 +168,9 @@ Route::middleware('auth:api')->group(function () {
     Route::get('channels/{channel}/attachments', [AttachmentController::class, 'indexForChannel']);
     Route::get('channels/{channel}/links', [ChannelLinkController::class, 'index']);
     Route::get('channels/{channel}/gifs', [AttachmentController::class, 'indexForChannelGifs']);
+    // Video files already posted in this chat (timeline, threads and side chats alike) —
+    // what the video widget's "in this chat" picker browses. `?q=` filters by filename.
+    Route::get('channels/{channel}/videos', [AttachmentController::class, 'indexForChannelVideos']);
     Route::delete('attachments/{attachment}', [AttachmentController::class, 'destroy']);
 
     // GIF picker — proxies the configured providers (Giphy, Klipy) so their keys stay server-side.
@@ -181,6 +184,12 @@ Route::middleware('auth:api')->group(function () {
     Route::post('channels/{channel}/voice/leave', [VoiceController::class, 'leave']);
     Route::patch('channels/{channel}/voice/state', [VoiceController::class, 'updateState']);
     Route::post('channels/{channel}/voice/heartbeat', [VoiceController::class, 'heartbeat']);
+    // What the call plays when people come and go: readable by any member, set by the owner.
+    Route::get('channels/{channel}/voice/effects', [VoiceController::class, 'effects']);
+    Route::patch('channels/{channel}/voice/effects', [VoiceController::class, 'updateEffects']);
+    // Owner only: move somebody else's microphone. Unlike disconnecting, this reaches into
+    // another person's machine rather than just emptying their seat.
+    Route::post('channels/{channel}/voice/mute', [VoiceController::class, 'mute']);
     // Any member: disconnect one participant (with user_id) or clear the room (without).
     Route::post('channels/{channel}/voice/disconnect', [VoiceController::class, 'disconnect']);
 

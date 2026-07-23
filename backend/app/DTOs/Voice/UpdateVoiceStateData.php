@@ -16,6 +16,7 @@ final class UpdateVoiceStateData extends ValidatedDTO
     public ?bool $deafened;
     public ?bool $screen_sharing;
     public ?bool $camera_on;
+    public ?bool $audio_sharing;
 
     /**
      * Single source of truth for validation — reused by the matching FormRequest.
@@ -29,6 +30,7 @@ final class UpdateVoiceStateData extends ValidatedDTO
             'deafened' => ['sometimes', 'boolean'],
             'screen_sharing' => ['sometimes', 'boolean'],
             'camera_on' => ['sometimes', 'boolean'],
+            'audio_sharing' => ['sometimes', 'boolean'],
         ];
     }
 
@@ -51,6 +53,7 @@ final class UpdateVoiceStateData extends ValidatedDTO
             'deafened' => null,
             'screen_sharing' => null,
             'camera_on' => null,
+            'audio_sharing' => null,
         ];
     }
 
@@ -62,6 +65,7 @@ final class UpdateVoiceStateData extends ValidatedDTO
             'deafened' => new NullableBooleanCast,
             'screen_sharing' => new NullableBooleanCast,
             'camera_on' => new NullableBooleanCast,
+            'audio_sharing' => new NullableBooleanCast,
         ];
     }
 
@@ -78,6 +82,7 @@ final class UpdateVoiceStateData extends ValidatedDTO
                 'deafened' => $this->deafened,
                 'screen_sharing' => $this->screen_sharing,
                 'camera_on' => $this->camera_on,
+                'audio_sharing' => $this->audio_sharing,
             ],
             fn (?bool $value) => $value !== null
         );

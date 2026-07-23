@@ -16,7 +16,23 @@ class Channel extends Model
 
     public const TYPES = ['text', 'voice'];
 
-    protected $fillable = ['server_id', 'conversation_id', 'name', 'type', 'position'];
+    /**
+     * The entrance/exit effects a call may be given — everything the browser knows how to
+     * draw and synthesise on its own (see VoiceEffects.vue). A closed catalogue on purpose:
+     * nothing here is an asset anybody uploads, so a room can't be made to play something
+     * unvetted at everyone in it.
+     */
+    public const VOICE_EFFECTS = ['fireworks', 'confetti', 'sparkles'];
+
+    protected $fillable = [
+        'server_id',
+        'conversation_id',
+        'name',
+        'type',
+        'position',
+        'join_effect',
+        'leave_effect',
+    ];
 
     public function server(): BelongsTo
     {
@@ -136,5 +152,44 @@ class Channel extends Model
     public function allowsCalls(): bool
     {
         return $this->isVoice() || $this->isDirect();
+    }
+
+    /** Effects attached to particular people in this channel's call. */
+    public function voiceEffectAssignments(): HasMany
+    {
+        return $this->hasMany(VoiceEffectAssignment::class);
+    }
+
+    /**
+     * Everything this call plays when people come and go, as one payload.
+     *
+     * Two layers, and the split is the feature: `default` is what happens for anybody in
+     * particular, and `people` is the list of exceptions the owner has singled out. Handed
+     * over whole rather than as a lookup per arrival, because it has to be in the browser
+     * *before* the door opens — an effect fetched on the event it exists for is an effect
+     * that plays late or not at all.
+     *
+     * @return array{
+     *     default: array{join: string|null, leave: string|null},
+     *     people: array<int, array{user_id: int, join: string|null, leave: string|null}>
+     * }
+     */
+    public function voiceEffects(): array
+    {
+        return [
+            'default' => [
+                'join' => $this->join_effect,
+                'leave' => $this->leave_effect,
+            ],
+            'people' => $this->voiceEffectAssignments()
+                ->get()
+                ->map(fn (VoiceEffectAssignment $a) => [
+                    'user_id' => $a->user_id,
+                    'join' => $a->join_effect,
+                    'leave' => $a->leave_effect,
+                ])
+                ->values()
+                ->all(),
+        ];
     }
 }

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { Headphones, HeadphoneOff, Mic, MicOff, PhoneOff, ScreenShare, Signal, Video, VideoOff } from 'lucide-vue-next'
+import { AudioLines, Headphones, HeadphoneOff, Mic, MicOff, PhoneOff, ScreenShare, Signal, Video, VideoOff } from 'lucide-vue-next'
 
 /**
  * "You're in a call" — pinned above your name in the sidebar.
@@ -19,7 +19,7 @@ const { user } = useAuth()
 const { server, channels } = useServer()
 const { conversations } = useConversations()
 const {
-  channelId, status, peers, selfMuted, selfDeafened, isSharing, isCameraOn, inCall,
+  channelId, status, peers, selfMuted, selfDeafened, isSharing, isCameraOn, isAudioSharing, inCall,
   pushToTalk, pttHeld, micOpen,
   toggleMute, toggleDeafen, toggleCamera, disconnect, holdTalk, releaseTalk,
 } = useVoice()
@@ -98,6 +98,9 @@ const link = computed(() => {
         </NuxtLink>
       </div>
       <ScreenShare v-if="isSharing" class="h-4 w-4 shrink-0 text-primary" title="You're sharing your screen" />
+      <!-- The same reason the camera button is down here: a share you can't see from the page
+           you wandered off to is one you forget you left running. -->
+      <AudioLines v-if="isAudioSharing" class="h-4 w-4 shrink-0 text-primary" title="You're sharing audio with the call" />
     </div>
 
     <!-- Push-to-talk needs to say, at a glance, whether the line is open right now — the mic
