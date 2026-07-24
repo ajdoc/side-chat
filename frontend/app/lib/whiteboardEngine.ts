@@ -204,6 +204,14 @@ export function renderStroke(ctx: CanvasRenderingContext2D, stroke: Stroke, scal
         const y = pt.y * scale
         i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y)
       })
+      // A free-form scribble can be flooded like a shape: close the loop and paint the inside
+      // first, then lay the ink on top. `fill` is only ever set by the bucket, so an ordinary
+      // pen mark (no fill) is untouched. Needs at least a triangle's worth of points to enclose.
+      if (p.fill && pts.length >= 3) {
+        ctx.closePath()
+        ctx.fillStyle = p.fill
+        ctx.fill()
+      }
       ctx.stroke()
       break
     }

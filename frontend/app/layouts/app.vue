@@ -61,6 +61,9 @@ const { participantsIn } = useVoiceRoster()
 const { expandedIds, isExpanded, isLoading, expand: expandServer, toggle: toggleServer, loadChannels, cache: cacheChannels, channelsFor } = useSidebarChannels()
 const userStream = useUserStream()
 const { ensurePermission: ensureNotifyPermission } = useDesktopNotifications()
+// Global online/idle presence — joined once here, since this layout is the one thing mounted
+// for the whole of a signed-in session. Every avatar's status dot reads from it.
+const { start: startPresence, stop: stopPresence } = usePresence()
 
 const modes: { value: ThemeMode, label: string, icon: any }[] = [
   { value: 'light', label: 'Light', icon: Sun },
@@ -382,6 +385,7 @@ onMounted(async () => {
   // it's what makes a DM appear, a badge move, and a phone ring. Everything else is scoped
   // to a place you happen to be standing.
   userStream.subscribe()
+  startPresence()
   // Ask once, so a mention can reach you while you're in another tab. Declined is fine —
   // the sidebar badge still does its job.
   ensureNotifyPermission()
@@ -392,7 +396,7 @@ onMounted(async () => {
 
 watch(activeServerId, syncServer)
 watch(() => user.value?.id, () => userStream.subscribe())
-onBeforeUnmount(() => userStream.unsubscribe())
+onBeforeUnmount(() => { userStream.unsubscribe(); stopPresence() })
 </script>
 
 <template>
@@ -449,7 +453,7 @@ onBeforeUnmount(() => userStream.unsubscribe())
                       ? 'font-semibold text-foreground'
                       : 'text-muted-foreground'"
                 >
-                  <span class="grid h-6 w-6 shrink-0 place-items-center rounded-full bg-secondary text-[9px] font-semibold text-secondary-foreground">
+                  <span class="relative grid h-6 w-6 shrink-0 place-items-center rounded-full bg-secondary text-[9px] font-semibold text-secondary-foreground">
                     <Users v-if="item.conversation.type === 'group'" class="h-3.5 w-3.5" />
                     <img
                       v-else-if="conversationAvatar(item.conversation, user)"
@@ -458,6 +462,12 @@ onBeforeUnmount(() => userStream.unsubscribe())
                       class="h-full w-full rounded-full object-cover"
                     >
                     <span v-else>{{ initialsOf(chatTitle(item.conversation)) }}</span>
+                    <!-- Online/idle dot on the person you're talking to (DMs only — a group has many). -->
+                    <PresenceDot
+                      v-if="item.conversation.type !== 'group' && otherMembers(item.conversation, user)[0]"
+                      :user-id="otherMembers(item.conversation, user)[0]!.id"
+                      class="absolute -bottom-0.5 -right-0.5 h-2.5 w-2.5"
+                    />
                   </span>
 
                   <span class="truncate">{{ chatTitle(item.conversation) }}</span>
@@ -765,9 +775,12 @@ onBeforeUnmount(() => userStream.unsubscribe())
          wherever you are — including in a conversation you have never once opened. -->
     <IncomingCall />
 
-    <!-- The pinned music player. Same reasoning as the call above: it lives here so that
-         changing channel, server, DM or group chat can't unmount it mid-song. -->
-    <MusicDock />
+    <!-- The floating-window shelf — popped-out widgets, conversations, and the pinned music
+         player. Mounted here (not inside a page) so a floated window outlives the page it was
+         opened from: a video keeps playing, a chat keeps updating, and the pinned song follows
+         you across channels, DMs, groups and servers. Music renders through the shelf now, so
+         the old standalone MusicDock is gone. -->
+    <FloatingWindows />
 
     <NewChatDialog v-model:open="showNewChat" />
 

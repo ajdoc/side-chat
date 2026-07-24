@@ -445,9 +445,10 @@ async function onPointerUp(e: PointerEvent) {
 /**
  * The paint bucket, in two halves.
  *
- * On a mark: a rectangle or ellipse gets an inside; everything else has no interior to flood,
- * so it takes the colour on its ink instead, which is what someone reaching for a bucket over
- * a line or a label actually wants. On bare board: the board itself takes the colour — one
+ * On a mark: a rectangle, an ellipse or a free-form pen scribble gets an inside; a line, an
+ * arrow or a label has no interior to flood, so it takes the colour on its ink instead, which
+ * is what someone reaching for a bucket over one of those actually wants. On bare board: the
+ * board itself takes the colour — one
  * `bg` mark, painted behind everything, replaced rather than stacked so a board that's been
  * recoloured ten times still carries one backdrop.
  *
@@ -462,7 +463,7 @@ async function fillAt(p: { x: number, y: number }) {
     if (!hitStroke({ kind: s.kind, payload: s.payload }, p, 6)) continue
     if (s.id <= 0) return // still awaiting its server id; nothing to PATCH yet
 
-    if (s.kind === 'rect' || s.kind === 'ellipse') {
+    if (s.kind === 'rect' || s.kind === 'ellipse' || s.kind === 'pen') {
       if (bucketColor.value) s.payload.fill = bucketColor.value
       else delete s.payload.fill
     } else if (bucketColor.value) {

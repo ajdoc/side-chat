@@ -1,23 +1,55 @@
 <script setup lang="ts">
-import { ListMusic, PinOff } from 'lucide-vue-next'
+import { ExternalLink, ListMusic, PinOff } from 'lucide-vue-next'
 import type { Widget } from '~/types'
 
 /**
  * Renders a widget message's card by dispatching on its `type`. The timeline doesn't need
  * to know a music player from a board — it just hands the widget here (see MessageItem).
  */
-defineProps<{ widget: Widget }>()
+const props = defineProps<{ widget: Widget }>()
 
 // A pinned music widget is being played by MusicDock, at the app level. Rendering the full
 // card here too would build a second engine for the same song and play it twice, so the
 // message shows a stub pointing at the dock instead.
 const { isPinned, unpin } = useMusicPin()
+
+// Any non-music widget can be popped out into a floating window that outlives this timeline —
+// music has its own dedicated dock, so it keeps the pin/unpin affordance above instead.
+const { open: openFloating, isWidgetFloating } = useFloatingWindows()
+
+const WIDGET_LABEL: Record<string, string> = {
+  video: 'Video', kanban: 'Kanban', poll: 'Poll', shooter: 'Galaga', racing: 'Racing', skribbl: 'Skribbl',
+}
+const canFloat = computed(() => props.widget.type !== 'music' && !!props.widget.state)
+
+function popOut() {
+  openFloating({
+    kind: 'widget',
+    widgetId: props.widget.id,
+    channelId: props.widget.channel_id,
+    widgetType: props.widget.type,
+    title: WIDGET_LABEL[props.widget.type] ?? 'Widget',
+  })
+}
 </script>
 
 <template>
-  <!-- A card can arrive as a reference (no state) over the socket; its state lands a beat
-       later from /api/widgets/{id}. Hold a slim placeholder until it does. -->
-  <div v-if="!widget.state" class="h-16 animate-pulse rounded-lg bg-muted" />
+  <div class="group/widget relative">
+    <!-- Pop out into a floating window that follows you around the app. Hover-revealed so it
+         stays out of the card's own chrome until wanted. Music is excluded — it has the dock. -->
+    <button
+      v-if="canFloat"
+      type="button"
+      class="absolute right-1.5 top-1.5 z-20 flex items-center gap-1 rounded-md border bg-background/85 px-1.5 py-1 text-[11px] text-muted-foreground opacity-0 shadow-sm backdrop-blur transition hover:text-foreground group-hover/widget:opacity-100"
+      :title="isWidgetFloating(widget.id) ? 'Already popped out — brings it to the front' : 'Pop out into a floating window'"
+      @click="popOut"
+    >
+      <ExternalLink class="h-3.5 w-3.5" />
+    </button>
+
+    <!-- A card can arrive as a reference (no state) over the socket; its state lands a beat
+         later from /api/widgets/{id}. Hold a slim placeholder until it does. -->
+    <div v-if="!widget.state" class="h-16 animate-pulse rounded-lg bg-muted" />
   <div
     v-else-if="widget.type === 'music' && isPinned(widget.id)"
     class="mt-1.5 flex w-full max-w-md items-center gap-2 rounded-xl border bg-muted/30 px-3 py-2 text-xs text-muted-foreground"
@@ -35,4 +67,5 @@ const { isPinned, unpin } = useMusicPin()
   <CoopShooter v-else-if="widget.type === 'shooter'" :widget="widget" />
   <CoopRacer v-else-if="widget.type === 'racing'" :widget="widget" />
   <SkribblGame v-else-if="widget.type === 'skribbl'" :widget="widget" />
+  </div>
 </template>

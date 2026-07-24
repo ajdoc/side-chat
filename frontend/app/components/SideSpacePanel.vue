@@ -21,7 +21,7 @@ const { width: panelWidth, startResize } = useResizable('side-space', 420, { min
 
 const activeApp = computed<SideSpaceAppId>(() => {
   const s = route.query.space
-  return s === 'notes' || s === 'docs' || s === 'canvas' ? s : 'board'
+  return s === 'notes' || s === 'docs' || s === 'board' ? s : 'canvas'
 })
 
 function setApp(app: SideSpaceAppId) {

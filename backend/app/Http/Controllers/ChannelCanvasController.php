@@ -31,11 +31,16 @@ class ChannelCanvasController extends Controller
 
     public function store(ChannelCanvasItemRequest $request, Channel $channel, WidgetService $widgets): CanvasItemResource
     {
+        // Read `content` straight off the request, never through validated(): the nested
+        // `content.type` rule makes Laravel drop the whole `content` array when `.type` is
+        // absent (a note or checklist), which would send null into the NOT NULL column.
+        $content = $request->input('content');
+
         // A `widget` card places the channel's widget of the named type, creating it (with the
         // handler's initial state) on first use — the very same widget a chat command reaches.
         $widgetId = null;
         if ($request->validated('kind') === 'widget') {
-            $widget = $widgets->ensure($channel, $request->user(), $request->validated('content')['type']);
+            $widget = $widgets->ensure($channel, $request->user(), $content['type']);
             abort_if($widget === null, 422, 'Unknown widget type.');
             $widgetId = $widget->id;
         }
@@ -44,7 +49,7 @@ class ChannelCanvasController extends Controller
             'user_id' => $request->user()->id,
             'widget_id' => $widgetId,
             'kind' => $request->validated('kind'),
-            'content' => $request->validated('content'),
+            'content' => $content,
             'x' => (int) $request->validated('x', 0),
             'y' => (int) $request->validated('y', 0),
             'w' => (int) $request->validated('w', 240),
@@ -62,7 +67,13 @@ class ChannelCanvasController extends Controller
     {
         abort_unless($item->channel_id === $channel->id, 404);
 
-        $item->update($request->safe()->only(['content', 'x', 'y', 'w', 'h', 'z']));
+        $changes = $request->safe()->only(['x', 'y', 'w', 'h', 'z']);
+        // `content` off the raw request (validated() would drop it); only when one is sent.
+        if ($request->has('content')) {
+            $changes['content'] = $request->input('content');
+        }
+
+        $item->update($changes);
         broadcast(new CanvasItemSaved($item))->toOthers();
 
         return new CanvasItemResource($item->load(['user', 'widget']));

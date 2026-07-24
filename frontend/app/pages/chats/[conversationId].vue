@@ -83,7 +83,7 @@ function openInfo() {
   navigateTo({ path: route.path, query: { info: '1' } })
 }
 function openSpace() {
-  navigateTo({ path: route.path, query: { space: 'board' } })
+  navigateTo({ path: route.path, query: { space: 'canvas' } })
 }
 
 // --- group actions ---
@@ -118,10 +118,11 @@ useHead({ title: computed(() => title.value) })
     :channel="channel"
     :title="title"
     :subtitle="subtitle"
+    :float-icon="isGroup ? 'group' : 'dm'"
     @read="clearUnread(conversation.id)"
   >
     <template #icon>
-      <span class="grid h-8 w-8 shrink-0 place-items-center rounded-full bg-secondary text-[11px] font-semibold text-secondary-foreground">
+      <span class="relative grid h-8 w-8 shrink-0 place-items-center rounded-full bg-secondary text-[11px] font-semibold text-secondary-foreground">
         <Users v-if="isGroup" class="h-4 w-4" />
         <img
           v-else-if="conversationAvatar(conversation, user)"
@@ -130,6 +131,11 @@ useHead({ title: computed(() => title.value) })
           class="h-full w-full rounded-full object-cover"
         >
         <span v-else>{{ initialsOf(title) }}</span>
+        <PresenceDot
+          v-if="!isGroup && otherMembers(conversation, user)[0]"
+          :user-id="otherMembers(conversation, user)[0]!.id"
+          class="absolute -bottom-0.5 -right-0.5 h-3 w-3"
+        />
       </span>
     </template>
 

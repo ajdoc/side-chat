@@ -29,10 +29,10 @@ const emit = defineEmits<{
 }>()
 
 const APPS = [
+  { id: 'canvas', label: 'Canvas', icon: LayoutGrid },
   { id: 'board', label: 'Board', icon: PenTool },
   { id: 'notes', label: 'Notes', icon: NotebookPen },
   { id: 'docs', label: 'Docs', icon: FileText },
-  { id: 'canvas', label: 'Canvas', icon: LayoutGrid },
 ] as const
 </script>
 

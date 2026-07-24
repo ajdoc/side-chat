@@ -48,9 +48,12 @@ function subtitle(member: Participant) {
 <template>
   <ul v-if="members.length" class="space-y-1">
     <li v-for="m in members" :key="m.id" class="flex items-center gap-2.5 rounded-md px-1 py-1">
-      <span class="grid h-8 w-8 shrink-0 place-items-center overflow-hidden rounded-full bg-primary text-[10px] font-semibold text-primary-foreground">
-        <img v-if="m.avatar" :src="m.avatar" :alt="nameFor(m)" class="h-full w-full object-cover">
-        <span v-else>{{ initials(nameFor(m)) }}</span>
+      <span class="relative shrink-0">
+        <span class="grid h-8 w-8 place-items-center overflow-hidden rounded-full bg-primary text-[10px] font-semibold text-primary-foreground">
+          <img v-if="m.avatar" :src="m.avatar" :alt="nameFor(m)" class="h-full w-full object-cover">
+          <span v-else>{{ initials(nameFor(m)) }}</span>
+        </span>
+        <PresenceDot :user-id="m.id" class="absolute bottom-0 right-0 h-2.5 w-2.5" />
       </span>
       <div class="min-w-0 flex-1">
         <div class="flex items-center gap-1.5">

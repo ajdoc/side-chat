@@ -31,7 +31,7 @@ function openInfo() {
   navigateTo({ path: route.path, query: { info: '1' } })
 }
 function openSpace() {
-  navigateTo({ path: route.path, query: { space: 'board' } })
+  navigateTo({ path: route.path, query: { space: 'canvas' } })
 }
 </script>
 

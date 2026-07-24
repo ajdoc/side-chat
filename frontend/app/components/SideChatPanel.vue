@@ -63,13 +63,13 @@ const sctab = computed<'chat' | 'info' | 'space'>(() => {
   return t === 'info' || t === 'space' ? t : 'chat'
 })
 
-// The Side Space's active app rides in `spacetab`; board is the default (kept out of the URL).
+// The Side Space's active app rides in `spacetab`; canvas is the default (kept out of the URL).
 const spaceApp = computed<SideSpaceAppId>(() => {
   const s = route.query.spacetab
-  return s === 'notes' || s === 'docs' || s === 'canvas' ? s : 'board'
+  return s === 'notes' || s === 'docs' || s === 'board' ? s : 'canvas'
 })
 function setSpaceApp(app: SideSpaceAppId) {
-  setQuery({ spacetab: app === 'board' ? null : app })
+  setQuery({ spacetab: app === 'canvas' ? null : app })
 }
 
 const joined = computed(() =>

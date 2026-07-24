@@ -7,9 +7,11 @@ import type { Widget } from '~/types'
  * A music card is a *message*, so it lives and dies with the timeline it was posted in:
  * change channel, server, DM or group chat and the card unmounts, taking its player — and
  * the sound — with it. Pinning lifts one widget out of that lifecycle. The pinned widget
- * is held here, at the app level, and rendered once by `MusicDock`, which is mounted in the
- * layout and therefore survives every navigation. The card back in the timeline becomes a
- * stub (see WidgetCard) so there is never a second engine playing the same song.
+ * is held here, at the app level, and rendered once as a window on the floating shelf
+ * (`FloatingMusicContent` inside `FloatingWindows`), which is mounted in the layout and
+ * therefore survives every navigation. Pinning opens that window and unpinning closes it (see
+ * pin/unpin below). The card back in the timeline becomes a stub (see WidgetCard) so there is
+ * never a second engine playing the same song.
  *
  * Nothing about this is shared: pinning is a *local* view decision, exactly like volume.
  * The transport is still the server's, so a pinned listener stays in lockstep with the room
@@ -65,16 +67,26 @@ export function useMusicPin() {
     channel.listen('.WidgetUpdated', handler)
   }
 
+  const floating = useFloatingWindows()
+
   function pin(w: Widget) {
     widget.value = w
     savedId.value = w.id
     listen(w.channel_id)
+    // The pinned player now lives as a window on the floating shelf ({@link FloatingMusicContent}),
+    // rendered at the app level so navigation can't unmount it — which is the whole point of the
+    // pin: the sound follows you across channels, DMs, groups and servers. Music keeps its own
+    // brain here (this composable) rather than the generic widget path, because its Spotify /
+    // YouTube / listen-along machinery is bespoke; the shelf just gives it a frame.
+    floating.open({ kind: 'widget', widgetType: 'music', widgetId: w.id, channelId: w.channel_id, title: 'Music' })
   }
 
   function unpin() {
+    const id = widget.value?.id
     widget.value = null
     savedId.value = 0
     listen(null)
+    if (id != null) floating.close(`widget:${id}`)
   }
 
   /** Pull the pinned widget's current state. Also the recovery path after a lost listener. */

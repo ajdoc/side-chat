@@ -1,6 +1,7 @@
 <script setup lang="ts">
-import { ArrowDown, Loader2, X } from 'lucide-vue-next'
+import { ArrowDown, Loader2, PictureInPicture2, X } from 'lucide-vue-next'
 import type { Channel, GifResult, Message } from '~/types'
+import type { FloatingConversationIcon } from '~/composables/useFloatingWindows'
 import { Button } from '~/components/ui/button'
 import { mentionNamesKey, useChannelMembers } from '~/composables/useChannelMembers'
 
@@ -24,6 +25,8 @@ const props = defineProps<{
   prefix?: string
   /** Shown under the title in the header (a group's member list, say). */
   subtitle?: string
+  /** Which icon a floated copy of this conversation wears — a hash, a DM, or a group. */
+  floatIcon?: FloatingConversationIcon
 }>()
 
 const emit = defineEmits<{ read: [] }>()
@@ -48,6 +51,11 @@ const {
 } = useTyping()
 
 const { members: mentionMembers, names: mentionNames, load: loadMembers } = useChannelMembers()
+// Pop this conversation out into a floating window that follows you around the app.
+const { open: openFloating, isConversationFloating } = useFloatingWindows()
+function floatConversation() {
+  openFloating({ kind: 'conversation', channelId: props.channel.id, title: props.title, icon: props.floatIcon ?? 'channel' })
+}
 // The header's Side Chats button reads this shared count; load it per channel so the badge
 // is live from the moment you land, then keep it fresh over the channel stream.
 const { sideChats, loadSideChats } = useSideChats()
@@ -283,6 +291,14 @@ onBeforeUnmount(() => {
         </div>
         <div class="flex shrink-0 items-center gap-1">
           <slot name="actions" />
+          <button
+            type="button"
+            class="rounded p-1.5 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+            :title="isConversationFloating(channel.id) ? 'Already floating — brings it to the front' : 'Float this chat in a window'"
+            @click="floatConversation"
+          >
+            <PictureInPicture2 class="h-4 w-4" />
+          </button>
         </div>
       </header>
 

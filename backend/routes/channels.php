@@ -26,6 +26,18 @@ use Illuminate\Support\Facades\Broadcast;
  */
 Broadcast::channel('user.{userId}', fn (User $user, int $userId) => $user->id === $userId);
 
+/**
+ * Global online presence. A *presence* channel every signed-in client joins once (via
+ * `echo.join('online')`), so Reverb keeps one roster of who's connected and pushes here/
+ * joining/leaving to everyone — the source of the little green/amber dots on avatars.
+ *
+ * Any authenticated user may join; the returned payload is what each member carries in the
+ * roster. Whether someone is *idle* (as opposed to merely online) isn't tracked here — that's
+ * a client-side judgement whispered over this same channel, since only the browser knows the
+ * user stopped touching the keyboard. See usePresence.
+ */
+Broadcast::channel('online', fn (User $user) => ['id' => $user->id, 'name' => $user->name]);
+
 // Only members of the channel's container — its server, or its DM/group chat — may
 // subscribe to its message stream.
 Broadcast::channel('channel.{channelId}', function (User $user, int $channelId) {

@@ -30,13 +30,19 @@ class CanvasController extends Controller
 
     public function store(CanvasItemRequest $request, SideChat $sideChat, WidgetService $widgets): CanvasItemResource
     {
+        // The card's free-form blob. Read straight off the request, never through validated():
+        // `content` carries a nested `content.type` rule (for widget cards), and Laravel's
+        // validated() drops a parent array whose only ruled child is absent — so a note or
+        // checklist, which has no `.type`, would come back null and hit the NOT NULL column.
+        $content = $request->input('content');
+
         // A `widget` card places the *parent channel's* widget of the named type — widgets are
         // channel-scoped, so a side chat pins its channel's shared widget (the same one the
         // timeline and the channel's own canvas use).
         $widgetId = null;
         if ($request->validated('kind') === 'widget') {
             $channel = $sideChat->loadMissing('channel')->channel;
-            $widget = $widgets->ensure($channel, $request->user(), $request->validated('content')['type']);
+            $widget = $widgets->ensure($channel, $request->user(), $content['type']);
             abort_if($widget === null, 422, 'Unknown widget type.');
             $widgetId = $widget->id;
         }
@@ -45,7 +51,7 @@ class CanvasController extends Controller
             'user_id' => $request->user()->id,
             'widget_id' => $widgetId,
             'kind' => $request->validated('kind'),
-            'content' => $request->validated('content'),
+            'content' => $content,
             'x' => (int) $request->validated('x', 0),
             'y' => (int) $request->validated('y', 0),
             'w' => (int) $request->validated('w', 240),
@@ -62,7 +68,14 @@ class CanvasController extends Controller
     {
         abort_unless($item->side_chat_id === $sideChat->id, 404);
 
-        $item->update($request->safe()->only(['content', 'x', 'y', 'w', 'h', 'z']));
+        $changes = $request->safe()->only(['x', 'y', 'w', 'h', 'z']);
+        // `content` comes off the raw request for the same reason store does — validated()
+        // would drop it. Only touched when the request actually carries one (a drag saves x/y).
+        if ($request->has('content')) {
+            $changes['content'] = $request->input('content');
+        }
+
+        $item->update($changes);
         broadcast(new CanvasItemSaved($item))->toOthers();
 
         return new CanvasItemResource($item->load(['user', 'widget']));

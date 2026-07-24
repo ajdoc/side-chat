@@ -188,8 +188,11 @@ onBeforeUnmount(() => clearTimeout(copiedTimer))
     class="group relative flex gap-3 rounded px-2 py-1.5 transition-colors duration-500 hover:bg-muted/50"
     :class="highlighted ? 'bg-amber-200/50 dark:bg-amber-400/10' : ''"
   >
-    <div class="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-primary text-xs font-semibold text-primary-foreground">
-      {{ initials(nameFor(message.user)) }}
+    <div class="relative h-9 w-9 shrink-0">
+      <div class="grid h-full w-full place-items-center rounded-full bg-primary text-xs font-semibold text-primary-foreground">
+        {{ initials(nameFor(message.user)) }}
+      </div>
+      <PresenceDot :user-id="message.user.id" class="absolute bottom-0 right-0 h-2.5 w-2.5" />
     </div>
 
     <div class="min-w-0 flex-1">
