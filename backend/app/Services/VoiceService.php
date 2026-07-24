@@ -82,14 +82,21 @@ final class VoiceService
             $servers[] = ['urls' => $stun];
         }
 
-        if ($turn = config('webrtc.turn.urls')) {
+        // Every configured TURN entry is handed over, each with its own credentials — ICE
+        // fails over between providers on its own (see config/webrtc.php). Empty entries are
+        // already filtered out in config, so a single-TURN deployment yields a single entry.
+        foreach ((array) config('webrtc.turn', []) as $turn) {
+            if (empty($turn['urls'])) {
+                continue;
+            }
+
             $servers[] = [
-                'urls' => $turn,
-                'username' => config('webrtc.turn.username'),
-                'credential' => config('webrtc.turn.credential'),
+                'urls' => $turn['urls'],
+                'username' => $turn['username'] ?? null,
+                'credential' => $turn['credential'] ?? null,
             ];
         }
-        
+
         return $servers;
     }
 

@@ -56,6 +56,27 @@ const SCREEN_MAX_BITRATE = 2_500_000
 const CAMERA_MAX_BITRATE = 600_000
 
 /**
+ * Voice is mono speech, and it goes up your upload pipe once per *other person in the call* —
+ * so a few dozen kbps per peer is both plenty and the thing worth being stingy about. Capped on
+ * the mic *sender's* encoding (applyMicParams) so it's the microphone that's held down and not
+ * the shared-audio stream, and captured mono at source (channelCount: 1). DTX (see mungeOpus)
+ * then makes the silences between words nearly free on top.
+ */
+const MIC_MAX_BITRATE = 32_000
+
+/**
+ * How the microphone is captured, in one place so a fresh join and a mid-call swap can't drift
+ * apart. `channelCount: 1` is the mono capture the encoding budget is built around (see
+ * MIC_MAX_BITRATE); the three processing flags are the browser's own echo/noise/gain cleanup.
+ */
+const MIC_AUDIO: MediaTrackConstraints = {
+  echoCancellation: true,
+  noiseSuppression: true,
+  autoGainControl: true,
+  channelCount: 1,
+}
+
+/**
  * Encoding is the other half of the cost, and it's the half that lags the *sharer*.
  *
  * A screen isn't sent once — in a mesh it's encoded separately for every peer, so the CPU
@@ -70,6 +91,15 @@ const SCREEN_RESOLUTIONS = [480, 720, 1080] as const
 type ScreenResolution = (typeof SCREEN_RESOLUTIONS)[number]
 const DEFAULT_SCREEN_RESOLUTION: ScreenResolution = 720
 const SCREEN_MAX_FRAMERATE = 30
+
+/**
+ * Detail content — slides, docs, code — is mostly still, so there is no reason to pay 30 fps of
+ * bitrate and encode for it. Encoded at a low framerate instead, the saved budget goes into
+ * keeping the *text* crisp (contentHint 'detail' + maintain-resolution). Motion content keeps
+ * the full rate. The 'auto' sampler flips between the two, so a deck that starts playing a video
+ * speeds back up on its own — the axis it's easy to be wrong about is the one it re-checks.
+ */
+const SCREEN_DETAIL_FRAMERATE = 10
 
 /**
  * How a share is encoded, as a trade the sender picks:
@@ -88,10 +118,11 @@ const DEFAULT_SCREEN_MODE: ScreenMode = 'auto'
 function screenModeSettings(mode: 'detail' | 'motion'): {
   hint: 'detail' | 'motion'
   degradation: RTCDegradationPreference
+  maxFramerate: number
 } {
   return mode === 'motion'
-    ? { hint: 'motion', degradation: 'maintain-framerate' }
-    : { hint: 'detail', degradation: 'maintain-resolution' }
+    ? { hint: 'motion', degradation: 'maintain-framerate', maxFramerate: SCREEN_MAX_FRAMERATE }
+    : { hint: 'detail', degradation: 'maintain-resolution', maxFramerate: SCREEN_DETAIL_FRAMERATE }
 }
 
 interface PeerHandle {
@@ -286,6 +317,150 @@ async function base64ToGunzip(b64: string): Promise<string> {
 
   const stream = new Blob([bytes]).stream().pipeThrough(new DecompressionStream('gzip'))
   return new Response(stream).text()
+}
+
+/**
+ * Turn Opus DTX on: while a line is silent the encoder sends only the occasional comfort-noise
+ * update instead of a full stream, so quiet costs almost nothing — and in a call most mics are
+ * quiet most of the time.
+ *
+ * Applied to every description we *send* (see signal), which is enough on its own: an Opus
+ * encoder configures itself from the *remote* fmtp — its peer's declared receive preferences —
+ * so both ends running this switch DTX on for both directions, without touching our own local
+ * description or the perfect-negotiation state machine. A half-deployed pair simply gets the
+ * saving in one direction rather than wedging.
+ *
+ * DTX *only*, deliberately. In BUNDLE both audio m-lines — your microphone and the shared
+ * tab/system audio — share one Opus payload type and so one fmtp line; forcing mono or a low
+ * bitrate here would also crush shared music. Those two belong to the mic alone, so they live
+ * on the mic *sender* (applyMicParams caps its bitrate; channelCount: 1 captures it mono) and
+ * leave the shared-audio stream at full quality. DTX is the one nudge that suits both: it does
+ * nothing to continuous music (there's no silence to trim) and saves on everything else.
+ */
+function mungeOpus(sdp: string): string {
+  const pt = sdp.match(/a=rtpmap:(\d+) opus\/48000/i)?.[1]
+  if (!pt) return sdp
+
+  const want = ['usedtx=1']
+  const fmtp = new RegExp(`a=fmtp:${pt} ([^\\r\\n]*)`)
+
+  if (fmtp.test(sdp)) {
+    // Merge into the existing fmtp: overwrite any key we care about, keep the rest untouched.
+    return sdp.replace(fmtp, (_line, existing: string) => {
+      const parts = existing.split(';').map(s => s.trim()).filter(Boolean)
+      for (const entry of want) {
+        const key = entry.split('=')[0]!
+        const at = parts.findIndex(p => p.startsWith(`${key}=`))
+        if (at === -1) parts.push(entry)
+        else parts[at] = entry
+      }
+      return `a=fmtp:${pt} ${parts.join(';')}`
+    })
+  }
+
+  // No fmtp line yet — add one right after Opus's rtpmap.
+  return sdp.replace(
+    new RegExp(`(a=rtpmap:${pt} opus/48000[^\\r\\n]*\\r?\\n)`, 'i'),
+    `$1a=fmtp:${pt} ${want.join(';')}\r\n`,
+  )
+}
+
+/**
+ * Prefer VP9, then VP8, for a video transceiver.
+ *
+ * This is a *reorder* of the full codec list, not the payload-type pinning that once broke
+ * BUNDLE demux (see the note in createPeer) — every codec stays offered, so distinct payload
+ * types and the fallback path are both intact. VP9 buys noticeably sharper screen text at the
+ * same bitrate than VP8.
+ *
+ * AV1 is deliberately left where it is and never raised. In a mesh a share is encoded once per
+ * peer on the sharer's machine, and realtime AV1 at these sizes is a CPU trap — the exact cost
+ * this file is built to avoid. Best-effort: browsers without the capability API keep their
+ * default order.
+ */
+function preferEfficientVideo(transceiver: RTCRtpTransceiver) {
+  if (typeof RTCRtpReceiver === 'undefined' || !RTCRtpReceiver.getCapabilities) return
+  if (!('setCodecPreferences' in transceiver)) return
+
+  const caps = RTCRtpReceiver.getCapabilities('video')
+  if (!caps) return
+
+  const rank = (mimeType: string) => {
+    switch (mimeType.toLowerCase()) {
+      case 'video/vp9': return 0
+      case 'video/vp8': return 1
+      case 'video/av1': return 4 // available, but never preferred for a realtime mesh encode
+      default: return 2 // H.264, and the rtx/red/ulpfec machinery that must stay present
+    }
+  }
+
+  // Stable sort so codecs of equal rank keep the browser's own ordering (profiles, rtx pairs).
+  const ordered = caps.codecs
+    .map((codec, index) => ({ codec, index }))
+    .sort((a, b) => rank(a.codec.mimeType) - rank(b.codec.mimeType) || a.index - b.index)
+    .map(entry => entry.codec)
+
+  try {
+    transceiver.setCodecPreferences(ordered)
+  } catch {
+    // An engine that rejects the list keeps its default order rather than losing video.
+  }
+}
+
+const sleep = (ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms))
+
+/**
+ * How hard to chase a remembered mic before conceding to the default. A Bluetooth headset is
+ * often enumerated a beat before it's actually ready to capture right after a page load, so
+ * the first `exact` request can miss it — a couple of short retries catch that without adding
+ * a delay anyone notices when the device is present (the common case succeeds first try).
+ */
+const MIC_RETRY_ATTEMPTS = 3
+const MIC_RETRY_DELAY_MS = 300
+
+/**
+ * Open the microphone, honouring a remembered device *exactly*.
+ *
+ * `exact`, not `ideal`: an `ideal` deviceId is only advisory, and browsers were quietly
+ * falling back to the system default on a fresh join even when the chosen device was right
+ * there — so a reloaded call kept coming up on the built-in mic while the picker, reading the
+ * still-stored id, went on naming the one you'd picked. `exact` makes the choice actually bite.
+ *
+ * The retry keeps (and sharpens) the promise `ideal` was there for. A device that's genuinely
+ * gone falls back to whatever the browser will give us rather than failing the join — but a
+ * device that's merely slow to wake, the Bluetooth case, is given a moment to appear first,
+ * so a headset that reconnects on load still ends up being the mic you chose. A denied
+ * permission is never a device problem, so it surfaces immediately without burning the retries.
+ */
+async function getMicStream(deviceId: string | null): Promise<MediaStream> {
+  if (deviceId) {
+    for (let attempt = 0; attempt < MIC_RETRY_ATTEMPTS; attempt++) {
+      try {
+        return await navigator.mediaDevices.getUserMedia({
+          audio: { deviceId: { exact: deviceId }, ...MIC_AUDIO },
+          video: false,
+        })
+      } catch (err: any) {
+        // Only a missing / not-yet-ready device is worth waiting on; anything else (above all
+        // a denied permission) is final and must surface as the failure it is.
+        if (err?.name !== 'OverconstrainedError' && err?.name !== 'NotFoundError') throw err
+        // Wait between tries, but not after the last one — that just delays the fallback.
+        if (attempt < MIC_RETRY_ATTEMPTS - 1) await sleep(MIC_RETRY_DELAY_MS)
+      }
+    }
+    // The remembered device never showed — fall through to the browser's default rather than
+    // stranding the join on a mic that isn't there.
+  }
+
+  return navigator.mediaDevices.getUserMedia({ audio: { ...MIC_AUDIO }, video: false })
+}
+
+/** Cap the mic sender's bitrate — speech is cheap and this upload is paid once per peer. */
+async function applyMicParams(sender: RTCRtpSender) {
+  const params = sender.getParameters()
+  params.encodings = params.encodings?.length ? params.encodings : [{}]
+  params.encodings[0]!.maxBitrate = MIC_MAX_BITRATE
+  await sender.setParameters(params).catch(() => {})
 }
 
 export function useVoice() {
@@ -571,7 +746,7 @@ export function useVoice() {
     if (payload.description) {
       body.description = {
         type: payload.description.type,
-        sdpz: await gzipToBase64(payload.description.sdp ?? ''),
+        sdpz: await gzipToBase64(mungeOpus(payload.description.sdp ?? '')),
       }
     }
     if (payload.candidate) body.candidate = payload.candidate
@@ -672,6 +847,7 @@ export function useVoice() {
 
     for (const track of localStream.getAudioTracks()) {
       handle.micSender = pc.addTrack(track, localStream)
+      void applyMicParams(handle.micSender)
     }
 
     // If a speaker was chosen, route this peer's two audio elements to it as they're born —
@@ -714,6 +890,12 @@ export function useVoice() {
       handle.screenAudioTransceiver = pc.addTransceiver('audio', { direction: 'sendrecv' })
       handle.cameraTransceiver = pc.addTransceiver('video', { direction: 'sendrecv' })
       handle.screenTransceiver = pc.addTransceiver('video', { direction: 'sendrecv' })
+
+      // Steer both video slots to VP9 before the first offer, so the whole session negotiates
+      // the more efficient codec. Only the impolite peer creates the slots (see below), so
+      // setting the preference here sets it for the pair.
+      preferEfficientVideo(handle.cameraTransceiver)
+      preferEfficientVideo(handle.screenTransceiver)
 
       if (screenAudioTrack) void handle.screenAudioTransceiver.sender.replaceTrack(screenAudioTrack)
       if (cameraTrack) void handle.cameraTransceiver.sender.replaceTrack(cameraTrack)
@@ -1041,18 +1223,10 @@ export function useVoice() {
 
     try {
       // Ask for the microphone *first*: no point taking a seat in the room, telling
-      // everybody, and then discovering the browser won't give us a microphone. Prefer the
-      // remembered device with `ideal`, not `exact`, so a since-unplugged mic falls back to a
-      // working one rather than failing the whole join.
-      localStream = await navigator.mediaDevices.getUserMedia({
-        audio: {
-          ...(micId.value ? { deviceId: { ideal: micId.value } } : {}),
-          echoCancellation: true,
-          noiseSuppression: true,
-          autoGainControl: true,
-        },
-        video: false,
-      })
+      // everybody, and then discovering the browser won't give us a microphone. getMicStream
+      // honours the remembered device exactly (so a reloaded call comes up on the mic you
+      // chose, not the system default) and falls back on its own if that device has gone.
+      localStream = await getMicStream(micId.value)
     } catch {
       status.value = 'error'
       error.value = 'We couldn\'t reach your microphone. Check the site\'s permissions and try again.'
@@ -1425,7 +1599,7 @@ export function useVoice() {
     let stream: MediaStream
     try {
       stream = await navigator.mediaDevices.getUserMedia({
-        audio: { deviceId: { exact: deviceId }, echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+        audio: { deviceId: { exact: deviceId }, ...MIC_AUDIO },
         video: false,
       })
     } catch {
@@ -1506,7 +1680,7 @@ export function useVoice() {
     // (started below) corrects it within a second or two once it can see what's on screen.
     const initialMode = screenMode.value === 'auto' ? 'detail' : screenMode.value
     resolvedScreenMode = initialMode
-    const { hint, degradation } = screenModeSettings(initialMode)
+    const { hint, degradation, maxFramerate } = screenModeSettings(initialMode)
     screenTrack.contentHint = hint
 
     // The browser's own "Stop sharing" bar bypasses our button entirely. Either track ending
@@ -1527,7 +1701,10 @@ export function useVoice() {
         const params = video.sender.getParameters()
         params.encodings = params.encodings?.length ? params.encodings : [{}]
         params.encodings[0]!.maxBitrate = SCREEN_MAX_BITRATE
-        params.encodings[0]!.maxFramerate = SCREEN_MAX_FRAMERATE
+        // Detail content is encoded at a low framerate (see SCREEN_DETAIL_FRAMERATE); motion
+        // keeps the full rate. The capture stays at 30 either way, so an 'auto' flip to motion
+        // is instant — it's the *encode* rate we're trimming, not the source.
+        params.encodings[0]!.maxFramerate = maxFramerate
         // Under CPU/upload pressure, degrade the axis the mode says matters less — for
         // 'detail' shed framerate and keep the text sharp, for 'motion' the reverse. Not
         // every engine honours it, hence the tolerant set. See screenModeSettings.
@@ -1701,7 +1878,7 @@ export function useVoice() {
     resolvedScreenMode = resolved
     if (!screenTrack) return
 
-    const { hint, degradation } = screenModeSettings(resolved)
+    const { hint, degradation, maxFramerate } = screenModeSettings(resolved)
     screenTrack.contentHint = hint
 
     await Promise.all([...handles.values()].map(async (handle) => {
@@ -1710,6 +1887,8 @@ export function useVoice() {
       const params = sender.getParameters()
       if (!params.encodings?.length) return
       params.degradationPreference = degradation
+      // Slides drop to a low framerate; a video that starts playing gets the full rate back.
+      params.encodings[0]!.maxFramerate = maxFramerate
       await sender.setParameters(params).catch(() => {})
     }))
   }

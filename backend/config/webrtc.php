@@ -15,6 +15,13 @@ return [
     |
     | There is no free TURN: point these at your own coturn, or a hosted provider.
     |
+    | More than one TURN entry is a redundancy play, not a load-balancer: a browser is
+    | handed every one and ICE fails over to whichever answers, so the ~15% who need a
+    | relay still connect when a server (or a whole provider) is down. Because they're
+    | separate providers each carries its own credentials — coturn's HMAC secret and a
+    | hosted provider's key don't cross-authenticate — which is exactly why each entry
+    | below is self-contained rather than sharing one username/credential.
+    |
     */
 
     'stun_urls' => array_values(array_filter(array_map(
@@ -22,14 +29,30 @@ return [
         explode(',', (string) env('WEBRTC_STUN_URLS', 'stun:stun.l.google.com:19302,stun:stun1.l.google.com:19302'))
     ))),
 
-    'turn' => [
-        'urls' => array_values(array_filter(array_map(
-            'trim',
-            explode(',', (string) env('WEBRTC_TURN_URLS', ''))
-        ))),
-        'username' => env('WEBRTC_TURN_USERNAME'),
-        'credential' => env('WEBRTC_TURN_CREDENTIAL'),
-    ],
+    /*
+     * A list of TURN servers, each with its own credentials. Entries with no URLs are
+     * dropped (see VoiceService::iceServers), so a deployment with only the first set
+     * configured behaves exactly as a single-TURN one did — add WEBRTC_TURN2_* to light
+     * up the second provider, and nothing else has to change.
+     */
+    'turn' => array_values(array_filter([
+        [
+            'urls' => array_values(array_filter(array_map(
+                'trim',
+                explode(',', (string) env('WEBRTC_TURN_URLS', ''))
+            ))),
+            'username' => env('WEBRTC_TURN_USERNAME'),
+            'credential' => env('WEBRTC_TURN_CREDENTIAL'),
+        ],
+        [
+            'urls' => array_values(array_filter(array_map(
+                'trim',
+                explode(',', (string) env('WEBRTC_TURN2_URLS', ''))
+            ))),
+            'username' => env('WEBRTC_TURN2_USERNAME'),
+            'credential' => env('WEBRTC_TURN2_CREDENTIAL'),
+        ],
+    ], static fn (array $turn): bool => $turn['urls'] !== [])),
 
     /*
     |--------------------------------------------------------------------------
