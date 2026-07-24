@@ -1,7 +1,7 @@
 import type { CanvasItem, CanvasItemKind, Widget } from '~/types'
 
 /**
- * A Side Space's Open Canvas — the free 2D board of cards, loaded over HTTP and kept in sync
+ * A Side Desk's Open Canvas — the free 2D board of cards, loaded over HTTP and kept in sync
  * over broadcast. Surface-agnostic like {@link useWhiteboard} and {@link useSpaceNote}: the
  * caller passes the REST base path and the private stream, so this drives a side chat's
  * canvas (`/api/side-chats/{id}/canvas`, `sidechat.{id}`) and a channel's alike.

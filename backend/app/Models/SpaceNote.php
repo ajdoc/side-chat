@@ -6,7 +6,7 @@ use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 
 /**
- * A Side Space's shared note — one markdown document per surface (a side chat or a channel),
+ * A Side Desk's shared note — one markdown document per surface (a side chat or a channel),
  * edited collaboratively. A save replaces the whole body and broadcasts it, but it is *not*
  * blind last-write-wins: every save carries the `version` it was based on, and a save based
  * on a stale version is refused so the client can merge the two edits rather than erase one

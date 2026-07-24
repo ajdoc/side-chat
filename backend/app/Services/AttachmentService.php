@@ -170,7 +170,7 @@ final class AttachmentService
 
     /**
      * Attach a *copy* of an already-stored file to a message — the bytes come from somewhere
-     * other than an upload (a Side Space document being shared into chat). Mirrors the hosted
+     * other than an upload (a Side Desk document being shared into chat). Mirrors the hosted
      * branch of {@see cloneForMessage}: the copy lands in the target channel's folder so it's
      * purged with that channel, and gets its own row. Returns the new attachment.
      */

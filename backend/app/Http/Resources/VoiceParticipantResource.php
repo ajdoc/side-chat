@@ -24,6 +24,13 @@ class VoiceParticipantResource extends JsonResource
             // Sound without a picture — see the audio-share migration. Distinct from
             // screen_sharing so nothing offers to 'watch' a screen that isn't coming.
             'audio_sharing' => $this->audio_sharing,
+            // Where this person was last known to be standing, in a Side Space; null everywhere
+            // else. Not the live position — that's whispered — but it's what lets the room be
+            // drawn correctly the instant you walk in, before anybody's first whisper arrives,
+            // and it's what puts *you* back where you were after a reload.
+            'x' => $this->x,
+            'y' => $this->y,
+            'facing' => $this->facing,
             'joined_at' => $this->created_at,
         ];
     }

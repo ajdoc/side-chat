@@ -4,7 +4,7 @@ import type { CanvasItem, CanvasTodoEntry } from '~/types'
 
 /**
  * A `todo` card's body — a title and a checklist. Every change (toggle, add, remove, retitle)
- * emits the whole `content` up for the host ({@link SideSpaceCanvas}) to persist. Remote
+ * emits the whole `content` up for the host ({@link SideDeskCanvas}) to persist. Remote
  * changes are adopted from the item, except the title while it's being edited.
  */
 const props = defineProps<{ item: CanvasItem, canEdit: boolean }>()

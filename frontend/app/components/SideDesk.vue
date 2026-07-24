@@ -1,9 +1,9 @@
 <script setup lang="ts">
 import { FileText, LayoutGrid, NotebookPen, PenTool } from 'lucide-vue-next'
-import type { SideSpaceAppId } from '~/types'
+import type { SideDeskAppId } from '~/types'
 
 /**
- * The Side Space — a tabbed workspace that hangs beside a chat and houses the *apps* a
+ * The Side Desk — a tabbed workspace that hangs beside a chat and houses the *apps* a
  * place builds things with. It grew out of the whiteboard: the board is now just the first
  * app among several (Notes, Docs, an open widget Canvas), each a tab here.
  *
@@ -18,12 +18,12 @@ const props = defineProps<{
   basePath: string
   streamName: string
   canEdit: boolean
-  activeApp: SideSpaceAppId
+  activeApp: SideDeskAppId
   readonlyHint?: string
 }>()
 
 const emit = defineEmits<{
-  'update:activeApp': [SideSpaceAppId]
+  'update:activeApp': [SideDeskAppId]
   /** Docs asking the host timeline to scroll to the message a chat file arrived in. */
   'jump': [messageId: number]
 }>()
@@ -65,7 +65,7 @@ const APPS = [
     />
 
     <!-- Notes — the surface's one shared markdown document. -->
-    <SideSpaceNotes
+    <SideDeskNotes
       v-else-if="activeApp === 'notes'"
       :key="`${basePath}-notes`"
       :base-path="basePath"
@@ -75,7 +75,7 @@ const APPS = [
     />
 
     <!-- Open Canvas — a free 2D board of note and checklist cards. -->
-    <SideSpaceCanvas
+    <SideDeskCanvas
       v-else-if="activeApp === 'canvas'"
       :key="`${basePath}-canvas`"
       :base-path="basePath"
@@ -85,7 +85,7 @@ const APPS = [
     />
 
     <!-- Docs — a view-only shelf of uploaded PDF / Word / Excel files. -->
-    <SideSpaceDocs
+    <SideDeskDocs
       v-else
       :key="`${basePath}-docs`"
       :base-path="basePath"

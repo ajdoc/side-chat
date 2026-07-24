@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { Check, ChevronDown, ChevronRight, Hash, Loader2, Search, Send, Users, Volume2 } from 'lucide-vue-next'
+import { Check, ChevronDown, ChevronRight, Hash, Loader2, Map as MapIcon, Search, Send, Users, Volume2 } from 'lucide-vue-next'
 import type { Channel, Message, User } from '~/types'
 import { Button } from '~/components/ui/button'
 import {
@@ -317,9 +317,10 @@ onBeforeUnmount(() => clearTimeout(peopleTimer))
                   type="button"
                   class="flex w-full items-center gap-2 rounded py-1.5 pl-9 pr-2 text-left text-sm transition hover:bg-muted"
                   :class="isChannelPicked(ch.id) ? 'bg-muted' : ''"
-                  @click="pickChannel(ch.id, `${s.name} · ${ch.type === 'voice' ? '' : '#'}${ch.name}`)"
+                  @click="pickChannel(ch.id, `${s.name} · ${ch.type === 'text' ? '#' : ''}${ch.name}`)"
                 >
-                  <Volume2 v-if="ch.type === 'voice'" class="h-4 w-4 shrink-0" />
+                  <MapIcon v-if="ch.type === 'space'" class="h-4 w-4 shrink-0" />
+                  <Volume2 v-else-if="ch.type === 'voice'" class="h-4 w-4 shrink-0" />
                   <Hash v-else class="h-4 w-4 shrink-0" />
                   <span class="min-w-0 flex-1 truncate">{{ ch.name }}</span>
                   <Check v-if="isChannelPicked(ch.id)" class="h-4 w-4 shrink-0 text-primary" />

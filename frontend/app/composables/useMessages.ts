@@ -119,15 +119,20 @@ export function useMessages() {
     return messages.value.some(m => m.id === id)
   }
 
+  /**
+   * Post the message — as a run of them when the body is over the per-message limit, one after
+   * the other so they land in the order they were written. See {@link buildMessageParts}.
+   */
   async function send(body: string, replyToId?: number | null, files: File[] = [], gif?: GifResult | null, uploadIds: string[] = []) {
     if (!channelId.value) return
-    const payload = buildMessagePayload({ body, replyToId, files, gif, uploadIds })
-    const res = await api<{ data: Message }>(`/api/channels/${channelId.value}/messages`, {
-      method: 'POST',
-      body: payload as any,
-      headers: { 'X-Socket-ID': echo?.socketId() ?? '' },
-    })
-    pushUnique(res.data)
+    for (const payload of buildMessageParts({ body, replyToId, files, gif, uploadIds })) {
+      const res = await api<{ data: Message }>(`/api/channels/${channelId.value}/messages`, {
+        method: 'POST',
+        body: payload as any,
+        headers: { 'X-Socket-ID': echo?.socketId() ?? '' },
+      })
+      pushUnique(res.data)
+    }
   }
 
   async function edit(id: number, body: string | null, files: File[] = [], removeAttachmentIds: number[] = []) {

@@ -7,7 +7,7 @@ use App\Models\SpaceDocument;
 use Symfony\Component\HttpFoundation\BinaryFileResponse;
 
 /**
- * Serves a Side Space document's bytes over a short-lived signed URL — the same pattern
+ * Serves a Side Desk document's bytes over a short-lived signed URL — the same pattern
  * {@see AttachmentController} uses. No auth header is needed (the signature is the grant), so
  * a PDF opens straight in an <iframe> and a viewer can fetch a sheet's bytes.
  */

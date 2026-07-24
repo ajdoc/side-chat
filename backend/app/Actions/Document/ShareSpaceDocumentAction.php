@@ -11,7 +11,7 @@ use App\Models\User;
 use App\Services\AttachmentService;
 
 /**
- * Share a Side Space shelf document into the channel timeline — the "Send to chat" action on
+ * Share a Side Desk shelf document into the channel timeline — the "Send to chat" action on
  * a Docs card. It posts a plain message carrying a *copy* of the file as an attachment, so
  * the file now lives in chat exactly like one dragged into the composer: it shows in the
  * timeline and in Info → Files, and stays independent of the shelf original.

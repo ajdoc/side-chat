@@ -100,7 +100,7 @@ function pinPreview(message: { body: string | null, attachments?: Attachment[] }
 // GIFs get their own tab, so keep them out of the Files > Images grid — otherwise a picked
 // GIF shows up twice in the same panel.
 const images = computed(() => files.value.filter(f => f.is_image && !f.is_gif))
-// Non-image chat files plus the Side Space Docs shelf, newest first — so a doc uploaded to
+// Non-image chat files plus the Side Desk Docs shelf, newest first — so a doc uploaded to
 // Docs shows up here too.
 const others = computed(() =>
   [...files.value.filter(f => !f.is_image), ...shelfDocs.value]

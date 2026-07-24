@@ -109,7 +109,15 @@ Broadcast::channel('sidechat.{sideChatId}', function (User $user, int $sideChatI
  * render a tile before a single packet of audio has arrived.
  *
  * Note `allowsCalls()` rather than `isVoice()`: a chat's one channel is a text channel
- * that can also hold a call, so this is the gate that lets a DM ring at all.
+ * that can also hold a call, so this is the gate that lets a DM ring at all — and the same
+ * clause is what lets a Side Space hold one.
+ *
+ * A Side Space carries one more kind of traffic over this channel: where everybody is
+ * standing, whispered several times a second (see useSpacePresence). It belongs here rather
+ * than on `channel.{id}` precisely because membership of *this* channel is what "is in the
+ * room" means — someone reading the timeline from outside has no business being told where
+ * people are walking, and someone who closes their laptop stops broadcasting a position the
+ * moment their socket drops, with no row to go stale.
  */
 Broadcast::channel('voice.{channelId}', function (User $user, int $channelId) {
     $channel = Channel::with('server', 'conversation')->find($channelId);

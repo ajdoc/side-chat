@@ -2,6 +2,7 @@
 import {
   AudioLines,
   Check, ChevronDown, ChevronRight, Copy, DoorOpen, Hash, HeadphoneOff, LogOut,
+  Map as MapIcon,
   MessageSquarePlus, MicOff, Monitor, Moon, Pencil, Phone, Plus, ScreenShare, Sun, Trash2,
   User, UserPlus, Users, Volume2,
 } from 'lucide-vue-next'
@@ -191,6 +192,9 @@ const rows = computed(() => {
 
       const text = rowChannels.filter(c => c.type === 'text')
       const voice = rowChannels.filter(c => c.type === 'voice')
+      // Side Spaces sit with the voice channels, under the text ones: they're the other kind
+      // of place you *go into* rather than read, and they carry the same head-count.
+      const spaces = rowChannels.filter(c => c.type === 'space')
 
       // Inline rename/delete only on the active server: those edits flow through useServer,
       // which holds *its* channels, so a cached (non-active) server's tree couldn't be kept
@@ -200,6 +204,9 @@ const rows = computed(() => {
         list.push({ id: `c-${c.id}`, kind: 'channel', channel: c, voice: [], isOwner: canEdit })
       }
       for (const c of voice) {
+        list.push({ id: `c-${c.id}`, kind: 'channel', channel: c, voice: participantsIn(c.id), isOwner: canEdit })
+      }
+      for (const c of spaces) {
         list.push({ id: `c-${c.id}`, kind: 'channel', channel: c, voice: participantsIn(c.id), isOwner: canEdit })
       }
       list.push({ id: `add-channel-${s.id}`, kind: 'add-channel', server: s })
@@ -601,7 +608,8 @@ onBeforeUnmount(() => { userStream.unsubscribe(); stopPresence() })
                           ? 'font-semibold text-foreground'
                           : 'text-muted-foreground'"
                     >
-                      <Volume2 v-if="item.channel.type === 'voice'" class="h-4 w-4 shrink-0" />
+                      <MapIcon v-if="item.channel.type === 'space'" class="h-4 w-4 shrink-0" />
+                      <Volume2 v-else-if="item.channel.type === 'voice'" class="h-4 w-4 shrink-0" />
                       <Hash v-else class="h-4 w-4 shrink-0" />
                       <span class="truncate">{{ item.channel.name }}</span>
                       <!-- Unsent text waiting in a channel you're not looking at (Viber-style). -->

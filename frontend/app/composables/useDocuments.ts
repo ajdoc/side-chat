@@ -1,8 +1,8 @@
 import type { SpaceDocument } from '~/types'
 
 /**
- * A Side Space's Docs app — the view-only shelf of uploaded files, loaded over HTTP and kept
- * in sync over broadcast. Surface-agnostic like the other Side Space composables: the caller
+ * A Side Desk's Docs app — the view-only shelf of uploaded files, loaded over HTTP and kept
+ * in sync over broadcast. Surface-agnostic like the other Side Desk composables: the caller
  * passes the REST base path and the private stream, so this drives a side chat's shelf
  * (`/api/side-chats/{id}/documents`, `sidechat.{id}`) and a channel's alike.
  *

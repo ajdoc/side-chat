@@ -8,7 +8,7 @@ use Illuminate\Database\Schema\Blueprint;
 use Illuminate\Support\Facades\Schema;
 
 /**
- * The Open Canvas — a Side Space's free 2D surface of cards (a markdown note, a checklist).
+ * The Open Canvas — a Side Desk's free 2D surface of cards (a markdown note, a checklist).
  * Like the whiteboard, a card hangs off exactly one surface: its `side_chat_id` *or* its
  * `channel_id`. Geometry (`x`,`y`,`w`,`h`) is the canvas's logical space, and `z` is stack
  * order. `content` is a free-form JSON blob whose shape belongs to the card `kind`, the same

@@ -3,6 +3,7 @@ import { Mic, Paperclip, SendHorizontal, X } from 'lucide-vue-next'
 import type { ChannelMember, GifResult } from '~/types'
 import { Button } from '~/components/ui/button'
 import { CHUNK_THRESHOLD, useChunkedUpload } from '~/composables/useChunkedUpload'
+import { chunkMessage, MESSAGE_LIMIT } from '~/lib/chunkMessage'
 
 const props = defineProps<{
   placeholder?: string
@@ -82,6 +83,16 @@ const canSend = computed(() =>
   && !props.sending
   && !staging.value
   && !failedUpload.value,
+)
+
+/**
+ * How many messages this draft will actually become. A body over the server's cap is split by
+ * the send path rather than refused (see chunkMessage) — but silently posting five messages
+ * would be its own surprise, so the count is said out loud before Enter is pressed. Only
+ * counted once the draft is over the cap; below it the answer is always one.
+ */
+const partCount = computed(() =>
+  draft.value.length > MESSAGE_LIMIT ? chunkMessage(draft.value.trim()).length : 1,
 )
 
 function addFiles(list: FileList | File[] | null) {
@@ -277,6 +288,9 @@ onBeforeUnmount(() => {
           <div class="flex items-center justify-between gap-2 px-2 pb-2">
             <span class="text-xs text-muted-foreground">
               <template v-if="staging">Uploading… the message sends once its files are up.</template>
+              <template v-else-if="partCount > 1">
+                Long message — sends as <strong class="font-medium">{{ partCount }} messages</strong>, split at paragraph breaks.
+              </template>
               <template v-else>
                 <strong class="font-medium">Enter</strong> to send · <strong class="font-medium">Shift+Enter</strong> for a new line · markdown supported
               </template>

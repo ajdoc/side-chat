@@ -255,6 +255,46 @@ let leaveOnUnload: (() => void) | undefined
 // Kept so it can be removed on leave — an anonymous listener would leak one per call.
 let deviceChangeHandler: (() => void) | undefined
 
+/*
+ * --- proximity (Side Space only) ---
+ *
+ * In a voice channel or a DM everybody in the room is dialled, full stop. In a Side Space
+ * they're not: you connect to the people near you and drop them as they walk off, which is the
+ * whole reason a room can hold fifty people on a mesh built for eight.
+ *
+ * That needs two things the ordinary call doesn't have. `roomMembers` is everyone on the
+ * presence channel *whether or not* we have a connection to them — the roster `here`/`joining`
+ * would normally have turned straight into peers — so that somebody walking back into range
+ * can be dialled without waiting for them to rejoin the channel. And `proximityGains` is the
+ * last gain computed for each of them, held outside `peers` so that it survives a peer being
+ * destroyed and re-created and is ready the instant createPeer runs.
+ *
+ * `proximityMode` is off by default and set by the stage on connect. Everything below is inert
+ * while it's off, which is what keeps the existing call paths untouched.
+ */
+let proximityMode = false
+const roomMembers = new Map<number, { id: number, name: string, avatar: string | null }>()
+const proximityGains = new Map<number, number>()
+/** Pending teardowns, so a peer who steps briefly out of range isn't dropped on the spot. */
+const dropTimers = new Map<number, ReturnType<typeof setTimeout>>()
+/**
+ * The last mic/camera/screen state whispered by each person, peer or not.
+ *
+ * Whispers arrive on the presence channel and so reach us for everybody in the room, including
+ * people we have no connection to. Keeping the newest one means a peer created later — when
+ * they walk into range — starts with their icons already right, instead of showing an open mic
+ * until they next happen to change something.
+ */
+const lastStates = new Map<number, StatePayload>()
+/**
+ * How long somebody has to stay out of range before their connection actually goes.
+ *
+ * Long enough that walking past the edge, or a whisper arriving late, doesn't cost a
+ * renegotiation; short enough that a room of fifty doesn't accumulate connections to everyone
+ * who ever wandered near you.
+ */
+const DROP_GRACE_MS = 3000
+
 // --- adaptive screen-share sampling (mode 'auto'; see startScreenShare) ---
 // A hidden <video> playing the shared track and a tiny canvas we down-sample it into, so the
 // motion check compares a few hundred pixels a second rather than a whole screen. `prev` is
@@ -705,6 +745,12 @@ export function useVoice() {
    * This *is* per-peer mute and per-peer volume: one <audio> per person, so turning one
    * of them down is a property assignment and cannot possibly affect anybody else.
    * Deafening yourself is the same operation applied to all of them at once.
+   *
+   * And it's why a Side Space's proximity audio costs almost nothing: walking away from
+   * somebody is the same property assignment, made sixty times a second. `volume` is your
+   * standing decision about this person, `proximity` is where you're both stood; multiplying
+   * them keeps both intact, so turning someone down stays turned down as you walk about, and
+   * walking off doesn't overwrite the fact you'd turned them down.
    */
   function applyAudio(id: number) {
     const handle = handles.get(id)
@@ -712,7 +758,7 @@ export function useVoice() {
     if (!handle || !peer) return
 
     const muted = peer.localMuted || selfDeafened.value
-    handle.audio.volume = peer.volume
+    handle.audio.volume = peer.volume * peer.proximity
     handle.audio.muted = muted
     // The shared audio still answers to *mute* and *deafen* — silencing someone silences
     // their screen too — but rides its own volume so a loud shared clip can be turned down
@@ -729,6 +775,11 @@ export function useVoice() {
     //
     // `screenMuted` is the listener's own veto on top of all that — "keep talking, but I've
     // heard enough of your music". Yours alone, never sent, and remembered for next time.
+    //
+    // Note what's *missing*: `proximity`. A shared screen is something you deliberately chose
+    // to watch, so it shouldn't fade out because the person sharing it wandered across the
+    // room — you'd be left watching a silent film. Distance governs voices; it has no business
+    // governing the thing everybody is gathered around.
     handle.screenAudio.volume = peer.screenVolume
     handle.screenAudio.muted = muted
       || peer.screenMuted
@@ -1038,7 +1089,30 @@ export function useVoice() {
       volume: pref?.volume ?? 1,
       screenVolume: pref?.screenVolume ?? 1,
       screenMuted: pref?.screenMuted ?? false,
+      // Full volume until the room says otherwise. In a voice channel or a DM nothing ever
+      // does, which is how those two keep behaving exactly as they always have.
+      proximity: proximityGains.get(id) ?? 1,
     }]
+
+    // Whatever they last said they were doing, if we heard it before we had a peer to hang it
+    // on — which in a Side Space is the normal case. See lastStates.
+    const state = lastStates.get(id)
+    if (state) {
+      patchPeer(id, {
+        muted: state.muted,
+        deafened: state.deafened,
+        screenSharing: state.screen_sharing,
+        cameraOn: state.camera_on,
+        audioSharing: state.audio_sharing,
+      })
+    }
+
+    // Push the starting volume onto the element. Easy to think unnecessary — the peer object
+    // already carries the right `proximity` — but nothing has yet *applied* it, and
+    // setPeerProximity won't: it early-returns when the gain hasn't changed, which is exactly
+    // the case for somebody dialled at the gain we already computed for them. Without this a
+    // peer created mid-room plays at full volume until they next move.
+    applyAudio(id)
   }
 
   function destroyPeer(id: number) {
@@ -1103,7 +1177,29 @@ export function useVoice() {
     // handshake is simply not our business.
     if (payload.to !== user.value?.id) return
 
-    const handle = handles.get(payload.from)
+    let handle = handles.get(payload.from)
+
+    /*
+     * Somebody is dialling us and we have no connection to them.
+     *
+     * In an ordinary call this can't happen — everyone is dialled the moment they appear on
+     * the presence channel — so dropping it was right. In a Side Space it happens constantly
+     * and dropping it is fatal: peers are dialled off *positions*, positions arrive as
+     * whispers, and whoever is standing still hasn't whispered recently enough for a newcomer
+     * to know they exist. The newcomer announces itself, we dial it, and its answer to our
+     * offer used to land here and be thrown away — so neither of us ever heard the other.
+     *
+     * Being offered to *is* evidence we're in range: the far end computed the same distance we
+     * would have. So we accept and let the next frame settle the gain.
+     */
+    if (!handle && proximityMode) {
+      const member = roomMembers.get(payload.from)
+      if (member) {
+        createPeer(member.id, member.name, member.avatar)
+        handle = handles.get(payload.from)
+      }
+    }
+
     if (!handle) return
 
     const { pc } = handle
@@ -1231,7 +1327,7 @@ export function useVoice() {
       status.value = 'error'
       error.value = 'We couldn\'t reach your microphone. Check the site\'s permissions and try again.'
       channelId.value = null
-      return
+      return null
     }
 
     // A fresh capture arrives live. On push-to-talk it must not: joining a call is not the
@@ -1246,7 +1342,7 @@ export function useVoice() {
       status.value = 'error'
       error.value = err?.data?.errors?.channel?.[0] ?? 'Couldn\'t join this voice channel.'
       channelId.value = null
-      return
+      return null
     }
 
     iceServers = joined.ice_servers
@@ -1277,10 +1373,17 @@ export function useVoice() {
         for (const member of members) {
           if (member.id === user.value?.id) continue
 
-          createPeer(member.id, member.name, member.avatar)
+          // Everyone in the room, dialled or not. In an ordinary call these are the same set;
+          // in a Side Space this is the roster the stage draws and setPeerInRange dials from.
+          roomMembers.set(member.id, member)
+
+          // In a Side Space nobody is connected on arrival — you dial the people you walk up
+          // to. Which is the entire reason a fifty-person room is affordable on a mesh: the
+          // one you're in is the size of your neighbourhood, not of the building.
+          if (!proximityMode) createPeer(member.id, member.name, member.avatar)
 
           const state = known.get(member.id)
-          if (state) {
+          if (state && !proximityMode) {
             patchPeer(member.id, {
               muted: state.muted,
               deafened: state.deafened,
@@ -1298,21 +1401,42 @@ export function useVoice() {
         if (user.value) fireEffect('join', user.value.id, 'You')
       })
       .joining((member: { id: number, name: string, avatar: string | null }) => {
-        createPeer(member.id, member.name, member.avatar)
+        roomMembers.set(member.id, member)
+
+        if (!proximityMode) createPeer(member.id, member.name, member.avatar)
         // They joined after our last state change, so their roster snapshot may predate
         // it. Say where we stand; it's one whisper.
         whisperState()
-        fireEffect('join', member.id, nameOf(member.id, member.name))
+
+        // In a room, an arrival on the far side of the map is not an event you should be shown
+        // — a busy Side Space would otherwise greet you with a firework per stranger. Effects
+        // there are fired by the stage instead, when somebody comes into earshot.
+        if (!proximityMode) fireEffect('join', member.id, nameOf(member.id, member.name))
       })
       .leaving((member: { id: number, name: string }) => {
         // Read before the teardown: destroyPeer drops them from `peers`, and the effect
         // wants to say whose exit it is.
         const name = peers.value.find(p => p.id === member.id)?.name ?? member.name
+
+        roomMembers.delete(member.id)
+        proximityGains.delete(member.id)
+        const pending = dropTimers.get(member.id)
+        if (pending) {
+          clearTimeout(pending)
+          dropTimers.delete(member.id)
+        }
+
         destroyPeer(member.id)
-        fireEffect('leave', member.id, nameOf(member.id, name))
+        if (!proximityMode) fireEffect('leave', member.id, nameOf(member.id, name))
       })
       .listenForWhisper('signal', onSignal)
       .listenForWhisper('state', (state: StatePayload) => {
+        // Remembered whether or not we have a peer to apply it to. In a Side Space we often
+        // don't yet: both ends whisper the moment they come into range, and whichever whisper
+        // wins the race would otherwise land before its peer existed and be dropped — leaving
+        // somebody's mic shown as open when it isn't. createPeer replays this.
+        lastStates.set(state.id, state)
+
         patchPeer(state.id, {
           muted: state.muted,
           deafened: state.deafened,
@@ -1341,6 +1465,11 @@ export function useVoice() {
       }).catch(() => {})
     }
     window.addEventListener('pagehide', leaveOnUnload)
+
+    // Handed back so a caller that needs the roster can have it without a second request. A
+    // Side Space does: it wants everybody's last standing position to draw the room with
+    // before a single whisper has arrived. Null on any of the bail-outs above.
+    return joined
   }
 
   function teardownMedia() {
@@ -1407,6 +1536,10 @@ export function useVoice() {
     selfSpeaking.value = false
     pttHeld.value = false // a key held as you hang up mustn't leave the next call open
     peers.value = []
+    // Leaving a Side Space has to leave its rules behind with it, or the next call you join
+    // starts with nobody dialled and everybody silent.
+    setProximityMode(false)
+    lastStates.clear()
 
     if (id) {
       try {
@@ -1507,6 +1640,93 @@ export function useVoice() {
     patchPeer(id, { volume: clamped })
     applyAudio(id)
     savePref(id, { volume: clamped })
+  }
+
+  // --- proximity: the Side Space's distance rules, driven from the stage ---
+
+  /**
+   * Turn distance-based audio on for this call.
+   *
+   * Set by the stage the moment it connects, and cleared on disconnect. While it's on, arriving
+   * on the presence channel no longer means being dialled — {@link setPeerInRange} decides that
+   * — and every peer's microphone is scaled by {@link setPeerProximity}.
+   */
+  function setProximityMode(on: boolean) {
+    proximityMode = on
+
+    if (!on) {
+      roomMembers.clear()
+      proximityGains.clear()
+      for (const timer of dropTimers.values()) clearTimeout(timer)
+      dropTimers.clear()
+    }
+  }
+
+  /** Everyone on the presence channel, dialled or not — the stage draws all of them. */
+  function knownMembers() {
+    return [...roomMembers.values()]
+  }
+
+  /**
+   * How loudly to hear one person, 0–1. Called for every occupant on every animation frame, so
+   * it does nothing at all unless the number actually changed — otherwise this would rewrite
+   * reactive state sixty times a second per person and re-render the room for no reason.
+   */
+  function setPeerProximity(id: number, gain: number) {
+    const clamped = Math.min(1, Math.max(0, gain))
+    if (proximityGains.get(id) === clamped) return
+
+    proximityGains.set(id, clamped)
+
+    // Held even with no peer to apply it to: they may be out of connect range right now, and
+    // this is the value createPeer will start them at when they walk back.
+    if (peers.value.some(p => p.id === id)) {
+      patchPeer(id, { proximity: clamped })
+      applyAudio(id)
+    }
+  }
+
+  /**
+   * Open or close the connection to one person as they come and go.
+   *
+   * The asymmetry is deliberate. Coming into range dials immediately — a delay here is somebody
+   * standing next to you saying something you never hear. Going out of range waits
+   * {@link DROP_GRACE_MS}, because the connection is expensive to rebuild and the common case
+   * for leaving range is pacing about near its edge, not actually walking away.
+   *
+   * Both ends run this off the same distance between the same two positions, so they cross the
+   * threshold together and both start offering — a collision the existing perfect-negotiation
+   * tie-break in {@link onSignal} already exists to untangle.
+   */
+  function setPeerInRange(id: number, inRange: boolean) {
+    if (!proximityMode || id === user.value?.id) return
+
+    const member = roomMembers.get(id)
+    if (!member) return
+
+    if (inRange) {
+      const pending = dropTimers.get(id)
+      if (pending) {
+        clearTimeout(pending)
+        dropTimers.delete(id)
+      }
+
+      if (!handles.has(id)) {
+        createPeer(id, member.name, member.avatar)
+        // They have no idea we've just arrived in earshot, and their last state whisper went
+        // out before we had a connection to hear it on. Say where we stand.
+        whisperState()
+      }
+
+      return
+    }
+
+    if (!handles.has(id) || dropTimers.has(id)) return
+
+    dropTimers.set(id, setTimeout(() => {
+      dropTimers.delete(id)
+      destroyPeer(id)
+    }, DROP_GRACE_MS))
   }
 
   /**
@@ -2162,6 +2382,12 @@ export function useVoice() {
     setPeerScreenVolume,
     togglePeerScreenMute,
     setWatchedScreen,
+    // Proximity — a Side Space's distance rules, driven from the stage each frame.
+    setProximityMode,
+    setPeerProximity,
+    setPeerInRange,
+    knownMembers,
+    fireEffect,
     inputDevices,
     outputDevices,
     micId,

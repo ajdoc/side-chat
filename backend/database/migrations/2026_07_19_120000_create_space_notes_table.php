@@ -8,7 +8,7 @@ use Illuminate\Database\Schema\Blueprint;
 use Illuminate\Support\Facades\Schema;
 
 /**
- * A Side Space note — one shared, collaboratively-edited markdown document per surface. Like
+ * A Side Desk note — one shared, collaboratively-edited markdown document per surface. Like
  * the whiteboard, a note hangs off exactly one surface: its `side_chat_id` *or* its
  * `channel_id`. Last write wins; there's no per-keystroke history. See {@see \App\Models\SpaceNote}.
  *

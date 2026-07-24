@@ -4,6 +4,7 @@ use App\Models\Channel;
 use App\Models\Conversation;
 use App\Models\Server;
 use App\Models\User;
+use App\Support\SideSpace\MapPresets;
 use Illuminate\Foundation\Testing\RefreshDatabase;
 use Tests\TestCase;
 
@@ -60,6 +61,32 @@ function ownerWithVoiceChannel(): array
 {
     [$user, $server] = ownerWithServer();
     $channel = Channel::factory()->create(['server_id' => $server->id, 'type' => 'voice']);
+
+    return [$user, $server, $channel];
+}
+
+/**
+ * A user, their server, and a *Side Space* channel in it with a map already seeded.
+ *
+ * Seeded through the real preset so the map under test is the one people actually get, rather
+ * than a hand-rolled grid that might satisfy rules the presets don't.
+ *
+ * @return array{0: User, 1: Server, 2: Channel}
+ */
+function ownerWithSpaceChannel(string $preset = 'office'): array
+{
+    [$user, $server] = ownerWithServer();
+    $channel = Channel::factory()->create(['server_id' => $server->id, 'type' => 'space']);
+    $map = MapPresets::find($preset);
+
+    $channel->spaceMap()->create([
+        'name' => $map['name'],
+        'width' => $map['width'],
+        'height' => $map['height'],
+        'tiles' => $map['tiles'],
+        'zones' => $map['zones'],
+        'spawn' => $map['spawn'],
+    ]);
 
     return [$user, $server, $channel];
 }

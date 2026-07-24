@@ -68,9 +68,32 @@ return [
     | Going meaningfully past this means putting an SFU (LiveKit, mediasoup) in the
     | middle, at which point the browser sends one stream instead of N-1.
     |
+    | A Side Space is the exception, and gets its own, much larger cap below.
+    |
     */
 
     'max_participants' => (int) env('WEBRTC_MAX_PARTICIPANTS', 8),
+
+    /*
+    |--------------------------------------------------------------------------
+    | Side Space occupancy
+    |--------------------------------------------------------------------------
+    |
+    | A Side Space holds far more people than a call, because it isn't one call. Audio
+    | is proximity-based: a browser only opens peer connections to the handful of people
+    | standing near it, and tears them down as they walk away (see spaceMapEngine's
+    | CONNECT_TILES and useVoice's range gating). So the mesh a given person is in stays
+    | the size of their immediate neighbourhood however busy the room gets — which is
+    | precisely what makes a walkable room affordable without an SFU.
+    |
+    | What this cap is protecting, then, is not anybody's upload pipe: it's the movement
+    | whispers, which every occupant receives from every other occupant regardless of
+    | distance. Those are tiny, but they are O(N²) across the room, so the ceiling is
+    | still a real one — just an order of magnitude further out.
+    |
+    */
+
+    'max_space_participants' => (int) env('WEBRTC_MAX_SPACE_PARTICIPANTS', 50),
 
     /*
     |--------------------------------------------------------------------------

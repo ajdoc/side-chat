@@ -6,7 +6,7 @@ use Illuminate\Http\Request;
 use Illuminate\Http\Resources\Json\JsonResource;
 
 /**
- * A Side Space document as the Docs app lists and previews it: its name and size, the derived
+ * A Side Desk document as the Docs app lists and previews it: its name and size, the derived
  * `kind` that picks a viewer, and the signed inline / download URLs (mirrors how
  * {@see AttachmentResource} hands out an attachment's URLs).
  *

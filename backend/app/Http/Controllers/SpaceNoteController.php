@@ -10,7 +10,7 @@ use App\Models\SideChat;
 use Illuminate\Http\JsonResponse;
 
 /**
- * A side chat's Side Space note — the shared, collaboratively-edited document beside the
+ * A side chat's Side Desk note — the shared, collaboratively-edited document beside the
  * board. One note per side chat, created lazily the first time it's opened.
  *
  * Reading the note is a channel-membership power (ViewSideChatRequest); saving it is a roster

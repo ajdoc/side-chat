@@ -14,7 +14,12 @@ class Channel extends Model
     /** @use HasFactory<\Database\Factories\ChannelFactory> */
     use HasFactory;
 
-    public const TYPES = ['text', 'voice'];
+    /**
+     * `space` is a Side Space: a room you walk an avatar around, hearing whoever is near you.
+     * Like a voice channel it is a text channel that also holds a call — the map sits on top of
+     * the same timeline, and everything below it is unaware of the map (see allowsCalls).
+     */
+    public const TYPES = ['text', 'voice', 'space'];
 
     /**
      * The entrance/exit effects a call may be given — everything the browser knows how to
@@ -87,7 +92,7 @@ class Channel extends Model
         return $this->hasMany(WhiteboardStroke::class)->orderBy('id');
     }
 
-    /** The channel's Side Space note — its one shared markdown document. */
+    /** The channel's Side Desk note — its one shared markdown document. */
     public function spaceNote(): HasOne
     {
         return $this->hasOne(SpaceNote::class);
@@ -132,6 +137,18 @@ class Channel extends Model
         return $this->type === 'voice';
     }
 
+    /** A Side Space — a walkable room with proximity audio. */
+    public function isSpace(): bool
+    {
+        return $this->type === 'space';
+    }
+
+    /** The room itself, when this is a Side Space. Null for every other kind of channel. */
+    public function spaceMap(): HasOne
+    {
+        return $this->hasOne(SideSpaceMap::class);
+    }
+
     /** Belongs to a DM or a group chat rather than a server. */
     public function isDirect(): bool
     {
@@ -148,10 +165,15 @@ class Channel extends Model
      * from it would mean refusing to call at all; and the person you're calling gets rung
      * rather than ambushed. So a chat's channel is a text channel that can also hold a
      * call — which is why this is a question about the *container*, not about `type`.
+     *
+     * A Side Space always can, and by the same argument a voice channel can: walking into the
+     * room *is* joining the call. That one clause is what lights the whole call stack up for the
+     * new type — the `voice.{id}` presence channel, the roster, the heartbeat and the sidebar
+     * all gate on this method and needed nothing else.
      */
     public function allowsCalls(): bool
     {
-        return $this->isVoice() || $this->isDirect();
+        return $this->isVoice() || $this->isSpace() || $this->isDirect();
     }
 
     /** Effects attached to particular people in this channel's call. */

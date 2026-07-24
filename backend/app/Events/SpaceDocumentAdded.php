@@ -11,7 +11,7 @@ use Illuminate\Foundation\Events\Dispatchable;
 use Illuminate\Queue\SerializesModels;
 
 /**
- * A document was uploaded to a Side Space's Docs app. Broadcast on the surface's own stream
+ * A document was uploaded to a Side Desk's Docs app. Broadcast on the surface's own stream
  * so every open Docs list gains the file at once. The uploader skips its own echo via
  * `->toOthers()`.
  */

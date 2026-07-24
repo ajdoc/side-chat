@@ -27,6 +27,17 @@ const props = defineProps<{
   subtitle?: string
   /** Which icon a floated copy of this conversation wears — a hash, a DM, or a group. */
   floatIcon?: FloatingConversationIcon
+  /**
+   * Fold the conversation away, leaving the header, whatever is in the `call` slot, and the
+   * side panels.
+   *
+   * For a surface where the thing above the timeline is the point rather than an accessory —
+   * a Side Space, where the room wants the whole window and the chat is what you turn to
+   * between conversations. Everything stays *mounted* (see `v-show`): the subscription, the
+   * scroll position, the draft in the composer and the unread bookkeeping all survive being
+   * hidden, so folding the chat away and back is free and loses nothing.
+   */
+  collapseTimeline?: boolean
 }>()
 
 const emit = defineEmits<{ read: [] }>()
@@ -76,7 +87,7 @@ const threadPanelOpen = computed(() => !!(route.query.thread || route.query.thre
 const sideChatThreadPanelOpen = computed(() => !!(route.query.scthread || route.query.scthreads))
 const sideChatPanelOpen = computed(() => !!(route.query.sidechat || route.query.sidechats))
 const infoPanelOpen = computed(() => route.query.info === '1')
-const spacePanelOpen = computed(() => !!route.query.space)
+const deskPanelOpen = computed(() => !!route.query.desk)
 // The open side chat's id, when one is in view mode — it scopes an alongside thread column
 // to that side chat rather than the channel.
 const activeSideChatId = computed(() => {
@@ -164,11 +175,11 @@ async function onJumpToReply(id: number) {
  * Merge a patch into the current query (null deletes a key), instead of replacing it.
  *
  * This is what lets a thread and a side chat coexist: opening one preserves whatever else is
- * already standing, rather than wiping the URL. Info and Side Space, being full-column
+ * already standing, rather than wiping the URL. Info and Side Desk, being full-column
  * surfaces, are always cleared here — a thread or side chat takes precedence over them.
  */
 function patchQuery(patch: Record<string, string | null>) {
-  navigateTo({ path: route.path, query: mergeQuery(route.query, { info: null, space: null, ...patch }) })
+  navigateTo({ path: route.path, query: mergeQuery(route.query, { info: null, desk: null, ...patch }) })
 }
 
 function onCreateThread(messageId: number) {
@@ -306,14 +317,14 @@ onBeforeUnmount(() => {
            and everything below this line is unaware either exists. -->
       <slot name="call" />
 
-      <p v-if="!messages.length" class="p-4 text-sm text-muted-foreground">
+      <p v-if="!messages.length && !collapseTimeline" class="p-4 text-sm text-muted-foreground">
         <slot name="empty">
           This is the beginning of
           <span class="font-medium">{{ prefix }}{{ title }}</span>. Say hello 👋
         </slot>
       </p>
 
-      <div class="relative min-h-0 flex-1">
+      <div v-show="!collapseTimeline" class="relative min-h-0 flex-1">
         <div v-if="loadingOlder" class="absolute inset-x-0 top-0 z-10 flex justify-center py-1">
           <Loader2 class="h-4 w-4 animate-spin text-muted-foreground" />
         </div>
@@ -395,7 +406,7 @@ onBeforeUnmount(() => {
         </Transition>
       </div>
 
-      <div class="shrink-0 border-t">
+      <div v-show="!collapseTimeline" class="shrink-0 border-t">
         <div v-if="replyingTo" class="flex items-center justify-between bg-muted/40 px-4 py-1.5 text-xs text-muted-foreground">
           <span class="truncate">Replying to <span class="font-medium">{{ replyingTo.user.name }}</span></span>
           <button class="hover:text-foreground" @click="replyingTo = null"><X class="h-3.5 w-3.5" /></button>
@@ -426,15 +437,15 @@ onBeforeUnmount(() => {
       :side-chat-id="activeSideChatId"
     />
 
-    <!-- Info and Side Space each take the whole side column, so they yield to a thread or a
+    <!-- Info and Side Desk each take the whole side column, so they yield to a thread or a
          side chat rather than stack beside them. Info reuses the reply-jump. -->
     <ChannelInfoPanel
       v-if="infoPanelOpen && !threadPanelOpen && !sideChatPanelOpen"
       :channel-id="channelId"
       @jump="onJumpToReply"
     />
-    <SideSpacePanel
-      v-if="spacePanelOpen && !threadPanelOpen && !sideChatPanelOpen"
+    <SideDeskPanel
+      v-if="deskPanelOpen && !threadPanelOpen && !sideChatPanelOpen"
       :channel-id="channelId"
       @jump="onJumpToReply"
     />

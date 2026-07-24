@@ -2,7 +2,7 @@ import type { SpaceNote, User } from '~/types'
 import { merge3 } from '~/lib/mergeText'
 
 /**
- * A Side Space's shared note — one markdown document per surface, loaded over HTTP and kept
+ * A Side Desk's shared note — one markdown document per surface, loaded over HTTP and kept
  * in sync over broadcast. Surface-agnostic like {@link useWhiteboard}: the caller passes the
  * REST base path and the private stream, so this drives a side chat's note
  * (`/api/side-chats/{id}/notes`, `sidechat.{id}`) and a channel's alike.

@@ -20,7 +20,12 @@ export interface AuthResponse {
   token_type: string
 }
 
-export type ChannelType = 'text' | 'voice'
+/**
+ * `space` is a Side Space — a room you walk an avatar around, hearing whoever is near you.
+ * Like `voice` it's a text channel that also holds a call, so everything addressed by channel
+ * id works in one unchanged; only the surface above the timeline differs.
+ */
+export type ChannelType = 'text' | 'voice' | 'space'
 
 export interface Channel {
   id: number
@@ -613,11 +618,11 @@ export interface WhiteboardStroke {
   created_at?: string
 }
 
-/** The apps a Side Space houses, each a tab: whiteboard, notes, documents, widget canvas. */
-export type SideSpaceAppId = 'board' | 'notes' | 'docs' | 'canvas'
+/** The apps a Side Desk houses, each a tab: whiteboard, notes, documents, widget canvas. */
+export type SideDeskAppId = 'board' | 'notes' | 'docs' | 'canvas'
 
 /**
- * A Side Space note: one shared markdown document per surface, edited collaboratively with
+ * A Side Desk note: one shared markdown document per surface, edited collaboratively with
  * last-write-wins. Addressed by its surface (channel or side chat), never on its own — so no
  * id. `updated_by` is who saved it last, for the "edited by" line.
  */
@@ -640,7 +645,7 @@ export interface CanvasTodoEntry {
 }
 
 /**
- * One card on a Side Space's Open Canvas — a markdown note or a checklist, freely placed on
+ * One card on a Side Desk's Open Canvas — a markdown note or a checklist, freely placed on
  * a surface's 2D board. `content` is kind-specific (see {@link CanvasNoteCard} / {@link
  * CanvasTodoCard}); `x`/`y`/`w`/`h` are the canvas's logical pixels and `z` is stack order.
  */
@@ -663,7 +668,7 @@ export interface CanvasItem {
 export type SpaceDocumentKind = 'pdf' | 'sheet' | 'word' | 'other'
 
 /**
- * A file on a Side Space's Docs app. Bytes live on a private disk; `url`/`download_url` are
+ * A file on a Side Desk's Docs app. Bytes live on a private disk; `url`/`download_url` are
  * short-lived signed links (like an {@link Attachment}'s), so they're re-fetched with the list
  * rather than held forever.
  */
@@ -730,6 +735,14 @@ export interface VoiceParticipant {
   camera_on: boolean
   /** Sharing sound with nothing to look at — a track, or a video's audio. */
   audio_sharing: boolean
+  /**
+   * Where they were last known to be standing, in a Side Space; null everywhere else. Not the
+   * live position — that's whispered — but what lets the room be drawn correctly the instant
+   * you walk in, and what puts *you* back where you were after a reload.
+   */
+  x: number | null
+  y: number | null
+  facing: 'up' | 'down' | 'left' | 'right' | null
   joined_at: string
 }
 
@@ -822,6 +835,17 @@ export interface Peer {
    * decision as silencing them.
    */
   screenMuted: boolean
+  /**
+   * 0–1, how near they are — the Side Space's distance falloff, multiplied into `volume` on
+   * their microphone element. 1 everywhere else, so a voice channel and a DM behave exactly as
+   * they always did.
+   *
+   * Distinct from `volume` because the two mean different things and are owned by different
+   * people: `volume` is a decision *you* made about them and is remembered across calls, while
+   * this is a fact about where you are both standing and is recomputed every frame. Folding
+   * proximity into `volume` would have the room quietly overwriting your preferences.
+   */
+  proximity: number
 }
 
 export interface ServerJoinRequest {

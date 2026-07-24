@@ -78,14 +78,16 @@ export function useSideChatMessages() {
     return messages.value.some(m => m.id === id)
   }
 
+  /** A reply, split into a run of them if it's over the per-message limit — see useMessages(). */
   async function send(sideChatId: number, body: string, replyToId?: number | null, files: File[] = [], gif?: GifResult | null, uploadIds: string[] = []) {
-    const payload = buildMessagePayload({ body, replyToId, files, gif, uploadIds })
-    const res = await api<{ data: Message }>(`/api/side-chats/${sideChatId}/messages`, {
-      method: 'POST',
-      body: payload as any,
-      headers: { 'X-Socket-ID': echo?.socketId() ?? '' },
-    })
-    pushUnique(res.data)
+    for (const payload of buildMessageParts({ body, replyToId, files, gif, uploadIds })) {
+      const res = await api<{ data: Message }>(`/api/side-chats/${sideChatId}/messages`, {
+        method: 'POST',
+        body: payload as any,
+        headers: { 'X-Socket-ID': echo?.socketId() ?? '' },
+      })
+      pushUnique(res.data)
+    }
   }
 
   async function edit(id: number, body: string | null, files: File[] = [], removeAttachmentIds: number[] = []) {

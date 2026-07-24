@@ -50,7 +50,7 @@ class SideChat extends Model
         return $this->hasMany(WhiteboardStroke::class)->orderBy('id');
     }
 
-    /** The Side Space note — this side chat's one shared markdown document. */
+    /** The Side Desk note — this side chat's one shared markdown document. */
     public function spaceNote(): HasOne
     {
         return $this->hasOne(SpaceNote::class);

@@ -1,4 +1,5 @@
 import type { GifResult, Message } from '~/types'
+import { chunkMessage } from '~/lib/chunkMessage'
 
 /**
  * Builds the request body for sending/editing a message.
@@ -45,6 +46,35 @@ export function buildMessagePayload(opts: {
   }
 
   return form
+}
+
+/**
+ * The request bodies one send turns into — usually one, but more when the text is over the
+ * server's per-message limit and has to go out as a run of messages. See {@link chunkMessage}.
+ *
+ * Everything that isn't text belongs to one part only, so the run still reads as a single post:
+ * the reply rides with the first part, where the quoted message sits, and the attachments and
+ * any GIF with the last, so files land at the foot of the text rather than ahead of it.
+ *
+ * Post them in order and wait for each — the timeline is ordered by id, so a part that overtakes
+ * its predecessor is a paragraph out of sequence.
+ */
+export function buildMessageParts(opts: {
+  body?: string | null
+  replyToId?: number | null
+  files?: File[]
+  uploadIds?: string[]
+  gif?: GifResult | null
+}): Array<FormData | Record<string, unknown>> {
+  const parts = chunkMessage(opts.body ?? '')
+
+  return parts.map((body, i) => buildMessagePayload({
+    body,
+    replyToId: i === 0 ? opts.replyToId : null,
+    files: i === parts.length - 1 ? opts.files : [],
+    uploadIds: i === parts.length - 1 ? opts.uploadIds : [],
+    gif: i === parts.length - 1 ? opts.gif : null,
+  }))
 }
 
 /** The subset of a picked GIF the API stores — see SendMessageData::validationRules(). */

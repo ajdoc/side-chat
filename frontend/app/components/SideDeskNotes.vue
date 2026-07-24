@@ -3,7 +3,7 @@ import { Check, Eye, Loader2, Pencil } from 'lucide-vue-next'
 import { merge3 } from '~/lib/mergeText'
 
 /**
- * The Notes app — a Side Space's one shared markdown document. A plain autogrowing textarea
+ * The Notes app — a Side Desk's one shared markdown document. A plain autogrowing textarea
  * (not {@link MarkdownEditor}, whose Enter-sends behaviour belongs to the composer, not a
  * document) with a preview toggle that renders the body through {@link MarkdownBody}.
  *

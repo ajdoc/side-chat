@@ -19,7 +19,7 @@ Route::get('/attachments/{attachment}/download', [App\Http\Controllers\Attachmen
     ->middleware('signed');
 
 /*
- * Side Space documents — the Docs app's files. Same private-disk + signed-URL model as
+ * Side Desk documents — the Docs app's files. Same private-disk + signed-URL model as
  * attachments, so a PDF opens straight in an <iframe> and a sheet viewer can fetch its bytes.
  */
 Route::get('/space-documents/{document}', [App\Http\Controllers\SpaceDocumentFileController::class, 'show'])

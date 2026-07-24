@@ -46,6 +46,10 @@ final class VoiceService
      * Every occupied voice channel in a server, as `channel_id => participants`. One
      * query for the whole sidebar rather than one per voice channel.
      *
+     * Side Spaces are in here too: a room you can walk into is a room somebody can already be
+     * in, and the sidebar answers exactly the same question about it — who's in there, before
+     * I go in. Anything that can hold a call is worth counting.
+     *
      * @return array<int, Collection>
      */
     public function rosterForServer(Server $server): array
@@ -54,7 +58,7 @@ final class VoiceService
 
         return VoiceParticipant::query()
             ->with('user')
-            ->whereIn('channel_id', $server->channels()->where('type', 'voice')->select('id'))
+            ->whereIn('channel_id', $server->channels()->whereIn('type', ['voice', 'space'])->select('id'))
             ->alive()
             ->orderBy('created_at')
             ->get()
@@ -64,7 +68,19 @@ final class VoiceService
 
     public function isFull(Channel $channel): bool
     {
-        return $this->participants($channel)->count() >= (int) config('webrtc.max_participants');
+        return $this->participants($channel)->count() >= $this->capacity($channel);
+    }
+
+    /**
+     * How many people this room holds.
+     *
+     * A call's cap is the mesh's: everyone sends to everyone, so it's small. A Side Space's is
+     * far larger, because proximity means nobody is connected to more than their neighbours —
+     * see config/webrtc.php for the full reasoning.
+     */
+    public function capacity(Channel $channel): int
+    {
+        return (int) config($channel->isSpace() ? 'webrtc.max_space_participants' : 'webrtc.max_participants');
     }
 
     /**

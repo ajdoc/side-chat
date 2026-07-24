@@ -8,9 +8,9 @@ use Illuminate\Database\Schema\Blueprint;
 use Illuminate\Support\Facades\Schema;
 
 /**
- * A Side Space document — a file (PDF, Word, Excel) uploaded to a surface's Docs app and
+ * A Side Desk document — a file (PDF, Word, Excel) uploaded to a surface's Docs app and
  * viewed there. Storage mirrors {@see \App\Models\Attachment}: bytes live on a private disk
- * and are served through short-lived signed URLs. Like every Side Space entity, a document
+ * and are served through short-lived signed URLs. Like every Side Desk entity, a document
  * hangs off exactly one surface — its `side_chat_id` *or* its `channel_id`.
  */
 return new class extends Migration

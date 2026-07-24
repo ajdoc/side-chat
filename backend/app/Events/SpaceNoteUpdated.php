@@ -11,7 +11,7 @@ use Illuminate\Foundation\Events\Dispatchable;
 use Illuminate\Queue\SerializesModels;
 
 /**
- * A Side Space note was saved. Broadcast on the surface's own stream (a side chat's or a
+ * A Side Desk note was saved. Broadcast on the surface's own stream (a side chat's or a
  * channel's) so every open Notes tab converges on the latest body. The saver's own client is
  * skipped with `->toOthers()` (it already has the text it just typed), the same way the
  * board's whisper layer skips the drawer.

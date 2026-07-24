@@ -10,7 +10,7 @@ use App\Models\Channel;
 use Illuminate\Http\JsonResponse;
 
 /**
- * A channel's (or DM's) Side Space note — the same shared document a side chat has
+ * A channel's (or DM's) Side Desk note — the same shared document a side chat has
  * ({@see SpaceNoteController}), hanging off a plain channel. The only difference is the gate:
  * a channel has no roster, so membership is the whole rule for both reading and saving.
  */

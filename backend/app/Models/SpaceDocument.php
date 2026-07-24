@@ -8,7 +8,7 @@ use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Facades\URL;
 
 /**
- * A file uploaded to a Side Space's Docs app — a PDF, Word or Excel document, hosted on a
+ * A file uploaded to a Side Desk's Docs app — a PDF, Word or Excel document, hosted on a
  * private disk and served through short-lived signed URLs, exactly like {@see Attachment}.
  * Points at one surface (a side chat or a channel). See {@see \App\Http\Controllers\
  * DocumentController} / {@see \App\Http\Controllers\ChannelDocumentController}.

@@ -8,7 +8,7 @@ import { mentionNamesKey, useChannelMembers } from '~/composables/useChannelMemb
  * A conversation, floated. Every conversation — server channel, DM, group — is a channel, so
  * this is a compact {@link ChannelView}: its own {@link useMessages} instance (the composable
  * holds message state in plain refs, one set per call), a scrollable list of {@link MessageItem}
- * and a {@link MessageComposer}. Threads, side chats and the Side Space aren't offered here —
+ * and a {@link MessageComposer}. Threads, side chats and the Side Desk aren't offered here —
  * those are full-column surfaces that belong to the main view, not a 360px window — so the
  * message rows are opened without those actions.
  *

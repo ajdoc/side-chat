@@ -31,6 +31,7 @@ use App\Http\Controllers\ReadReceiptController;
 use App\Http\Controllers\ServerController;
 use App\Http\Controllers\SideChatController;
 use App\Http\Controllers\SideChatMessageController;
+use App\Http\Controllers\SideSpaceController;
 use App\Http\Controllers\SpaceNoteController;
 use App\Http\Controllers\SpotifyController;
 use App\Http\Controllers\ThreadController;
@@ -194,6 +195,23 @@ Route::middleware('auth:api')->group(function () {
     Route::post('channels/{channel}/voice/disconnect', [VoiceController::class, 'disconnect']);
 
     /*
+     * Side Spaces — the walkable rooms.
+     *
+     * Short for the same reason the DM block is: a Side Space *is* a channel with a call in
+     * it, so messages, threads, side chats, the Side Desk and the entire voice stack are the
+     * endpoints above, unchanged. What's left here is the map, and the one position per person
+     * that outlives a tab.
+     *
+     * Movement itself is absent on purpose — it's whispered peer-to-peer over the room's
+     * presence channel and never reaches this file. See routes/channels.php.
+     */
+    Route::get('space/map-presets', [SideSpaceController::class, 'presets']);
+    Route::get('channels/{channel}/space/map', [SideSpaceController::class, 'show']);
+    // Owner only: this replaces the room everyone is standing in.
+    Route::put('channels/{channel}/space/map', [SideSpaceController::class, 'update']);
+    Route::post('channels/{channel}/space/position', [SideSpaceController::class, 'position']);
+
+    /*
      * DMs and group chats.
      *
      * Short, and that's the point. A conversation owns a Channel, so messages, edits,
@@ -237,7 +255,7 @@ Route::middleware('auth:api')->group(function () {
     Route::delete('channels/{channel}/whiteboard/strokes/{stroke}', [ChannelWhiteboardController::class, 'destroy']);
     Route::delete('channels/{channel}/whiteboard', [ChannelWhiteboardController::class, 'clear']);
 
-    // The channel's Side Space note — its one shared markdown document, gated like the board.
+    // The channel's Side Desk note — its one shared markdown document, gated like the board.
     Route::get('channels/{channel}/notes', [ChannelSpaceNoteController::class, 'show']);
     Route::put('channels/{channel}/notes', [ChannelSpaceNoteController::class, 'update']);
 
@@ -284,7 +302,7 @@ Route::middleware('auth:api')->group(function () {
     Route::patch('side-chats/{sideChat}/whiteboard/strokes/{stroke}', [WhiteboardController::class, 'update']);
     Route::delete('side-chats/{sideChat}/whiteboard/strokes/{stroke}', [WhiteboardController::class, 'destroy']);
     Route::delete('side-chats/{sideChat}/whiteboard', [WhiteboardController::class, 'clear']);
-    // The side chat's Side Space note. Reading needs channel membership; saving needs the roster.
+    // The side chat's Side Desk note. Reading needs channel membership; saving needs the roster.
     Route::get('side-chats/{sideChat}/notes', [SpaceNoteController::class, 'show']);
     Route::put('side-chats/{sideChat}/notes', [SpaceNoteController::class, 'update']);
     // The side chat's Open Canvas. Reading needs channel membership; authoring needs the roster.

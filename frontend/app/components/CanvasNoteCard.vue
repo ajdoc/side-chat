@@ -3,7 +3,7 @@ import type { CanvasItem } from '~/types'
 
 /**
  * A `note` card's body — a plain autosaving text area filling the card. Edits are debounced
- * and emitted up as a `content` change; the host ({@link SideSpaceCanvas}) persists them.
+ * and emitted up as a `content` change; the host ({@link SideDeskCanvas}) persists them.
  * Remote edits are adopted only while this textarea is unfocused, so a save landing from
  * someone else never moves your cursor.
  */

@@ -73,17 +73,17 @@ async function onCall() {
 
 function openThreadsList() {
   // Open the chat's Threads list beside anything already up (a side chat stays put),
-  // clearing a channel thread that was in view and the full-column Info / Side Space.
+  // clearing a channel thread that was in view and the full-column Info / Side Desk.
   navigateTo({
     path: route.path,
-    query: mergeQuery(route.query, { threads: '1', thread: null, from: null, info: null, space: null }),
+    query: mergeQuery(route.query, { threads: '1', thread: null, from: null, info: null, desk: null }),
   })
 }
 function openInfo() {
   navigateTo({ path: route.path, query: { info: '1' } })
 }
-function openSpace() {
-  navigateTo({ path: route.path, query: { space: 'canvas' } })
+function openDesk() {
+  navigateTo({ path: route.path, query: { desk: 'canvas' } })
 }
 
 // --- group actions ---
@@ -164,8 +164,8 @@ useHead({ title: computed(() => title.value) })
       <Button variant="ghost" size="sm" class="gap-2 text-muted-foreground" @click="openThreadsList">
         <MessagesSquare class="h-4 w-4" /> Threads
       </Button>
-      <Button variant="ghost" size="sm" class="gap-2 text-muted-foreground" @click="openSpace">
-        <LayoutPanelLeft class="h-4 w-4" /> Side Space
+      <Button variant="ghost" size="sm" class="gap-2 text-muted-foreground" @click="openDesk">
+        <LayoutPanelLeft class="h-4 w-4" /> Side Desk
       </Button>
       <Button variant="ghost" size="sm" class="gap-2 text-muted-foreground" @click="openInfo">
         <Info class="h-4 w-4" /> Info

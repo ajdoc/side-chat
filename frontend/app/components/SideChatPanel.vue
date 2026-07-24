@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { CheckCircle2, Info, LayoutPanelLeft, Loader2, MessageSquare, MessagesSquare, Pin, Plus, Rocket, UserPlus, Users, X } from 'lucide-vue-next'
-import type { GifResult, Message, SideSpaceAppId } from '~/types'
+import type { GifResult, Message, SideDeskAppId } from '~/types'
 import { Button } from '~/components/ui/button'
 import { Input } from '~/components/ui/input'
 
@@ -12,8 +12,8 @@ import { Input } from '~/components/ui/input'
  *
  *   - **Chat** — the conversation, its roster, its decisions and pins.
  *   - **Info** — the side chat about itself: who's here, where it came from, what it decided.
- *   - **Space** — the shared, persistent, real-time workspace: whiteboard, notes, docs and
- *     a widget canvas, each a tab (see SideSpace).
+ *   - **Desk** — the shared, persistent, real-time workspace: whiteboard, notes, docs and
+ *     a widget canvas, each a tab (see SideDesk).
  *
  * And because a side chat can own threads of its own, opening one leaves this panel in place
  * and adds a second column beside it — the ThreadPanel, scoped to this side chat. Which is
@@ -56,20 +56,20 @@ const fromMessageId = computed(() => (route.query.from ? Number(route.query.from
 const TABS = [
   { key: 'chat', label: 'Chat', icon: MessageSquare },
   { key: 'info', label: 'Info', icon: Info },
-  { key: 'space', label: 'Space', icon: LayoutPanelLeft },
+  { key: 'desk', label: 'Desk', icon: LayoutPanelLeft },
 ] as const
-const sctab = computed<'chat' | 'info' | 'space'>(() => {
+const sctab = computed<'chat' | 'info' | 'desk'>(() => {
   const t = route.query.sctab
-  return t === 'info' || t === 'space' ? t : 'chat'
+  return t === 'info' || t === 'desk' ? t : 'chat'
 })
 
-// The Side Space's active app rides in `spacetab`; canvas is the default (kept out of the URL).
-const spaceApp = computed<SideSpaceAppId>(() => {
-  const s = route.query.spacetab
+// The Side Desk's active app rides in `desktab`; canvas is the default (kept out of the URL).
+const deskApp = computed<SideDeskAppId>(() => {
+  const s = route.query.desktab
   return s === 'notes' || s === 'docs' || s === 'board' ? s : 'canvas'
 })
-function setSpaceApp(app: SideSpaceAppId) {
-  setQuery({ spacetab: app === 'canvas' ? null : app })
+function setDeskApp(app: SideDeskAppId) {
+  setQuery({ desktab: app === 'canvas' ? null : app })
 }
 
 const joined = computed(() =>
@@ -481,16 +481,16 @@ function relTime(iso: string) {
         @leave="onLeave"
       />
 
-      <!-- SIDE SPACE — board, notes, docs and the widget canvas for this side chat. -->
-      <SideSpace
-        v-if="sctab === 'space' && activeId"
+      <!-- SIDE DESK — board, notes, docs and the widget canvas for this side chat. -->
+      <SideDesk
+        v-if="sctab === 'desk' && activeId"
         :key="activeId"
         :base-path="`/api/side-chats/${activeId}`"
         :stream-name="`sidechat.${activeId}`"
         :can-edit="joined"
-        :active-app="spaceApp"
+        :active-app="deskApp"
         readonly-hint="Join this side chat to edit"
-        @update:active-app="setSpaceApp"
+        @update:active-app="setDeskApp"
         @jump="onJumpToReply"
       />
     </template>

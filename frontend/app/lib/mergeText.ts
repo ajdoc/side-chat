@@ -1,5 +1,5 @@
 /**
- * A line-based three-way merge — the piece that stops a Side Space note from losing text when
+ * A line-based three-way merge — the piece that stops a Side Desk note from losing text when
  * two people type in it at once.
  *
  * The note is saved whole, so without this a slower save simply flattens a faster one and

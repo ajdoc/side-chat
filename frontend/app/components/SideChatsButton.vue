@@ -20,11 +20,11 @@ const count = computed(() => sideChats.value.length)
 function open() {
   // Open the side chats list *beside* whatever's already up — a channel thread the main
   // timeline has open stays put — while clearing any prior side chat selection and the
-  // full-column Info / Side Space surfaces.
+  // full-column Info / Side Desk surfaces.
   navigateTo({
     path: route.path,
     query: mergeQuery(route.query, {
-      sidechats: '1', sidechat: null, scthread: null, scthreads: null, scfrom: null, info: null, space: null,
+      sidechats: '1', sidechat: null, scthread: null, scthreads: null, scfrom: null, info: null, desk: null,
     }),
   })
 }

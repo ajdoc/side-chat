@@ -26,10 +26,12 @@ class JoinVoiceChannelRequest extends VoiceChannelRequest
                     ->where('user_id', $this->user()?->id)
                     ->exists();
 
-                if (! $inside && app(VoiceService::class)->isFull($channel)) {
+                $voice = app(VoiceService::class);
+
+                if (! $inside && $voice->isFull($channel)) {
                     $validator->errors()->add('channel', sprintf(
-                        'This voice channel is full (%d people).',
-                        (int) config('webrtc.max_participants'),
+                        $channel->isSpace() ? 'This space is full (%d people).' : 'This voice channel is full (%d people).',
+                        $voice->capacity($channel),
                     ));
                 }
             },

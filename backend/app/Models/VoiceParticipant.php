@@ -23,11 +23,17 @@ class VoiceParticipant extends Model
         'camera_on',
         'audio_sharing',
         'last_seen_at',
+        // Where they're standing, in a Side Space. Null in a voice channel or a DM.
+        'x',
+        'y',
+        'facing',
     ];
 
     protected function casts(): array
     {
         return [
+            'x' => 'integer',
+            'y' => 'integer',
             'muted' => 'boolean',
             'deafened' => 'boolean',
             'screen_sharing' => 'boolean',

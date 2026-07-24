@@ -93,7 +93,8 @@ export function useServer() {
     }
   }
 
-  async function createChannel(serverId: number, payload: { name: string, type: ChannelType }) {
+  /** `preset` names the starting room, and is required for — and only for — a Side Space. */
+  async function createChannel(serverId: number, payload: { name: string, type: ChannelType, preset?: string }) {
     const res = await api<{ data: Channel }>(`/api/servers/${serverId}/channels`, {
       method: 'POST',
       body: payload,

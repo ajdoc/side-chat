@@ -184,6 +184,8 @@ const selfPeer = computed<Peer>(() => ({
   volume: 1,
   screenVolume: 1,
   screenMuted: false,
+  // Nothing is ever at a distance from itself, and a voice channel has no distances anyway.
+  proximity: 1,
 }))
 
 // --- the screen-share stage ---

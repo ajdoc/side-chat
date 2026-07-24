@@ -6,7 +6,7 @@ interface Paginated<T> {
 }
 
 /**
- * Normalise a Side Space *shelf* document into the attachment shape the Files tab renders, so
+ * Normalise a Side Desk *shelf* document into the attachment shape the Files tab renders, so
  * files uploaded to Docs appear here too. A negative id keeps it distinct from any real
  * attachment id in the list (which are positive), and `uploaded_by` collapses to a name to
  * match {@link AttachmentResource}.
@@ -29,7 +29,7 @@ function docAsAttachment(d: SpaceDocument): Attachment {
   }
 }
 
-// Files posted in a channel — the Info panel's Files tab. Also folds in the Side Space Docs
+// Files posted in a channel — the Info panel's Files tab. Also folds in the Side Desk Docs
 // shelf so the Files tab and Docs show the same set of documents.
 export function useChannelFiles() {
   const api = useApi()
