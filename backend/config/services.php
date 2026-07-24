@@ -55,6 +55,14 @@ return [
         'key' => env('YOUTUBE_API_KEY'),
     ],
 
+    // Google Drive API key — only ever buys *metadata* for a Drive video link (its name,
+    // length and thumbnail). Playback needs no key at all: a file shared as "anyone with the
+    // link" plays from Drive's own preview iframe either way. Defaults to the YouTube key,
+    // which is the same kind of key — it works once the Drive API is enabled on that project.
+    'google' => [
+        'key' => env('GOOGLE_API_KEY', env('YOUTUBE_API_KEY')),
+    ],
+
     // GIF picker providers. The picker fans out to *every* provider with a key and merges the
     // results (see App\Services\GifService); set one or both. Keys are proxied server-side so
     // they never reach the browser. With none set, the picker shows a "not configured" note.

@@ -14,9 +14,10 @@ use Illuminate\Support\Facades\Http;
  *   - `youtube`  → the IFrame Player API. Seekable, so the room stays in lockstep.
  *   - `file`     → a plain <video>: an uploaded clip, or a direct link to .mp4/.webm/…
  *                  Seekable, so the room stays in lockstep.
- *   - `embed`    → the provider's own iframe (Vimeo, Dailymotion, Twitch, Streamable).
- *                  Everyone gets the same start offset, but nothing after that: a third-party
- *                  iframe won't take a seek from us. The card says so rather than pretending.
+ *   - `embed`    → the provider's own iframe (Vimeo, Dailymotion, Twitch, Streamable, Google
+ *                  Drive). Everyone gets the same start offset, but nothing after that: a
+ *                  third-party iframe won't take a seek from us. The card says so rather than
+ *                  pretending. Drive's preview won't even take the offset — see below.
  *
  * That tiering is the honest version of "universal": anything with a public embed *plays*,
  * and the two engines we can actually drive also *sync*. A link we don't recognise is tried
@@ -25,6 +26,11 @@ use Illuminate\Support\Facades\Http;
  * Metadata (title, author, thumbnail, duration) is best-effort via each site's oEmbed, with
  * YouTube durations coming from the Data API when a key is configured. Every network call has
  * a short timeout and never throws into the send path; a source with no metadata still plays.
+ *
+ * Google Drive is the one provider with no oEmbed at all: a shared file plays from Drive's own
+ * `/preview` iframe with no key needed, and `services.google.key` (the Drive API) only ever
+ * buys the name, length and thumbnail. It's also the one embed that takes no start offset, so
+ * the room genuinely can't share a position for it — the card is told to say as much.
  *
  * @phpstan-type Source array{kind: string, key: string|null, url: string|null, embedUrl: string|null, provider: string, title: string, author: string|null, duration: int|null, thumbnail: string|null}
  * @phpstan-type Result array{sources: array<int, Source>, error: string|null}
@@ -46,7 +52,7 @@ final class VideoResolver
     public function looksLikeLink(string $input): bool
     {
         return (bool) preg_match('#https?://#i', $input)
-            || (bool) preg_match('#(youtube\.com|youtu\.be|vimeo\.com|dailymotion\.com|dai\.ly|twitch\.tv|streamable\.com)#i', $input);
+            || (bool) preg_match('#(youtube\.com|youtu\.be|vimeo\.com|dailymotion\.com|dai\.ly|twitch\.tv|streamable\.com|drive\.google\.com)#i', $input);
     }
 
     /**
@@ -86,12 +92,16 @@ final class VideoResolver
             return $this->ok([$twitch]);
         }
 
+        if (($driveId = $this->driveFileId($input)) !== null) {
+            return $this->fromGoogleDrive($driveId);
+        }
+
         // Not a site we know. If it points at something a <video> can open, play it directly.
         if ($this->looksLikeMediaFile($input)) {
             return $this->ok([$this->directFile($input)]);
         }
 
-        return $this->error("I don't know how to play that link. YouTube, Vimeo, Dailymotion, Twitch, Streamable and direct video files (.mp4, .webm, …) all work — or upload the file.");
+        return $this->error("I don't know how to play that link. YouTube, Vimeo, Dailymotion, Twitch, Streamable, Google Drive and direct video files (.mp4, .webm, …) all work — or upload the file.");
     }
 
     /**
@@ -233,6 +243,65 @@ final class VideoResolver
     }
 
     /**
+     * Google Drive: whatever someone shared out of their own storage.
+     *
+     * Drive has no oEmbed and no public player API, but any file shared as "anyone with the
+     * link" loads in its `/preview` iframe — which is the whole feature. It is the least
+     * steerable source we take: no seek, and no start offset either, so the card tells people
+     * to press play on it themselves rather than implying a sync it can't deliver.
+     *
+     * Deliberately *not* played as a `file` via the `uc?export=download` URL: Drive gates that
+     * behind a virus-scan interstitial past ~100 MB and doesn't send CORS headers, so a <video>
+     * pointed at it fails for exactly the big files people want to watch together.
+     *
+     * @return Result
+     */
+    private function fromGoogleDrive(string $id): array
+    {
+        $meta = $this->driveMeta($id);
+        $millis = data_get($meta, 'videoMediaMetadata.durationMillis');
+
+        return $this->ok([$this->embedSource(
+            provider: 'drive',
+            embedUrl: "https://drive.google.com/file/d/{$id}/preview",
+            title: is_string($meta['name'] ?? null) && $meta['name'] !== '' ? $meta['name'] : 'Google Drive video',
+            author: null,
+            duration: is_numeric($millis) ? (int) round(((int) $millis) / 1000) : null,
+            thumbnail: is_string($meta['thumbnailLink'] ?? null) ? $meta['thumbnailLink'] : null,
+            key: $id,
+        )]);
+    }
+
+    /**
+     * Name, length and thumbnail for a shared Drive file, when a key is configured.
+     *
+     * Anything but a clean 200 is simply "no metadata" — an unkeyed deployment, a Drive API
+     * that was never enabled on the key's project, or a file shared narrowly enough that an
+     * anonymous key can't read it all land here, and all of them still play.
+     *
+     * @return array<string, mixed>
+     */
+    private function driveMeta(string $id): array
+    {
+        $key = $this->googleKey();
+        if ($key === null) {
+            return [];
+        }
+
+        try {
+            $res = Http::timeout(5)->get("https://www.googleapis.com/drive/v3/files/{$id}", [
+                'fields' => 'name,thumbnailLink,videoMediaMetadata(durationMillis)',
+                'supportsAllDrives' => 'true',
+                'key' => $key,
+            ]);
+
+            return $res->successful() ? (array) $res->json() : [];
+        } catch (\Throwable) {
+            return [];
+        }
+    }
+
+    /**
      * Twitch: a VOD, a clip or a live channel.
      *
      * Its player refuses to load unless the embedding host is named in `parent`, so this is
@@ -335,6 +404,24 @@ final class VideoResolver
         return null;
     }
 
+    /**
+     * The file id out of any of the shapes Drive hands people: the share link off the Share
+     * button, the older `open?id=`, the `uc`/`usercontent` download links, and the `/preview`
+     * URL someone copied out of an embed they'd already made.
+     */
+    private function driveFileId(string $url): ?string
+    {
+        if (preg_match('#(?:drive|docs)\.google\.com/file/d/([A-Za-z0-9_-]{10,})#i', $url, $m)) {
+            return $m[1];
+        }
+
+        if (preg_match('#(?:drive|drive\.usercontent|docs)\.google\.com/[^\s?]*\?[^\s]*\bid=([A-Za-z0-9_-]{10,})#i', $url, $m)) {
+            return $m[1];
+        }
+
+        return null;
+    }
+
     private function youtubePlaylistId(string $url): ?string
     {
         // `watch?v=…&list=…` is "play this video", not "play the list".
@@ -390,6 +477,14 @@ final class VideoResolver
     private function apiKey(): ?string
     {
         $key = config('services.youtube.key');
+
+        return is_string($key) && $key !== '' ? $key : null;
+    }
+
+    /** The Google Cloud key the Drive lookup uses — the YouTube one, unless it's been split out. */
+    private function googleKey(): ?string
+    {
+        $key = config('services.google.key');
 
         return is_string($key) && $key !== '' ? $key : null;
     }

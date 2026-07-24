@@ -22,9 +22,10 @@ use Illuminate\Support\Str;
  * What it plays is the part that isn't like music. A source declares the engine that can play
  * it ({@see VideoResolver}), and only two of those can be *driven*: YouTube's IFrame player
  * and a plain <video> (an upload, or a direct .mp4/.webm link). Those stay in lockstep. A
- * third-party `embed` — Vimeo, Dailymotion, Twitch, Streamable — plays for everyone from the
- * same starting offset and then goes its own way, because the provider's iframe won't take a
- * seek from us. The card labels those rather than pretending they're synced.
+ * third-party `embed` — Vimeo, Dailymotion, Twitch, Streamable, Google Drive — plays for
+ * everyone from the same starting offset and then goes its own way, because the provider's
+ * iframe won't take a seek from us. The card labels those rather than pretending they're
+ * synced (and Drive, which won't even take the offset, gets a blunter label still).
  *
  * Local video reaches the playlist two ways, and the difference matters. An *upload* is a file
  * the widget hosts itself. An *attachment* is a video already posted somewhere in this chat —
@@ -729,7 +730,7 @@ final class VideoWidget implements RedactsState, WidgetHandler
     {
         return implode("\n", [
             '📺 **Video commands**',
-            '`v!play <link/search>` — add & watch (YouTube, Vimeo, Dailymotion, Twitch, Streamable, .mp4/.webm, or words)',
+            '`v!play <link/search>` — add & watch (YouTube, Vimeo, Dailymotion, Twitch, Streamable, Google Drive, .mp4/.webm, or words)',
             '`v!pn <link>` — play next · `v!search <words>` — pick from results',
             'Drop a file on the card to upload one, or browse videos already posted in this chat from the card',
             '`v!pause` · `v!resume` · `v!next` · `v!prev` · `v!stop` (keeps the playlist)',

@@ -25,7 +25,7 @@ function videoWidget(int $channelId): ?Widget
  * and only oEmbed is stubbed.
  */
 beforeEach(function () {
-    config(['services.youtube.key' => null]);
+    config(['services.youtube.key' => null, 'services.google.key' => null]);
 
     Http::fake([
         'www.youtube.com/oembed*' => Http::response([
@@ -38,6 +38,13 @@ beforeEach(function () {
             'author_name' => 'Someone',
             'duration' => 212,
             'thumbnail_url' => 'https://i.vimeocdn.com/x.jpg',
+        ]),
+        // Drive has no oEmbed — its metadata comes from the Drive API, and only when a key is
+        // configured. Stubbed here; the tests that want the keyless path just don't set one.
+        'www.googleapis.com/drive/v3/files/*' => Http::response([
+            'name' => 'holiday-2026.mp4',
+            'thumbnailLink' => 'https://lh3.googleusercontent.com/x=s220',
+            'videoMediaMetadata' => ['durationMillis' => '184500'],
         ]),
         '*' => Http::response([], 404),
     ]);
@@ -84,6 +91,38 @@ it('classifies each kind of link by the player that can drive it', function () {
         ->and($playlist[1]['provider'])->toBe('direct')
         ->and($playlist[1]['url'])->toBe('https://example.com/clips/holiday.mp4')
         ->and($playlist[1]['title'])->toBe('holiday.mp4');
+});
+
+it('plays a shared Google Drive video from its preview iframe, with or without a key', function () {
+    [$user, , $channel] = ownerWithChannel();
+    Passport::actingAs($user);
+
+    // Keyless — the deployment most people run. It still plays; it just has no name for it.
+    $this->postJson("/api/channels/{$channel->id}/messages", [
+        'body' => 'v!play https://drive.google.com/file/d/1AbCdEfGhIjKlMnOpQrStUvWxYz/view?usp=sharing',
+    ])->assertCreated();
+
+    $playlist = videoWidget($channel->id)->state['playlist'];
+    expect($playlist[0]['kind'])->toBe('embed')
+        ->and($playlist[0]['provider'])->toBe('drive')
+        ->and($playlist[0]['embedUrl'])->toBe('https://drive.google.com/file/d/1AbCdEfGhIjKlMnOpQrStUvWxYz/preview')
+        ->and($playlist[0]['title'])->toBe('Google Drive video')
+        ->and($playlist[0]['duration'])->toBeNull();
+
+    // With a key, the Drive API fills in what the link itself never carried.
+    config(['services.google.key' => 'test-key']);
+
+    // The older `open?id=` shape, and `v!pn` to keep the first entry seated.
+    $this->postJson("/api/channels/{$channel->id}/messages", [
+        'body' => 'v!pn https://drive.google.com/open?id=9ZyXwVuTsRqPoNmLkJiHgF',
+    ])->assertCreated();
+
+    $added = videoWidget($channel->id)->state['playlist'][1];
+    expect($added['key'])->toBe('9ZyXwVuTsRqPoNmLkJiHgF')
+        ->and($added['embedUrl'])->toBe('https://drive.google.com/file/d/9ZyXwVuTsRqPoNmLkJiHgF/preview')
+        ->and($added['title'])->toBe('holiday-2026.mp4')
+        ->and($added['duration'])->toBe(185)
+        ->and($added['thumbnail'])->toBe('https://lh3.googleusercontent.com/x=s220');
 });
 
 it('refuses a link it has no player for, without touching the playlist', function () {

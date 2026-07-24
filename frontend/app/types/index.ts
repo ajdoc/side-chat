@@ -288,9 +288,10 @@ export interface MusicState {
  *
  * - `youtube` — the IFrame Player API. Driveable, so the room stays in lockstep.
  * - `file`    — a plain <video>: an uploaded clip, or a direct link to .mp4/.webm/… Driveable.
- * - `embed`   — the provider's own iframe (Vimeo, Dailymotion, Twitch, Streamable). Everyone
- *               starts at the same offset and then it's on its own; a third-party iframe won't
- *               take a seek from us, and the card says so instead of faking it.
+ * - `embed`   — the provider's own iframe (Vimeo, Dailymotion, Twitch, Streamable, Google
+ *               Drive). Everyone starts at the same offset and then it's on its own; a
+ *               third-party iframe won't take a seek from us, and the card says so instead of
+ *               faking it. Drive's preview takes no offset either, and is labelled harder.
  */
 export type VideoKind = 'youtube' | 'file' | 'embed'
 
@@ -311,7 +312,7 @@ export interface VideoSource {
    * Where it came from — drives the badge. Two are local: `upload` is a clip the widget hosts
    * itself, `attachment` one already posted in this chat and added by reference.
    */
-  provider: 'youtube' | 'vimeo' | 'dailymotion' | 'twitch' | 'streamable' | 'direct' | 'upload' | 'attachment' | string
+  provider: 'youtube' | 'vimeo' | 'dailymotion' | 'twitch' | 'streamable' | 'drive' | 'direct' | 'upload' | 'attachment' | string
   title: string
   /** For a borrowed attachment, whoever posted it originally — `addedBy` is who queued it. */
   author: string | null

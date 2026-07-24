@@ -19,10 +19,11 @@ import { Button } from '~/components/ui/button'
  *   - `youtube` — the IFrame Player API, driven exactly like the music player drives it.
  *   - `file`    — a plain <video>: a clip someone uploaded (served from a signed URL) or a
  *                 direct link to an .mp4/.webm. Seekable, so it stays in lockstep.
- *   - `embed`   — the provider's own iframe (Vimeo, Dailymotion, Twitch, Streamable). It gets
- *                 the room's offset when it loads and nothing after that: a third-party iframe
- *                 won't take a seek from us. The card labels these rather than quietly drifting
- *                 and letting people think they're together when they aren't.
+ *   - `embed`   — the provider's own iframe (Vimeo, Dailymotion, Twitch, Streamable, Google
+ *                 Drive). It gets the room's offset when it loads and nothing after that: a
+ *                 third-party iframe won't take a seek from us. Google Drive's preview won't
+ *                 take even the offset. The card labels these rather than quietly drifting and
+ *                 letting people think they're together when they aren't.
  *
  * Playback only ever starts from a real click ("Watch along"), which is what keeps browsers
  * from blocking it. The transport buttons drive the shared state for everyone either way — you
@@ -51,14 +52,24 @@ const pending = computed(() => state.value.pendingSearch ?? null)
 const kind = computed(() => current.value?.kind ?? null)
 /** An iframe we can start but can't steer — the room shares a start time and nothing more. */
 const unsteerable = computed(() => kind.value === 'embed')
+/**
+ * Embeds that won't even take a starting offset, so there's no shared *anything* — Drive's
+ * preview has no time parameter and opens on its own play button. Worth saying out loud: a
+ * viewer who was promised "everyone starts together" and then wasn't will blame the widget.
+ */
+const OFFSETLESS_PROVIDERS = new Set(['drive'])
+const offsetless = computed(() => unsteerable.value && OFFSETLESS_PROVIDERS.has(current.value?.provider ?? ''))
 
 const SPEED_OPTIONS = [0.5, 0.75, 1, 1.25, 1.5, 2]
 
 const PROVIDER_LABEL: Record<string, string> = {
   youtube: 'YouTube', vimeo: 'Vimeo', dailymotion: 'Dailymotion',
-  twitch: 'Twitch', streamable: 'Streamable', direct: 'Direct link',
+  twitch: 'Twitch', streamable: 'Streamable', drive: 'Google Drive', direct: 'Direct link',
   upload: 'Uploaded', attachment: 'From this chat',
 }
+
+/** What to call the current player in prose, for the notices an embed has to carry. */
+const playerName = computed(() => PROVIDER_LABEL[current.value?.provider ?? ''] ?? 'This player')
 
 // Has this viewer opted in to watching along? Nothing plays until they do — a browser won't
 // let an unprompted iframe make noise, and a silently-muted screening is worse than an
@@ -203,6 +214,8 @@ function buildEmbedSrc(source: VideoSource): string {
     case 'streamable': return `${base}${join}t=${at}`
     // Twitch wants h/m/s rather than a bare count, and only honours it on VODs.
     case 'twitch': return `${base}&t=${Math.floor(at / 3600)}h${Math.floor((at % 3600) / 60)}m${at % 60}s`
+    // Drive's preview has no time parameter — it opens where it opens. See `offsetless`.
+    case 'drive': return base
     default: return base
   }
 }
@@ -521,7 +534,8 @@ onBeforeUnmount(() => {
         <Play class="h-9 w-9" />
         <span class="text-sm font-medium">Watch along</span>
         <span class="max-w-xs px-6 text-[11px] text-white/70">
-          {{ isPlaying ? 'The room is already playing — you’ll join where they are.' : 'You’ll be in sync with everyone else here.' }}
+          <template v-if="offsetless">This one plays in {{ playerName }} — you’ll start it from the beginning yourself.</template>
+          <template v-else>{{ isPlaying ? 'The room is already playing — you’ll join where they are.' : 'You’ll be in sync with everyone else here.' }}</template>
         </span>
       </button>
     </div>
@@ -546,7 +560,10 @@ onBeforeUnmount(() => {
            and isn't will assume the widget is broken. -->
       <p v-else-if="current && unsteerable" class="mb-2 flex items-start gap-1 text-[11px] text-muted-foreground">
         <TriangleAlert class="mt-px h-3 w-3 flex-none" />
-        <span>{{ PROVIDER_LABEL[current.provider] ?? 'This player' }} runs in its own player — everyone starts together, but pause and seek only affect your screen.</span>
+        <span v-if="offsetless">
+          {{ playerName }} runs in its own player and won’t take a starting position — press play on it yourself, and nothing you do there affects anyone else’s screen.
+        </span>
+        <span v-else>{{ playerName }} runs in its own player — everyone starts together, but pause and seek only affect your screen.</span>
       </p>
 
       <!-- Progress. Scrubbing moves the *room*, which is why it's disabled for an embed. -->
