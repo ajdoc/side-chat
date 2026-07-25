@@ -3,6 +3,7 @@ import type { AvatarLook } from '~/lib/spaceAvatar'
 import type { PetKind } from '~/lib/spacePets'
 import { facingOf, isWalkable, spawnPoint, step } from '~/lib/spaceMapEngine'
 import { normaliseLook } from '~/lib/spaceAvatar'
+import { proximityMoved } from '~/composables/useSpaceProximity'
 
 /** How often a position may go out — matches the whiteboard's live layer and the co-op games. */
 const WHISPER_EVERY = 80
@@ -142,7 +143,7 @@ export function useSpacePresence(channelId: number, map: Ref<SpaceMap | null>) {
   const api = useApi()
   const config = useRuntimeConfig()
   const echo: any = useNuxtApp().$echo
-  const token = useCookie<string | null>('auth_token')
+  const token = useAuthToken()
   const { user } = useAuth()
 
   /** Are we already standing in this particular room? */
@@ -335,7 +336,13 @@ export function useSpacePresence(channelId: number, map: Ref<SpaceMap | null>) {
     const dy = (held.has('arrowdown') || held.has('s') ? 1 : 0) - (held.has('arrowup') || held.has('w') ? 1 : 0)
 
     if (dx === 0 && dy === 0) {
-      if (moving.value) moving.value = false
+      if (moving.value) {
+        moving.value = false
+        // Say where you actually stopped. The last whisper went out up to WHISPER_EVERY ago and
+        // is therefore short of the truth by a fraction of a tile — which matters at exactly the
+        // moment somebody stops walking towards you and expects to be heard.
+        whisperMove(true)
+      }
 
       return
     }
@@ -414,6 +421,11 @@ export function useSpacePresence(channelId: number, map: Ref<SpaceMap | null>) {
         existing.petAt = { x: payload.x, y: payload.y, facing: payload.facing }
       }
 
+      // Somebody moved, so who can hear whom may have changed. Told rather than polled: it makes
+      // proximity as prompt as the positions themselves, and independent of whether this tab is
+      // being drawn or its timers are being throttled. Cheap — it throttles itself.
+      proximityMoved()
+
       return
     }
 
@@ -436,6 +448,19 @@ export function useSpacePresence(channelId: number, map: Ref<SpaceMap | null>) {
         at: Date.now(),
       },
     }
+
+    // Somebody we'd never heard from before. They don't know where we are either — their roster
+    // gave them wherever we last *stopped*, which may be a room and a session out of date — so
+    // answer at once rather than leaving them to wait out the idle heartbeat. Two people walking
+    // towards each other should not have to stand still for a second and a half to discover it.
+    //
+    // Forced, but it can't storm: everybody already known is skipped above, so a newcomer draws
+    // exactly one reply per occupant and the replies themselves are answers, not new arrivals.
+    whisperMove(true)
+
+    // And decide at once whether we can hear them. A stranger who appears already standing next
+    // to you — walked in, or reloaded — should be dialled now, not on their next step.
+    proximityMoved()
   }
 
   /** Is this person mid-stride? Drives their walk cycle; `me` answers from the keyboard. */

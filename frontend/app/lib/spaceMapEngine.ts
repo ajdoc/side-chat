@@ -63,13 +63,25 @@ export type { SpaceObject } from './spaceDecor'
  *   - Between there and `FAR_TILES` you fade out. This is the band that makes a room feel
  *     like a room.
  *   - `CONNECT_TILES` sits *past* silence, and is where the WebRTC connection itself is made
- *     and dropped. The gap between it and `FAR_TILES` is hysteresis: someone pacing on the
- *     edge of audibility crosses in and out of hearing (free — it's a volume assignment)
- *     without repeatedly tearing down and re-negotiating a peer connection (not free at all).
+ *     and dropped. The gap between it and `FAR_TILES` does two jobs, and the second is the
+ *     reason it's as wide as it is:
+ *
+ *     **Hysteresis** — someone pacing on the edge of audibility crosses in and out of hearing
+ *     (free — it's a volume assignment) without repeatedly tearing down and re-negotiating a
+ *     peer connection (not free at all).
+ *
+ *     **Pre-dialling** — a peer connection is not instant. Offer, answer, ICE, DTLS: several
+ *     hundred milliseconds on a good day, and longer whenever the pair has to fall back to a
+ *     relay. Dialling at the moment somebody becomes audible therefore guarantees that the
+ *     first thing they say is lost, which reads as the room being slow rather than as physics.
+ *     So the connection is opened while they are still *inaudible* and walking towards you —
+ *     several tiles of walking, which at {@link SPEED} is comfortably more than a handshake —
+ *     and by the time distance says you can hear them, there is already something to hear.
+ *     The gain is 0 the whole way in, so an early connection is silent, not a leak.
  */
 export const NEAR_TILES = 2
 export const FAR_TILES = 8
-export const CONNECT_TILES = 10
+export const CONNECT_TILES = 14
 
 export type Facing = 'up' | 'down' | 'left' | 'right'
 
@@ -203,15 +215,21 @@ export function audibility(map: SpaceMap, a: { x: number, y: number }, b: { x: n
 /**
  * Should a peer connection to `b` be open at all?
  *
- * Not simply `audibility > 0`: a shared zone means "always", and out in the open it uses the
- * wider `CONNECT_TILES` so the connection outlives the silence by a couple of tiles. See the
- * radii above for why that gap exists.
+ * Not simply `audibility > 0`: the connection is deliberately wider than hearing, so that it is
+ * already up before you can hear anything and stays up for a few tiles after you can't. See the
+ * radii above.
+ *
+ * Zones are *not* allowed to narrow it, only widen it. A sealed room is sealed by gain — the
+ * people either side of its wall hear nothing of each other — but hanging up on them as well
+ * would mean that stepping through the door starts a fresh handshake, and the first thing said
+ * inside the room gets eaten. So proximity to the wall is enough to keep a silent connection
+ * warm, and sharing the zone keeps it open at any distance.
  */
 export function inConnectRange(map: SpaceMap, a: { x: number, y: number }, b: { x: number, y: number }): boolean {
   const za = zoneAt(map, a.x, a.y)
   const zb = zoneAt(map, b.x, b.y)
 
-  if (za || zb) return !!(za && zb && za.id === zb.id)
+  if (za && zb && za.id === zb.id) return true
 
   return distance(a, b) <= CONNECT_TILES
 }

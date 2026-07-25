@@ -247,3 +247,26 @@
     );
   }
 }
+
+@layer components {
+  /* ---------------------------------------------------------------------------
+     Safe areas
+     ---------------------------------------------------------------------------
+     A phone draws the app edge to edge: the status bar / notch sits over the top
+     of the page and the gesture bar or navigation buttons over the bottom. The
+     insets that keep content clear of them come from the OS via `env()`, and are
+     0 everywhere else — so this class is inert in a browser and on the desktop,
+     and needs no platform check.
+
+     Applied to the app shell, and separately to anything `fixed` (the sidebar
+     drawer, the full-screen panels), because a fixed element is positioned
+     against the viewport and so escapes the shell's padding entirely.
+
+     Requires `viewport-fit=cover` on the viewport meta — see nuxt.config.ts. */
+  .safe-inset {
+    padding-top: env(safe-area-inset-top);
+    padding-bottom: env(safe-area-inset-bottom);
+    padding-left: env(safe-area-inset-left);
+    padding-right: env(safe-area-inset-right);
+  }
+}

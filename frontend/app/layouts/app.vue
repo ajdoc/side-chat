@@ -131,6 +131,11 @@ watch([expandedIds, servers, activeServerId], () => {
   }
 }, { immediate: true })
 
+// The native builds ship chat and voice only, so the sidebar hides the doors that lead
+// anywhere else (see middleware/native-scope.global.ts, which would bounce them anyway).
+const { isNative, isMobile } = usePlatform()
+const { narrow, open: drawerOpen, close: closeDrawer } = useNavDrawer()
+
 // Live count, kept in sync by the join-request Reverb subscription opened in openServer().
 const { requests: joinRequests } = useJoinRequests()
 const pendingCount = computed(() => joinRequests.value.length)
@@ -407,9 +412,29 @@ onBeforeUnmount(() => { userStream.unsubscribe(); stopPresence() })
 </script>
 
 <template>
-  <div class="flex h-screen text-foreground">
-    <aside class="relative flex shrink-0 flex-col border-r bg-sidebar" :style="{ width: `${sidebarWidth}px` }">
-      <ResizeHandle edge="right" @resize="startSidebarResize" />
+  <!-- `safe-inset` keeps the header out from under the status bar and the composer clear of
+       the gesture bar. `h-screen` is border-box, so the padding comes out of the height
+       rather than adding to it — the shell still fits the screen exactly. -->
+  <div class="safe-inset flex h-screen text-foreground">
+    <!-- Narrow screens (phones, and a very small desktop window) can't hold the sidebar
+         beside a conversation, so it lifts out into a drawer over the top of one. Same
+         markup either way — only its position, width and visibility differ. -->
+    <div
+      v-if="narrow && drawerOpen"
+      class="fixed inset-0 z-30 bg-black/40"
+      @click="closeDrawer"
+    />
+    <!-- `relative` belongs to the wide branch only. Tailwind emits `.relative` after `.fixed`
+         in the stylesheet, so listing both would leave the drawer in the flex flow — still
+         reserving its width while `-translate-x-full` merely slid it out of sight. -->
+    <aside
+      class="flex flex-col border-r bg-sidebar transition-transform"
+      :class="narrow
+        ? ['safe-inset fixed inset-y-0 left-0 z-40 w-[min(20rem,85vw)]', drawerOpen ? 'translate-x-0' : '-translate-x-full']
+        : 'relative shrink-0'"
+      :style="narrow ? undefined : { width: `${sidebarWidth}px` }"
+    >
+      <ResizeHandle v-if="!narrow" edge="right" @resize="startSidebarResize" />
       <div class="flex h-12 shrink-0 items-center border-b px-4 font-semibold">
         Side Chat
       </div>
@@ -557,7 +582,7 @@ onBeforeUnmount(() => { userStream.unsubscribe(); stopPresence() })
                       <DropdownMenuItem @select="navigateTo(`/servers/${item.server.id}`); showInvite = true">
                         <UserPlus class="mr-2 h-4 w-4" /> Invite people
                       </DropdownMenuItem>
-                      <DropdownMenuItem @select="navigateTo(`/servers/${item.server.id}/requests`)">
+                      <DropdownMenuItem v-if="!isNative" @select="navigateTo(`/servers/${item.server.id}/requests`)">
                         <Check class="mr-2 h-4 w-4" /> Pending requests
                         <span
                           v-if="item.isActive && pendingCount"
@@ -684,7 +709,7 @@ onBeforeUnmount(() => { userStream.unsubscribe(); stopPresence() })
                 </div>
 
                 <NuxtLink
-                  v-else-if="item.kind === 'add-channel'"
+                  v-else-if="item.kind === 'add-channel' && !isNative"
                   :to="`/servers/${item.server.id}/channels/new`"
                   class="mx-2 flex items-center gap-2 rounded py-1.5 pl-7 pr-2 text-sm text-muted-foreground transition hover:bg-muted hover:text-foreground"
                 >
@@ -788,7 +813,9 @@ onBeforeUnmount(() => { userStream.unsubscribe(); stopPresence() })
          opened from: a video keeps playing, a chat keeps updating, and the pinned song follows
          you across channels, DMs, groups and servers. Music renders through the shelf now, so
          the old standalone MusicDock is gone. -->
-    <FloatingWindows />
+    <!-- Dragging windows around needs a pointer and room to put them, so the phone build
+         does without the shelf entirely. Desktop keeps it. -->
+    <FloatingWindows v-if="!isMobile" />
 
     <NewChatDialog v-model:open="showNewChat" />
 

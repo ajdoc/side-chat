@@ -22,6 +22,9 @@ import { Input } from '~/components/ui/input'
 const props = defineProps<{ channelId: number }>()
 
 // Draggable, remembered width (its left border carries the handle).
+// Below `md` there is no room for a column beside the timeline: the panel takes the
+// whole screen instead, and its own close button is the way back.
+const { narrow } = useNavDrawer()
 const { width: panelWidth, startResize } = useResizable('side-chat', 380, { min: 300, max: 720 })
 const route = useRoute()
 const { user } = useAuth()
@@ -244,8 +247,12 @@ function relTime(iso: string) {
 </script>
 
 <template>
-  <aside class="relative flex shrink-0 flex-col border-l" :style="{ width: `${panelWidth}px` }">
-    <ResizeHandle edge="left" @resize="startResize" />
+  <aside
+    class="flex flex-col border-l bg-background"
+    :class="narrow ? 'safe-inset fixed inset-0 z-50 w-full' : 'relative shrink-0'"
+    :style="narrow ? undefined : { width: `${panelWidth}px` }"
+  >
+    <ResizeHandle v-if="!narrow" edge="left" @resize="startResize" />
     <header class="flex h-12 shrink-0 items-center justify-between border-b px-4">
       <div class="flex min-w-0 items-center gap-2 font-semibold">
         <Rocket class="h-4 w-4 text-muted-foreground" />

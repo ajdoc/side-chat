@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ArrowDown, Loader2, PictureInPicture2, X } from 'lucide-vue-next'
+import { ArrowDown, Loader2, Menu, PictureInPicture2, X } from 'lucide-vue-next'
 import type { Channel, GifResult, Message } from '~/types'
 import type { FloatingConversationIcon } from '~/composables/useFloatingWindows'
 import { Button } from '~/components/ui/button'
@@ -70,6 +70,9 @@ function floatConversation() {
 // The header's Side Chats button reads this shared count; load it per channel so the badge
 // is live from the moment you land, then keep it fresh over the channel stream.
 const { sideChats, loadSideChats } = useSideChats()
+// Below `md` the sidebar is a drawer, and the header carries the only handle back to it.
+const { narrow, toggle: toggleDrawer } = useNavDrawer()
+const { isMobile } = usePlatform()
 // So a message body deep in the virtual list can render `@Name` as a chip without each
 // MessageItem having to be handed the roster. See MarkdownBody / useChannelMembers.
 provide(mentionNamesKey, mentionNames)
@@ -292,6 +295,16 @@ onBeforeUnmount(() => {
     <div class="flex min-w-0 flex-1 flex-col">
       <header class="flex h-12 shrink-0 items-center justify-between border-b px-4">
         <div class="flex min-w-0 items-center gap-2">
+          <!-- On a narrow screen the sidebar is a drawer, and this is the only way back to it. -->
+          <button
+            v-if="narrow"
+            type="button"
+            class="-ml-1 shrink-0 rounded p-1.5 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+            title="Channels and chats"
+            @click="toggleDrawer"
+          >
+            <Menu class="h-5 w-5" />
+          </button>
           <slot name="icon" />
           <div class="min-w-0">
             <p class="truncate font-semibold leading-tight">{{ title }}</p>
@@ -303,6 +316,7 @@ onBeforeUnmount(() => {
         <div class="flex shrink-0 items-center gap-1">
           <slot name="actions" />
           <button
+            v-if="!isMobile"
             type="button"
             class="rounded p-1.5 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
             :title="isConversationFloating(channel.id) ? 'Already floating — brings it to the front' : 'Float this chat in a window'"

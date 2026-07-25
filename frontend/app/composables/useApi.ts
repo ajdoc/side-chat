@@ -1,7 +1,7 @@
 // A $fetch instance pointed at the Laravel API, attaching the Bearer token when present.
 export function useApi() {
   const config = useRuntimeConfig()
-  const token = useCookie<string | null>('auth_token')
+  const token = useAuthToken()
 
   return $fetch.create({
     baseURL: config.public.apiBase,

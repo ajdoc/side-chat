@@ -5,7 +5,7 @@ import Pusher from 'pusher-js'
 // /broadcasting/auth endpoint using the Passport Bearer token.
 export default defineNuxtPlugin(() => {
   const config = useRuntimeConfig()
-  const token = useCookie<string | null>('auth_token')
+  const token = useAuthToken()
 
   ;(window as any).Pusher = Pusher
 

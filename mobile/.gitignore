@@ -1,0 +1,4 @@
+node_modules/
+# Mirrored from frontend/.output/public on every sync — never edited by hand.
+www/
+dist/

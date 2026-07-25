@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">Side Chat</string>
+    <string name="title_activity_main">Side Chat</string>
+    <string name="package_name">chat.side.app</string>
+    <string name="custom_url_scheme">chat.side.app</string>
+</resources>

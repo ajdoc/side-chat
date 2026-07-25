@@ -30,7 +30,6 @@ import {
   drawMap,
   drawPet,
   drawTrainer,
-  inConnectRange,
   spriteHue,
   toScreen,
   zoneAt,
@@ -52,19 +51,21 @@ import { Button } from '~/components/ui/button'
  *
  * ## The frame loop
  *
- * One `requestAnimationFrame` loop does three things in order, and the order matters:
+ * One `requestAnimationFrame` loop does two things in order, and the order matters:
  *
  *   1. **Move** — advance your own avatar and ease everyone else towards their last whispered
  *      position ({@link useSpacePresence}).
- *   2. **Listen** — for every occupant, work out how loudly you should hear them
- *      ({@link audibility}) and whether they should be connected at all
- *      ({@link inConnectRange}), and tell {@link useVoice}. This is the step that makes the
- *      room audible; it is also the step that keeps the WebRTC mesh small, because somebody
- *      across the map is never dialled in the first place.
- *   3. **Draw** — the map, the earshot ring, then everybody.
+ *   2. **Draw** — the map, the earshot ring, then everybody.
  *
- * Steps 1 and 2 are why this is a loop rather than a watcher: both are continuous functions of
- * position, and position changes every frame.
+ * That's why it's a loop rather than a watcher: movement is a continuous function of time, and
+ * the picture changes every frame.
+ *
+ * What is conspicuously *not* here is proximity — who you can hear, and who is dialled. That
+ * used to be step two of this loop, and it doesn't belong to a canvas: a hidden tab or a stage
+ * you clicked away from stops drawing while the call carries on, which froze the room's audio
+ * exactly where it stood. It lives in {@link useSpaceProximity} now, on its own clock at module
+ * scope. Distance still fades the *sprites* here, per frame, because that really is only
+ * interesting while somebody is looking.
  */
 const props = defineProps<{ channel: Channel, canEdit: boolean }>()
 
@@ -135,6 +136,8 @@ const {
   subscribe: subscribeGame,
   unsubscribe: unsubscribeGame,
 } = useSpaceGame(props.channel.id)
+
+const { audibleIds, startProximity, stopProximity } = useSpaceProximity()
 
 const canvas = ref<HTMLCanvasElement | null>(null)
 const wrap = ref<HTMLElement | null>(null)
@@ -372,7 +375,7 @@ async function onGameDismiss() {
 /**
  * A meeting takes the room over: everyone is whisked to the entrance and, for its duration, hears
  * everyone else at full volume rather than by distance. The teleport is ours to perform (the
- * server only records that it happened); the full-volume voice is {@link applyProximity}'s doing.
+ * server only records that it happened); the full-volume voice is {@link useSpaceProximity}'s doing.
  */
 watch(gameMeeting, (on, was) => {
   if (on && !was) {
@@ -399,9 +402,6 @@ const { width: stageHeight, startResize } = useResizable('space-stage', 420, {
 const { server } = useServer()
 const canModerate = computed(() =>
   server.value?.id === props.channel.server_id && !!server.value?.is_owner)
-/** Bumped whenever the audible set changes, so the roster below re-renders without watching positions. */
-const audibleIds = ref<number[]>([])
-
 /** Are we in *this* room's call, as opposed to some other channel's? */
 const inThisRoom = computed(() => inCall.value && activeCallChannel.value === props.channel.id)
 
@@ -422,9 +422,6 @@ let openedAt = performance.now()
 let ro: ResizeObserver | undefined
 let cssW = 0
 let cssH = 0
-/** Who was in earshot last frame, so arrivals and departures can be noticed rather than polled. */
-const wasAudible = new Set<number>()
-
 const camera = reactive<Camera>({ x: 0, y: 0, zoom: 1, width: 0, height: 0 })
 
 /** Behind everything: what's beyond the walls of a room that doesn't fill the canvas. */
@@ -486,6 +483,9 @@ async function enter() {
     // …and put yourself back where you were standing, if the room still allows it.
     const mine = roster.find(p => p.user.id === user.value?.id)
     place(mine && mine.x !== null && mine.y !== null ? { x: mine.x, y: mine.y, facing: mine.facing ?? null } : null)
+
+    // Last, because it needs somewhere to measure from: it runs the instant it's registered.
+    watchProximity()
   }
   catch {
     setProximityMode(false)
@@ -516,6 +516,11 @@ function reattach() {
   subscribeMoves()
   bindKeys()
 
+  // Re-registered rather than left alone, even though the proximity clock has been ticking away
+  // happily without us: the accessors it holds close over *this* mount's map and game state, and
+  // the ones from the mount that went away are reading refs nothing updates any more.
+  watchProximity()
+
   // If the position state somehow didn't survive (a hard reload lands here with the call
   // restored from the server but nothing placed), fall back to the entrance.
   if (!me.value) place(null)
@@ -523,8 +528,7 @@ function reattach() {
 
 async function leave() {
   unsubscribeMoves()
-  wasAudible.clear()
-  audibleIds.value = []
+  stopProximity()
   facingObject.value = null
   await disconnect()
 }
@@ -543,7 +547,12 @@ function loop(now: number) {
     // A meeting freezes the room — nobody walks, so movement isn't ticked; everything else runs
     // so the countdown and the voice keep going.
     if (!gameMeeting.value) tick(dt)
-    applyProximity()
+
+    // Our *own* movement, which nothing whispers to us. Proximity has its own clock (and its own
+    // reasons — see useSpaceProximity), and this only ever brings the next evaluation forward:
+    // it throttles itself, so a 144Hz monitor doesn't decide the room's audio 144 times a second.
+    proximityMoved()
+
     checkFurniture()
     checkGame()
   }
@@ -552,58 +561,23 @@ function loop(now: number) {
 }
 
 /**
- * Tell the call how near everybody is — the step that makes the room audible.
+ * Everything the proximity clock needs, handed over as accessors.
  *
- * Runs over `knownMembers()` (everyone on the presence channel) rather than `peers` (everyone
- * we have a connection to), and that distinction is the feature: somebody we have *no*
- * connection to is precisely who we might need to dial, and asking `peers` would mean never
- * noticing them walk up.
+ * Registered on the way in and torn down on the way out — see {@link useSpaceProximity} for why
+ * it runs on its own interval instead of in the frame loop above.
  */
-function applyProximity() {
-  const m = map.value
-  const self = me.value
-  if (!m || !self) return
-
-  const audible: number[] = []
-  // In a meeting the room argues face to face: everyone hears everyone, so distance stops
-  // deciding volume and every connection is held open. The rest of the loop is unchanged, which
-  // is why this is a flag on the gain rather than a mode switch on the call.
-  const meeting = gameMeeting.value
-
-  for (const member of knownMembers()) {
-    const them = others.value[member.id]
-    // On the channel but never yet heard from — no position, so nothing to measure. They'll
-    // be picked up on their first whisper, which is at most a twelfth of a second away.
-    if (!them) continue
-
-    const gain = meeting ? 1 : audibility(m, self, them)
-    setPeerProximity(member.id, gain)
-    setPeerInRange(member.id, meeting ? true : inConnectRange(m, self, them))
-
-    if (gain > 0) {
-      audible.push(member.id)
-
-      // An arrival worth a fanfare is one you can actually hear — not one somewhere in the
-      // building. This is why useVoice suppresses its own join effects in proximity mode.
-      //
-      // Silenced entirely during a game: a meeting flips the whole room to full volume in one
-      // frame, which otherwise reads as everyone arriving at once and greets you with a chime
-      // per person (and a matching burst when the meeting ends). The earshot bookkeeping below
-      // still runs, so nothing bursts when the game is over either.
-      if (!wasAudible.has(member.id) && !gameRunning.value) fireEffect('join', member.id, them.name)
-    }
-    else if (wasAudible.has(member.id) && !gameRunning.value) {
-      fireEffect('leave', member.id, them.name)
-    }
-  }
-
-  wasAudible.clear()
-  for (const id of audible) wasAudible.add(id)
-
-  // Only when the set actually changes — this runs sixty times a second.
-  if (audible.length !== audibleIds.value.length || audible.some(id => !audibleIds.value.includes(id))) {
-    audibleIds.value = audible
-  }
+function watchProximity() {
+  startProximity({
+    map,
+    me: () => me.value,
+    others: () => others.value,
+    knownMembers,
+    setPeerProximity,
+    setPeerInRange,
+    fireEffect,
+    meeting: () => gameMeeting.value,
+    quiet: () => gameRunning.value,
+  })
 }
 
 // --- using the furniture ---
@@ -1140,8 +1114,7 @@ watch(inThisRoom, (now) => {
     return
   }
 
-  wasAudible.clear()
-  audibleIds.value = []
+  stopProximity()
   facingObject.value = null
   if (attached.value) unsubscribeMoves()
 })

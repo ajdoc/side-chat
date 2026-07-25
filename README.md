@@ -13,6 +13,11 @@ real-time over WebSockets — all containerized.
 | Cache/Queue| Redis 7                                           |
 | WebSockets | Laravel Reverb                                    |
 | Background | supervisord → `queue:work` + `schedule:work`      |
+| Desktop    | **Electron** wrapping the generated SPA           |
+| Mobile     | **Capacitor** (iOS/Android) wrapping the same SPA |
+
+The desktop and phone apps package the very same `nuxt generate` bundle the web serves —
+see [APPS.md](APPS.md). The first release of both is chat and voice only.
 
 ## Containers
 
@@ -63,6 +68,10 @@ make tinker       # Laravel Tinker
 make artisan c="make:model Message -m"
 make composer c="require spatie/laravel-permission"
 make npm c="run build"
+
+make app-bundle   # generate the static SPA the native apps package
+make app-desktop  # package the Electron app  → desktop/dist
+make app-mobile   # sync the bundle into mobile/android + mobile/ios
 ```
 
 ## Configuration

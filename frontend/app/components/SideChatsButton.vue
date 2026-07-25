@@ -16,6 +16,8 @@ const route = useRoute()
 const { sideChats } = useSideChats()
 
 const count = computed(() => sideChats.value.length)
+// A phone header holds a title and a few icons, not a row of labelled buttons.
+const { narrow } = useNavDrawer()
 
 function open() {
   // Open the side chats list *beside* whatever's already up — a channel thread the main
@@ -33,12 +35,13 @@ function open() {
 <template>
   <button
     type="button"
-    class="flex h-8 shrink-0 items-center gap-1.5 rounded-full border border-primary/30 bg-primary/10 px-3 text-sm font-medium text-primary transition-colors hover:bg-primary/20"
+    class="flex h-8 shrink-0 items-center gap-1.5 rounded-full border border-primary/30 bg-primary/10 text-sm font-medium text-primary transition-colors hover:bg-primary/20"
+    :class="narrow ? 'px-2' : 'px-3'"
     title="Side Chats"
     @click="open"
   >
     <Rocket class="h-4 w-4" />
-    <span>Side Chats</span>
+    <span v-if="!narrow">Side Chats</span>
     <span
       v-if="count"
       class="ml-0.5 grid h-5 min-w-5 place-items-center rounded-full bg-primary px-1 text-xs font-semibold leading-none text-primary-foreground"

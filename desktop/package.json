@@ -1,0 +1,27 @@
+{
+  "name": "side-chat-desktop",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Electron shell for the Side Chat desktop app.",
+  "main": "main.js",
+  "scripts": {
+    "web": "node scripts/copy-web.mjs",
+    "start": "npm run web && electron .",
+    "dev": "electron . --dev",
+    "dist": "npm run web && electron-builder",
+    "dist:dir": "npm run web && electron-builder --dir"
+  },
+  "devDependencies": {
+    "electron": "^33.0.0",
+    "electron-builder": "^25.0.0"
+  },
+  "build": {
+    "appId": "chat.side.desktop",
+    "productName": "Side Chat",
+    "files": ["main.js", "preload.js", "web/**/*"],
+    "directories": { "output": "dist" },
+    "linux": { "target": ["AppImage"], "category": "Network" },
+    "win": { "target": ["nsis"] },
+    "mac": { "target": ["dmg"], "category": "public.app-category.social-networking" }
+  }
+}

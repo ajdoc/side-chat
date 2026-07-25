@@ -508,7 +508,7 @@ export function useVoice() {
   const config = useRuntimeConfig()
   const echo: any = useNuxtApp().$echo
   const { user } = useAuth()
-  const token = useCookie<string | null>('auth_token')
+  const token = useAuthToken()
 
   // Shared: the layout's "you're in a call" bar and the channel page both read this.
   const channelId = useState<number | null>('voice:channelId', () => null)

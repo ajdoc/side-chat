@@ -12,6 +12,17 @@ export default defineNuxtConfig({
 
   modules: ['shadcn-nuxt'],
 
+  app: {
+    head: {
+      // `viewport-fit=cover` is what lets the page reach under a phone's status bar and
+      // gesture area — and, crucially, what makes `env(safe-area-inset-*)` report anything
+      // other than 0. The insets themselves are applied by `.safe-inset` (tailwind.css);
+      // without this line those paddings would silently collapse and the header would sit
+      // under the notification tray.
+      viewport: 'width=device-width, initial-scale=1, viewport-fit=cover',
+    },
+  },
+
   css: [
     '~/assets/css/tailwind.css',
     'vue-virtual-scroller/dist/vue-virtual-scroller.css',

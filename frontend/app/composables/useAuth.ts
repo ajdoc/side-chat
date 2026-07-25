@@ -13,11 +13,7 @@ interface LoginPayload {
 }
 
 export function useAuth() {
-  const token = useCookie<string | null>('auth_token', {
-    maxAge: 60 * 60 * 24 * 30,
-    sameSite: 'lax',
-    path: '/',
-  })
+  const token = useAuthToken()
   const user = useState<User | null>('auth:user', () => null)
   const api = useApi()
 

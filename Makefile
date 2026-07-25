@@ -1,7 +1,34 @@
 .DEFAULT_GOAL := help
 COMPOSE := docker compose
 
-.PHONY: help build up down restart logs ps migrate fresh shell tinker composer artisan npm octane-build octane-up octane-down octane-logs
+.PHONY: help build up down restart logs ps migrate fresh shell tinker composer artisan npm octane-build octane-up octane-down octane-logs app-bundle app-desktop app-desktop-win app-mobile app-apk
+
+# Where the packaged apps look for the API and the WebSocket server.
+#
+# These are baked into the bundle at generate time — a packaged app has no environment to
+# read at startup — so they must be addresses the *device* can reach. `localhost` on a phone
+# means the phone. Anything left unset here falls through to the frontend container's own
+# compose environment, which is what you want for a desktop build against a local stack and
+# never what you want for a release.
+#
+#   make app-mobile API_BASE=http://192.168.1.20:8000 REVERB_HOST=192.168.1.20
+#   make app-desktop-win API_BASE=https://api.example.com \
+#                        REVERB_HOST=ws.example.com REVERB_PORT=443 REVERB_SCHEME=https \
+#                        REVERB_KEY=abc123
+API_BASE ?=
+REVERB_HOST ?=
+REVERB_KEY ?=
+REVERB_PORT ?=
+REVERB_SCHEME ?=
+
+# Only the ones actually given are passed through, so an unset variable keeps the container's
+# value rather than being overwritten with an empty string.
+BUNDLE_ENV = \
+	$(if $(API_BASE),-e NUXT_PUBLIC_API_BASE=$(API_BASE)) \
+	$(if $(REVERB_HOST),-e NUXT_PUBLIC_REVERB_HOST=$(REVERB_HOST)) \
+	$(if $(REVERB_KEY),-e NUXT_PUBLIC_REVERB_KEY=$(REVERB_KEY)) \
+	$(if $(REVERB_PORT),-e NUXT_PUBLIC_REVERB_PORT=$(REVERB_PORT)) \
+	$(if $(REVERB_SCHEME),-e NUXT_PUBLIC_REVERB_SCHEME=$(REVERB_SCHEME))
 
 help: ## List available targets
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | \
@@ -53,6 +80,106 @@ artisan: ## Run artisan, e.g. `make artisan c="make:model Message -m"`
 
 npm: ## Run npm in the frontend, e.g. `make npm c="run build"`
 	$(COMPOSE) exec frontend npm $(c)
+
+app-bundle: ## Generate the static SPA the native apps package (API_BASE=... REVERB_*=...)
+	@echo "Bundling with: $(if $(strip $(BUNDLE_ENV)),$(strip $(BUNDLE_ENV)),container defaults)"
+	$(COMPOSE) exec -T $(BUNDLE_ENV) frontend npm run generate
+
+# `cd`, not `npm --prefix`: the prefix flag tells npm which package.json to read but leaves
+# the working directory where it was, and electron-builder resolves the project from the cwd —
+# so it goes looking for a package.json at the repo root, which doesn't have one.
+app-desktop: app-bundle ## Package the Electron desktop app into desktop/dist (needs Linux node)
+	@case "$$(command -v npm)" in \
+		/mnt/*) echo "npm here is Windows npm, and it cannot build inside the WSL filesystem:"; \
+			echo "cmd.exe refuses a UNC working directory, so package install scripts run from C:\\\\Windows."; \
+			echo "Use \`make app-desktop-win\`, which stages the build onto the Windows disk."; \
+			exit 1 ;; \
+	esac
+	cd desktop && npm install && npm run dist
+
+# Where a Windows desktop build is assembled. Node on this machine is Windows node, and
+# Windows npm cannot install into the WSL filesystem: it fails to clean up files WSL created
+# (EPERM/ENOTEMPTY) and unpacks Linux binaries a Windows build can't use. So the shell is
+# staged onto the Windows disk and built there instead.
+WIN_USER ?= $(shell cmd.exe /c 'echo %USERNAME%' 2>/dev/null | tr -d '\r')
+WIN_STAGE ?= /mnt/c/Users/$(WIN_USER)/side-chat-desktop
+
+app-desktop-win: app-bundle ## Build the Windows desktop app via a staging dir on C:
+	rm -rf "$(WIN_STAGE)"
+	mkdir -p "$(WIN_STAGE)"
+	cp desktop/main.js desktop/preload.js desktop/package.json "$(WIN_STAGE)/"
+	cp -r frontend/.output/public "$(WIN_STAGE)/web"
+	# electron-builder directly, not `npm run dist` — the bundle is already staged here, and
+	# that script's copy step reaches for a frontend/ that doesn't exist beside it.
+	cd "$(WIN_STAGE)" && npm install && npm exec -- electron-builder
+	@echo ""
+	@echo "  Installer -> $(WIN_STAGE)/dist"
+
+# Node for the host-side tooling. A Linux node if there is one; otherwise the Windows node
+# this machine has, invoked by path. Windows *npm* can't be used against the WSL filesystem
+# (cmd.exe has no UNC working directory, so it lands in C:\Windows), but Windows *node* runs
+# a script at a WSL path perfectly well — so the Capacitor CLI is invoked directly rather
+# than through an npm script.
+NODE ?= $(shell command -v node 2>/dev/null || echo '/mnt/c/Program Files/nodejs/node.exe')
+CAP = node_modules/@capacitor/cli/bin/capacitor
+
+app-mobile: app-bundle ## Sync the generated bundle into the iOS/Android projects
+	@test -d mobile/node_modules || { \
+		echo "mobile/node_modules is missing. Install it first:"; \
+		echo "    cd mobile && npm install"; \
+		exit 1; }
+	cd mobile && "$(NODE)" scripts/copy-web.mjs && "$(NODE)" $(CAP) sync
+
+# Building the Android app runs into the same wall as the desktop one: Gradle here would be
+# `gradlew.bat` under cmd.exe, which has no UNC working directory, and the SDK's build tools
+# (aapt2, d8) are Windows executables that a Linux Gradle couldn't run anyway. So the project
+# is staged onto the Windows disk and built there, and the APK is copied back.
+#
+# The *whole* mobile project is staged, not just `android/`. Capacitor's generated
+# capacitor.settings.gradle points each plugin at `../node_modules/@capacitor/<x>/android`, so
+# an android/ directory on its own resolves those four Gradle projects to nothing that exists
+# and the build dies on "No matching variant ... No variants exist".
+WIN_STAGE_MOBILE ?= /mnt/c/Users/$(WIN_USER)/side-chat-android
+WIN_STAGE_ANDROID = $(WIN_STAGE_MOBILE)/android
+# A shell probe rather than $(wildcard ...): these paths contain spaces, and wildcard splits
+# its argument on whitespace — "/mnt/c/Program Files/..." comes back as "/mnt/c/Program".
+firstdir = $(shell for d in $(1); do [ -d "$$d" ] && echo "$$d" && break; done)
+
+ANDROID_SDK ?= $(call firstdir,"/mnt/c/Users/$(WIN_USER)/AppData/Local/Android/Sdk" "/mnt/c/Android/Sdk" "$(HOME)/Android/Sdk")
+ANDROID_JDK ?= $(call firstdir,"/mnt/c/Program Files/Android/Android Studio/jbr" "/mnt/c/Program Files/Java/jdk-21" "/mnt/c/Program Files/Java/jdk-17")
+# Debug by default: signed with the throwaway debug key, installable on your own device.
+# `make app-apk GRADLE_TASK=assembleRelease` needs a keystore configured in app/build.gradle.
+GRADLE_TASK ?= assembleDebug
+
+# Not a dependency on app-mobile: the toolchain is checked first, so a machine without an SDK
+# finds out in a second rather than after a full bundle and sync.
+app-apk: ## Build an Android APK → mobile/dist (Windows SDK + JDK)
+	@test -n "$(ANDROID_SDK)" || { \
+		echo "No Android SDK found. Install Android Studio (it ships the SDK), or point at one:"; \
+		echo "    make app-apk ANDROID_SDK=/mnt/c/path/to/Sdk"; \
+		exit 1; }
+	@test -n "$(ANDROID_JDK)" || { \
+		echo "No JDK found. Install Android Studio, or point at one:"; \
+		echo "    make app-apk ANDROID_JDK='/mnt/c/Program Files/Java/jdk-17'"; \
+		exit 1; }
+	@echo "SDK: $(ANDROID_SDK)"
+	@echo "JDK: $(ANDROID_JDK)"
+	$(MAKE) app-mobile
+	rm -rf "$(WIN_STAGE_MOBILE)"
+	mkdir -p "$(WIN_STAGE_MOBILE)"
+	# ios/ and www/ are left behind: neither is any use to Gradle, and the web assets it does
+	# need were already copied into android/app/src/main/assets by `cap sync`.
+	cp -r mobile/android mobile/node_modules mobile/package.json mobile/capacitor.config.ts "$(WIN_STAGE_MOBILE)/"
+	# Gradle reads both of these as Windows paths, with backslashes escaped for .properties.
+	printf 'sdk.dir=%s\n' "$$(wslpath -w '$(ANDROID_SDK)' | sed 's/\\/\\\\/g; s/:/\\:/')" \
+		> "$(WIN_STAGE_ANDROID)/local.properties"
+	printf 'org.gradle.java.home=%s\n' "$$(wslpath -w '$(ANDROID_JDK)' | sed 's/\\/\\\\/g; s/:/\\:/')" \
+		>> "$(WIN_STAGE_ANDROID)/gradle.properties"
+	cd "$(WIN_STAGE_ANDROID)" && cmd.exe /c "gradlew.bat $(GRADLE_TASK)"
+	mkdir -p mobile/dist
+	find "$(WIN_STAGE_ANDROID)/app/build/outputs" -name '*.apk' -exec cp {} mobile/dist/ \;
+	@echo ""
+	@echo "  APK -> $$(ls mobile/dist/*.apk 2>/dev/null | tr '\n' ' ')"
 
 octane-build: ## Build the opt-in Octane images (FrankenPHP worker + Swoole)
 	$(COMPOSE) build app

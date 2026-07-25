@@ -95,6 +95,8 @@ const {
   muteUser,
 } = useVoice()
 
+const { isMobile } = usePlatform()
+
 /**
  * Whether you own the place this call is in — the one permission the call itself doesn't
  * grant everybody. Worked out here rather than passed in, because both pages that mount
@@ -492,8 +494,10 @@ const deafenedCount = computed(() => waiting.value.filter(p => p.deafened).lengt
         </div>
       </div>
 
-      <!-- Controls stay put whether or not the tiles are showing. -->
-      <div class="flex items-center justify-center gap-2 border-t px-4 py-2">
+      <!-- Controls stay put whether or not the tiles are showing. They wrap rather than
+           overflow, because a phone can't fit the row on one line and a call control you
+           can't reach is worse than one on a second row. -->
+      <div class="flex flex-wrap items-center justify-center gap-2 border-t px-4 py-2">
         <Button
           :variant="micOpen ? 'secondary' : 'destructive'"
           size="icon"
@@ -533,7 +537,10 @@ const deafenedCount = computed(() => waiting.value.filter(p => p.deafened).lengt
           <Video v-else class="h-4 w-4" />
         </Button>
 
+        <!-- No mobile WebView implements getDisplayMedia, so the phone build offers no
+             button rather than one that throws. Watching someone else's share still works. -->
         <Button
+          v-if="!isMobile"
           :variant="isSharing ? 'default' : 'secondary'"
           size="sm"
           class="gap-2"

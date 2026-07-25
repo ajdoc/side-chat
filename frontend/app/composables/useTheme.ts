@@ -17,7 +17,7 @@ export function useTheme() {
     modeCookie.value = mode.value
     colorCookie.value = color.value
 
-    const token = useCookie('auth_token')
+    const token = useAuthToken()
     if (token.value) {
       useApi()('/api/preferences', {
         method: 'PATCH',

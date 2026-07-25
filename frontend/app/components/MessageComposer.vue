@@ -62,6 +62,7 @@ function mediaFor(file: File): Pending['media'] {
   return { url: URL.createObjectURL(file), kind }
 }
 
+const { narrow } = useNavDrawer()
 const { getDraft, setDraft } = useDrafts()
 const { upload: uploadInChunks, cancel } = useChunkedUpload()
 
@@ -291,7 +292,9 @@ onBeforeUnmount(() => {
               <template v-else-if="partCount > 1">
                 Long message — sends as <strong class="font-medium">{{ partCount }} messages</strong>, split at paragraph breaks.
               </template>
-              <template v-else>
+              <!-- Keyboard hints only where there's a keyboard; on a phone they're a line of
+                   noise above the thing you're typing into. -->
+              <template v-else-if="!narrow">
                 <strong class="font-medium">Enter</strong> to send · <strong class="font-medium">Shift+Enter</strong> for a new line · markdown supported
               </template>
             </span>

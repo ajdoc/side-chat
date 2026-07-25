@@ -19,7 +19,9 @@ onMounted(() => {
 </script>
 
 <template>
-  <div class="app-shell min-h-screen text-foreground antialiased">
+  <!-- safe-inset here covers the pages that render outside the app layout (login, register,
+       onboarding); the layout applies its own for everything behind auth. -->
+  <div class="app-shell safe-inset min-h-screen text-foreground antialiased">
     <NuxtRouteAnnouncer />
     <NuxtLayout>
       <NuxtPage />

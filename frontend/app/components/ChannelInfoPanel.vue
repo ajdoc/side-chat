@@ -8,6 +8,9 @@ const props = defineProps<{ channelId: number }>()
 const emit = defineEmits<{ jump: [messageId: number] }>()
 
 // Draggable, remembered width (its left border carries the handle).
+// Below `md` there is no room for a column beside the timeline: the panel takes the
+// whole screen instead, and its own close button is the way back.
+const { narrow } = useNavDrawer()
 const { width: panelWidth, startResize } = useResizable('channel-info', 360, { min: 300, max: 640 })
 
 // Pinned-message authors, like every other name, follow the nicknames in force here.
@@ -172,8 +175,12 @@ watch([tab, () => props.channelId], ([current, id]) => {
 </script>
 
 <template>
-  <aside class="relative flex shrink-0 flex-col border-l" :style="{ width: `${panelWidth}px` }">
-    <ResizeHandle edge="left" @resize="startResize" />
+  <aside
+    class="flex flex-col border-l bg-background"
+    :class="narrow ? 'safe-inset fixed inset-0 z-50 w-full' : 'relative shrink-0'"
+    :style="narrow ? undefined : { width: `${panelWidth}px` }"
+  >
+    <ResizeHandle v-if="!narrow" edge="left" @resize="startResize" />
     <header class="flex h-12 shrink-0 items-center justify-between border-b px-4">
       <span class="font-semibold">Channel info</span>
       <button class="text-muted-foreground hover:text-foreground" aria-label="Close" @click="close">

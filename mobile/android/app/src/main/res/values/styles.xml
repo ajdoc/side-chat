@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+
+    <!-- Base application theme. -->
+    <style name="AppTheme" parent="Theme.AppCompat.Light.DarkActionBar">
+        <!-- Customize your theme here. -->
+        <item name="colorPrimary">@color/colorPrimary</item>
+        <item name="colorPrimaryDark">@color/colorPrimaryDark</item>
+        <item name="colorAccent">@color/colorAccent</item>
+    </style>
+
+    <style name="AppTheme.NoActionBar" parent="Theme.AppCompat.DayNight.NoActionBar">
+        <item name="windowActionBar">false</item>
+        <item name="windowNoTitle">true</item>
+        <item name="android:background">@null</item>
+        <!--
+            Android 15 (targetSdk 35) forces every app edge to edge: the WebView is laid out
+            behind the status bar and the navigation bar, so the channel header sits under the
+            notification tray and the composer under the gesture bar. The web layer's
+            `env(safe-area-inset-*)` — which handles the iOS notch — is not dependable for
+            Android's system bars, so we opt out of the enforcement instead and let the system
+            inset the window as it did before.
+
+            This opt-out is honoured while targetSdk is 35. Raising it to 36 removes the
+            escape hatch, at which point the WebView has to consume WindowInsets itself (a
+            listener in MainActivity, or the Capawesome edge-to-edge plugin once it targets
+            the Capacitor major this project is on).
+        -->
+        <item name="android:windowOptOutEdgeToEdgeEnforcement">true</item>
+    </style>
+
+
+    <style name="AppTheme.NoActionBarLaunch" parent="Theme.SplashScreen">
+        <item name="android:background">@drawable/splash</item>
+    </style>
+</resources>

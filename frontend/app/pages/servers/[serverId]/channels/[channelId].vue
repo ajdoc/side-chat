@@ -24,7 +24,13 @@ const { channels, server } = useServer()
 const channelId = computed(() => Number(route.params.channelId))
 const channel = computed(() => channels.value.find(c => c.id === channelId.value) ?? null)
 const isVoice = computed(() => channel.value?.type === 'voice')
-const isSpace = computed(() => channel.value?.type === 'space')
+// The native builds are chat and voice only, so a Side Space opens as its timeline alone —
+// the room itself is withheld rather than the channel being unreachable. See
+// middleware/native-scope.global.ts.
+const { isNative } = usePlatform()
+const { narrow } = useNavDrawer()
+const isSpace = computed(() => channel.value?.type === 'space' && !isNative.value)
+const isWithheldSpace = computed(() => channel.value?.type === 'space' && isNative.value)
 /** Only the server's owner may rebuild a room; the API refuses everybody else besides. */
 const canEditMap = computed(() => !!server.value?.is_owner)
 
@@ -74,15 +80,17 @@ function openDesk() {
     </template>
 
     <template #actions>
+      <!-- On a phone these collapse to their icons: three labelled buttons plus a title do
+           not fit across 390px, and the labels are the part you can do without. -->
       <SideChatsButton :channel-id="channel.id" />
-      <Button variant="ghost" size="sm" class="gap-2 text-muted-foreground" @click="openThreadsList">
-        <MessagesSquare class="h-4 w-4" /> Threads
+      <Button variant="ghost" size="sm" class="gap-2 text-muted-foreground" :class="narrow && 'px-2'" title="Threads" @click="openThreadsList">
+        <MessagesSquare class="h-4 w-4" /> <span v-if="!narrow">Threads</span>
       </Button>
-      <Button variant="ghost" size="sm" class="gap-2 text-muted-foreground" @click="openDesk">
-        <LayoutPanelLeft class="h-4 w-4" /> Side Desk
+      <Button v-if="!isNative" variant="ghost" size="sm" class="gap-2 text-muted-foreground" :class="narrow && 'px-2'" title="Side Desk" @click="openDesk">
+        <LayoutPanelLeft class="h-4 w-4" /> <span v-if="!narrow">Side Desk</span>
       </Button>
-      <Button variant="ghost" size="sm" class="gap-2 text-muted-foreground" @click="openInfo">
-        <Info class="h-4 w-4" /> Info
+      <Button variant="ghost" size="sm" class="gap-2 text-muted-foreground" :class="narrow && 'px-2'" title="Info" @click="openInfo">
+        <Info class="h-4 w-4" /> <span v-if="!narrow">Info</span>
       </Button>
     </template>
 
@@ -95,6 +103,12 @@ function openDesk() {
     </template>
     <template v-else-if="isVoice" #call>
       <VoiceChannel :channel="channel" />
+    </template>
+    <template v-else-if="isWithheldSpace" #call>
+      <p class="border-b bg-muted/40 px-4 py-2 text-sm text-muted-foreground">
+        Side Spaces aren’t in the app yet — open this channel on the web to walk around.
+        Its chat works here as normal.
+      </p>
     </template>
   </ChannelView>
 </template>

@@ -1,0 +1,4 @@
+node_modules/
+dist/
+# Mirrored from frontend/.output/public on every build — never edited by hand.
+web/
