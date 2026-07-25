@@ -32,6 +32,8 @@ use App\Http\Controllers\ServerController;
 use App\Http\Controllers\SideChatController;
 use App\Http\Controllers\SideChatMessageController;
 use App\Http\Controllers\SideSpaceController;
+use App\Http\Controllers\SpaceAppearanceController;
+use App\Http\Controllers\SpaceGameController;
 use App\Http\Controllers\SpaceNoteController;
 use App\Http\Controllers\SpotifyController;
 use App\Http\Controllers\ThreadController;
@@ -70,6 +72,9 @@ Route::prefix('auth')->group(function () {
 Route::middleware('auth:api')->group(function () {
     Route::patch('profile', [ProfileController::class, 'update']);
     Route::patch('preferences', [PreferencesController::class, 'update']);
+    // What you look like walking around a Side Space, and which starter follows you. Yours,
+    // not a room's — hence no channel in the path.
+    Route::patch('space/appearance', [SpaceAppearanceController::class, 'update']);
 
     // Spotify account linking, for real Premium playback in the music widget.
     Route::get('spotify/connect', [SpotifyController::class, 'connect']);
@@ -209,7 +214,26 @@ Route::middleware('auth:api')->group(function () {
     Route::get('channels/{channel}/space/map', [SideSpaceController::class, 'show']);
     // Owner only: this replaces the room everyone is standing in.
     Route::put('channels/{channel}/space/map', [SideSpaceController::class, 'update']);
+    // Any member: rearrange the furniture. The geometry above is owner-only; the furniture
+    // isn't, so a room can be decorated by whoever's in it.
+    Route::put('channels/{channel}/space/objects', [SideSpaceController::class, 'objects']);
     Route::post('channels/{channel}/space/position', [SideSpaceController::class, 'position']);
+    // Pressing E on the furniture. Answers with the channel's widget of whatever type that
+    // piece opens — the speaker's music player is the channel's music player.
+    Route::post('channels/{channel}/space/interact', [SideSpaceController::class, 'interact']);
+
+    /*
+     * Games in the room — "the map becomes a game". The catalogue is global; everything else is
+     * scoped to a channel and, inside that, to the people standing in it. Movement during a game
+     * is still the whispered peer-to-peer movement of any Side Space; only the game's own moves
+     * (a task, a kill, a vote) come through here. See App\Services\Games.
+     */
+    Route::get('space/games', [SpaceGameController::class, 'catalogue']);
+    Route::get('channels/{channel}/space/game', [SpaceGameController::class, 'show']);
+    Route::post('channels/{channel}/space/game', [SpaceGameController::class, 'propose']);
+    Route::post('channels/{channel}/space/game/vote', [SpaceGameController::class, 'vote']);
+    Route::post('channels/{channel}/space/game/act', [SpaceGameController::class, 'act']);
+    Route::delete('channels/{channel}/space/game', [SpaceGameController::class, 'cancel']);
 
     /*
      * DMs and group chats.

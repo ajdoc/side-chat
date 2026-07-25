@@ -2,6 +2,8 @@
 
 namespace App\Models;
 
+use App\Support\SideSpace\Decorations;
+use App\Support\SideSpace\Tiles;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
@@ -15,21 +17,28 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
  * the browser's engine (lib/spaceMapEngine.ts), deliberately: the client needs them at 60fps
  * without a round trip, and the server needs them to validate a saved map and to hand a
  * newcomer a legal spawn. Same rules, two places, because neither can be the other's.
+ *
+ * Two layers make a room: the grid of ground ({@see Tiles}) and the furniture standing on it
+ * ({@see Decorations}). Both answer to "can somebody stand here", which is why {@see isWalkable}
+ * consults them together and nothing else in the codebase asks about tiles alone.
  */
 class SideSpaceMap extends Model
 {
     /** @use HasFactory<\Database\Factories\SideSpaceMapFactory> */
     use HasFactory;
 
-    /** Walkable. Anything else — wall or void — is not. */
-    public const FLOOR = '.';
+    /**
+     * The three tiles that predate the overworld ones, kept as constants because the seeder,
+     * the tests and half the room's callers name them. Everything else lives in {@see Tiles}.
+     */
+    public const FLOOR = Tiles::FLOOR;
 
-    public const WALL = '#';
+    public const WALL = Tiles::WALL;
 
-    public const VOID = ' ';
+    public const VOID = Tiles::VOID;
 
     /** Every character a tile row may contain. Enforced when a map is saved. */
-    public const TILE_CHARS = self::FLOOR.self::WALL.self::VOID;
+    public const TILE_CHARS = Tiles::ALL;
 
     /**
      * The grid may not be smaller than a room or bigger than one screen's worth of walking.
@@ -47,6 +56,7 @@ class SideSpaceMap extends Model
         'height',
         'tiles',
         'zones',
+        'objects',
         'spawn',
         'updated_by',
     ];
@@ -58,6 +68,7 @@ class SideSpaceMap extends Model
             'height' => 'integer',
             'tiles' => 'array',
             'zones' => 'array',
+            'objects' => 'array',
             'spawn' => 'array',
         ];
     }
@@ -79,10 +90,36 @@ class SideSpaceMap extends Model
         return $this->tiles[$y][$x] ?? self::WALL;
     }
 
-    /** Can somebody stand here? Off-map counts as solid, so the edge needs no special case. */
+    /**
+     * Can somebody stand here?
+     *
+     * Off-map counts as solid, so the edge needs no special case. Furniture counts too: a desk
+     * is as much a wall as a wall is, and a room where you can walk through the couch is a room
+     * where the couch may as well not be there.
+     */
     public function isWalkable(int $x, int $y): bool
     {
-        return $this->tileAt($x, $y) === self::FLOOR;
+        return Tiles::isWalkable($this->tileAt($x, $y))
+            && ! Decorations::blocks($this->objects ?? [], $x, $y);
+    }
+
+    /**
+     * The decoration on a tile, or null. Used to answer "what am I standing next to" when
+     * somebody presses E.
+     *
+     * @return array<string, mixed>|null
+     */
+    public function objectAt(int $x, int $y): ?array
+    {
+        foreach ($this->objects ?? [] as $object) {
+            $kind = Decorations::find((string) ($object['kind'] ?? ''));
+
+            if ($kind !== null && Decorations::covers($object, $kind, $x, $y)) {
+                return $object;
+            }
+        }
+
+        return null;
     }
 
     /**

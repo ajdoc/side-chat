@@ -51,8 +51,27 @@ export function useSpaceMap(channelId: number) {
         height: next.height,
         tiles: next.tiles,
         zones: next.zones,
+        objects: next.objects,
         spawn: next.spawn,
       },
+    })
+
+    map.value = res.data
+
+    return res.data
+  }
+
+  /**
+   * Save the furniture alone — the member-facing half of the editor.
+   *
+   * Sends only the objects, against the room's own tiles on the server. That's the whole reason
+   * it's a separate endpoint from {@link save}: rebuilding the geometry is owner-only, but any
+   * member may rearrange what's standing on it. See the two requests server-side.
+   */
+  async function saveObjects(objects: SpaceMap['objects']) {
+    const res = await api<{ data: SpaceMap }>(`/api/channels/${channelId}/space/objects`, {
+      method: 'PUT',
+      body: { objects },
     })
 
     map.value = res.data
@@ -75,5 +94,5 @@ export function useSpaceMap(channelId: number) {
     channel = null
   }
 
-  return { map, loading, error, load, save, subscribe, unsubscribe }
+  return { map, loading, error, load, save, saveObjects, subscribe, unsubscribe }
 }

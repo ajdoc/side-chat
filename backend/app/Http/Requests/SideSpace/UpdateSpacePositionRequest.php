@@ -3,6 +3,7 @@
 namespace App\Http\Requests\SideSpace;
 
 use App\Http\Requests\MemberRequest;
+use App\Models\SideSpaceMap;
 
 /**
  * Remembering where somebody was standing. Membership is the whole gate — you can only write
@@ -10,7 +11,7 @@ use App\Http\Requests\MemberRequest;
  *
  * Note what *isn't* validated: whether the tile is walkable. This records where a client says
  * it was, on a long throttle, so it can be put back there on reload — and by the time it's read
- * the map may have been repainted underneath it. {@see \App\Models\SideSpaceMap::spawnPoint()}
+ * the map may have been repainted underneath it. {@see SideSpaceMap::spawnPoint()}
  * is where a position that has stopped making sense gets corrected, which is the right place
  * for it: at the moment of use, against the map as it is then.
  */

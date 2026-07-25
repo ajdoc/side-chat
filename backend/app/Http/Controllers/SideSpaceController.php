@@ -3,16 +3,22 @@
 namespace App\Http\Controllers;
 
 use App\Events\SideSpaceMapUpdated;
+use App\Http\Requests\SideSpace\InteractWithSpaceObjectRequest;
 use App\Http\Requests\SideSpace\ShowSideSpaceMapRequest;
 use App\Http\Requests\SideSpace\UpdateSideSpaceMapRequest;
+use App\Http\Requests\SideSpace\UpdateSpaceObjectsRequest;
 use App\Http\Requests\SideSpace\UpdateSpacePositionRequest;
 use App\Http\Resources\SideSpaceMapResource;
+use App\Http\Resources\WidgetResource;
 use App\Models\Channel;
 use App\Models\SideSpaceMap;
 use App\Models\VoiceParticipant;
+use App\Services\Widgets\WidgetService;
+use App\Support\SideSpace\Decorations;
 use App\Support\SideSpace\MapPresets;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Response;
+use Illuminate\Validation\ValidationException;
 
 /**
  * A Side Space's room: reading the map, rebuilding it, and remembering where people stood.
@@ -25,9 +31,16 @@ use Illuminate\Http\Response;
  */
 class SideSpaceController extends Controller
 {
+    public function __construct(private readonly WidgetService $widgets) {}
+
     /**
-     * The rooms a new Side Space can be created as. Read by the channel-creation page, so it
-     * needs nothing but a logged-in caller — presets are the same for everybody.
+     * The rooms a Side Space can be built as — read when creating a channel, and again by the
+     * editor when somebody swaps an existing room's layout. Needs nothing but a logged-in
+     * caller: presets are the same for everybody.
+     *
+     * Every preset travels *whole*, spawn and all, because the editor doesn't merely draw these —
+     * it loads one over the room it's editing, and a layout arriving without its entrance would
+     * leave people walking in wherever the old room's door happened to be.
      */
     public function presets(): JsonResponse
     {
@@ -44,6 +57,8 @@ class SideSpaceController extends Controller
                 // than a stock illustration of one.
                 'tiles' => $preset['tiles'],
                 'zones' => $preset['zones'],
+                'objects' => $preset['objects'],
+                'spawn' => $preset['spawn'],
             ];
         }
 
@@ -70,6 +85,10 @@ class SideSpaceController extends Controller
             'height' => $request->validated('height'),
             'tiles' => $request->validated('tiles'),
             'zones' => $request->validated('zones'),
+            // Optional in the request, so absent means "unfurnished" rather than "unchanged" —
+            // a save is a whole room, and half-saving one would leave furniture floating over a
+            // floor plan that no longer has a wall under it.
+            'objects' => $request->validated('objects', []),
             'spawn' => $request->validated('spawn'),
             'updated_by' => $request->user()?->id,
         ]);
@@ -77,6 +96,40 @@ class SideSpaceController extends Controller
         broadcast(new SideSpaceMapUpdated($map));
 
         return new SideSpaceMapResource($map->load('editor'));
+    }
+
+    /**
+     * Rearrange the furniture. Any member — see {@see UpdateSpaceObjectsRequest} for why this is
+     * open where rebuilding the room is not.
+     *
+     * The furniture is checked against the map's *stored* tiles rather than any it sent, because
+     * it sent none: a member can move a couch but not the wall behind it. Everything else about
+     * the map — its geometry, its name, who last rebuilt it — is left exactly as it was, so this
+     * can't be a way to smuggle a geometry change past the owner-only gate.
+     */
+    public function objects(UpdateSpaceObjectsRequest $request, Channel $channel): SideSpaceMapResource
+    {
+        $map = $this->mapFor($channel);
+        $objects = array_values($request->validated('objects', []));
+
+        $problems = Decorations::problems($objects, $map->tiles ?? [], $map->width, $map->height);
+
+        if ($problems !== []) {
+            throw ValidationException::withMessages(
+                array_combine(
+                    array_map(fn ($i) => "objects.$i", array_keys($problems)),
+                    array_map(fn ($m) => [$m], $problems),
+                )
+            );
+        }
+
+        // Only the furniture, and not `updated_by` — that names whoever last rebuilt the *room*,
+        // and moving a chair is not rebuilding the room.
+        $map->update(['objects' => $objects]);
+
+        broadcast(new SideSpaceMapUpdated($map->load('editor')));
+
+        return new SideSpaceMapResource($map);
     }
 
     /**
@@ -104,6 +157,39 @@ class SideSpaceController extends Controller
             ]);
 
         return response()->noContent();
+    }
+
+    /**
+     * Use a piece of furniture: the speaker, the TV, the arcade cabinet in the corner.
+     *
+     * What comes back is a **widget** — the channel's one music player, its one video player,
+     * the same shared object `m!` or `v!` would have reached, created on first use with the
+     * handler's own initial state. That's the entire trick behind interactive furniture: the
+     * room doesn't gain a music player, it gains a *door* to the one the channel already has.
+     * So listening along, the queue, permissions and the floating window all work already, and
+     * two people pressing E on the same speaker are unmistakably in the same session.
+     *
+     * The map decides what a given object opens, not the caller. See
+     * {@see InteractWithSpaceObjectRequest}.
+     */
+    public function interact(InteractWithSpaceObjectRequest $request, Channel $channel): WidgetResource
+    {
+        $map = $this->mapFor($channel);
+        $id = $request->validated('object_id');
+
+        $object = collect($map->objects ?? [])->firstWhere('id', $id);
+        $kind = $object !== null ? Decorations::find((string) ($object['kind'] ?? '')) : null;
+
+        // No such object, or one that doesn't do anything. Both are "there is nothing here to
+        // use" — the room may have been rebuilt between the prompt appearing and E being
+        // pressed, which is a 404 rather than anybody's mistake.
+        abort_if($kind === null || $kind['interact'] === null, 404);
+
+        $widget = $this->widgets->ensure($channel, $request->user(), $kind['interact']);
+
+        abort_if($widget === null, 404);
+
+        return new WidgetResource($widget);
     }
 
     /**

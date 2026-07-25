@@ -12,24 +12,31 @@ import {
   PhoneOff,
   ScreenShare,
   ScreenShareOff,
+  Gamepad2,
+  Shirt,
+  Sofa,
   Users,
   Video,
   VideoOff,
 } from 'lucide-vue-next'
-import type { Channel, VoiceParticipant } from '~/types'
+import type { AmongUsState, Channel, VoiceParticipant, Widget } from '~/types'
 import type { Camera, MapTheme, Occupant } from '~/lib/spaceMapEngine'
+import type { SpaceObject } from '~/lib/spaceDecor'
 import {
   FAR_TILES,
   TILE,
   audibility,
   drawEarshot,
   drawMap,
+  drawPet,
   drawTrainer,
   inConnectRange,
   spriteHue,
   toScreen,
   zoneAt,
 } from '~/lib/spaceMapEngine'
+import { decorInFront, decorKind } from '~/lib/spaceDecor'
+import { normaliseLook } from '~/lib/spaceAvatar'
 import { Button } from '~/components/ui/button'
 
 /**
@@ -105,6 +112,8 @@ const {
   moving,
   attached,
   place,
+  restyle,
+  warp,
   seed,
   tick,
   isWalking,
@@ -114,10 +123,265 @@ const {
   unbindKeys,
 } = useSpacePresence(props.channel.id, map)
 
+const {
+  game,
+  catalogue: gameCatalogue,
+  load: loadGame,
+  loadCatalogue: loadGameCatalogue,
+  propose: proposeGame,
+  vote: voteGame,
+  act: actGame,
+  cancel: cancelGame,
+  subscribe: subscribeGame,
+  unsubscribe: unsubscribeGame,
+} = useSpaceGame(props.channel.id)
+
 const canvas = ref<HTMLCanvasElement | null>(null)
 const wrap = ref<HTMLElement | null>(null)
 const joining = ref(false)
-const editing = ref(false)
+/**
+ * The room editor, and in which of its two guises.
+ *
+ *   - `full` — the owner rebuilding the room: ground, furniture, the lot.
+ *   - `decor` — anybody rearranging the furniture, which is open to every member.
+ *
+ * Null when the editor is closed. Kept as one piece of state rather than two booleans because
+ * the two are exclusive — you are editing in one mode or not at all.
+ */
+const editing = ref<'full' | 'decor' | null>(null)
+const dressing = ref(false)
+
+/**
+ * The piece of furniture you're standing at, if any, and whether we're mid-way through opening
+ * what it points at.
+ *
+ * Recomputed in the frame loop rather than watched, because "what am I next to" is a continuous
+ * function of position exactly as audibility is — and like audibility, it only writes to a ref
+ * when the answer actually changes, so the prompt doesn't re-render sixty times a second.
+ */
+const facingObject = ref<SpaceObject | null>(null)
+const using = ref(false)
+const { open: openWindow } = useFloatingWindows()
+const api = useApi()
+
+// --- the game ---
+
+/**
+ * The room can become a game. When one is running, the same map, the same walking and the same
+ * proximity voice are the game — you do tasks by walking to them, you accuse people by talking to
+ * them, and a meeting is the moment that voice opens to the whole room. The rules are the
+ * server's ({@link useSpaceGame}); the stage's job is to draw the game's things on the map, turn
+ * standing-near-something into the right move, and hand a meeting its full-volume voice.
+ */
+const showPropose = ref(false)
+
+/** How near you have to be to do a task, report a body, or make a kill. Tiles. */
+const TASK_RANGE = 0.9
+const BODY_RANGE = 1.2
+const KILL_RANGE = 1.7
+
+/**
+ * The running game's state, narrowed to the game it actually is. Only one is ever non-null.
+ * Among Us and a pet battle share the framework but nothing about their state, so the stage keeps
+ * them apart here rather than reaching into a union everywhere.
+ */
+const amState = computed<AmongUsState | null>(() =>
+  game.value?.type === 'amongus' ? (game.value.state as AmongUsState | null) : null)
+
+const gameRunning = computed(() => game.value?.status === 'running' && !!game.value.state)
+const gameMeeting = computed(() => gameRunning.value && amState.value?.phase === 'meeting')
+/** The panel shows for a proposal, a running game, or an ending worth reading — never a bare cancel. */
+const showGamePanel = computed(() => !!game.value && inThisRoom.value
+  && (game.value.status !== 'ended' || !!(game.value.state as { winner?: unknown } | null)?.winner))
+/** Offer the way in only when there's no game already on the table. */
+const canProposeGame = computed(() => inThisRoom.value && (!game.value || game.value.status === 'ended'))
+
+/** Everyone in the room by id → name, for the panels to resolve players and challengers. */
+const roomNames = computed<Record<number, string>>(() => {
+  const names: Record<number, string> = {}
+  if (user.value) names[user.value.id] = user.value.name
+  for (const [id, o] of Object.entries(others.value)) names[Number(id)] = o.name
+
+  return names
+})
+
+/**
+ * Everyone in the Among Us game, named for the meeting and the reveal. Names come from the room's
+ * roster; a player who's since walked out keeps their id and a stand-in name rather than vanishing.
+ */
+const gamePlayers = computed(() => {
+  const s = amState.value
+  if (!s) return []
+  const myId = user.value?.id
+
+  return Object.entries(s.players).map(([idStr, p]) => {
+    const id = Number(idStr)
+    const name = id === myId ? (user.value?.name ?? 'You') : (others.value[id]?.name ?? `Player ${id}`)
+
+    return { id, name, alive: p.alive, role: p.role, isMe: id === myId }
+  })
+})
+
+// Affordances, recomputed each frame from positions (like the furniture prompt), so they track
+// movement rather than only the rare moments the game state changes.
+const gameNearTaskId = ref<string | null>(null)
+const gameNearBody = ref(false)
+const gameKillTarget = ref<number | null>(null)
+const gameCooldownLeft = ref(0)
+
+function dist(a: { x: number, y: number }, b: { x: number, y: number }) {
+  return Math.hypot(a.x - b.x, a.y - b.y)
+}
+
+/** Work out what you could do right now — the game's version of {@link checkFurniture}. */
+function checkGame() {
+  const s = amState.value
+  const self = me.value
+
+  if (!s || !self || !gameRunning.value || s.phase !== 'play') {
+    if (gameNearTaskId.value !== null) gameNearTaskId.value = null
+    if (gameNearBody.value) gameNearBody.value = false
+    if (gameKillTarget.value !== null) gameKillTarget.value = null
+    if (gameCooldownLeft.value !== 0) gameCooldownLeft.value = 0
+
+    return
+  }
+
+  const myId = user.value?.id
+  const meAlive = myId != null && !!s.players[myId]?.alive
+
+  // A task at your feet you haven't done.
+  let task: string | null = null
+  if (meAlive) {
+    for (const t of s.my_tasks) {
+      if (!t.done && dist(self, t) <= TASK_RANGE) { task = t.id; break }
+    }
+  }
+  if (gameNearTaskId.value !== task) gameNearTaskId.value = task
+
+  // A body you could report.
+  let body = false
+  if (meAlive) {
+    for (const b of s.bodies) {
+      if (dist(self, b) <= BODY_RANGE) { body = true; break }
+    }
+  }
+  if (gameNearBody.value !== body) gameNearBody.value = body
+
+  // Someone you could kill: impostor, alive, off cooldown, a living non-impostor in reach.
+  const now = Date.now()
+  const cooldownEnds = s.my_cooldown ?? 0
+  let kill: number | null = null
+
+  if (s.my_role === 'impostor' && meAlive && cooldownEnds <= now) {
+    let best = KILL_RANGE
+    for (const [idStr, p] of Object.entries(s.players)) {
+      const id = Number(idStr)
+      // Co-impostors show their role (see the server's view), so we can spare them.
+      if (id === myId || !p.alive || p.role === 'impostor') continue
+      const pos = others.value[id]
+      if (!pos) continue
+      const d = dist(self, pos)
+      if (d <= best) { best = d; kill = id }
+    }
+  }
+  if (gameKillTarget.value !== kill) gameKillTarget.value = kill
+
+  const cd = s.my_role === 'impostor' && cooldownEnds > now ? Math.ceil((cooldownEnds - now) / 1000) : 0
+  if (gameCooldownLeft.value !== cd) gameCooldownLeft.value = cd
+}
+
+/** Every game move the panel asks for, fulfilled with the positions only the stage has. */
+async function onDoTask() {
+  if (gameNearTaskId.value) await actGame('complete_task', { task: gameNearTaskId.value }).catch(() => {})
+}
+async function onReportOrMeeting() {
+  await actGame('call_meeting').catch(() => {})
+}
+async function onKill() {
+  const target = gameKillTarget.value
+  const victim = target != null ? others.value[target] : null
+  if (target == null || !victim) return
+  // The body is left where the victim was standing.
+  await actGame('kill', { target, x: Math.round(victim.x), y: Math.round(victim.y) }).catch(() => {})
+}
+async function onGameVote(target: number | 'skip') {
+  await actGame('vote', { target }).catch(() => {})
+}
+
+// --- pet battle moves ---
+
+async function onBattleMove(move: string) {
+  await actGame('move', { move }).catch(() => {})
+}
+async function onForfeit() {
+  await actGame('forfeit').catch(() => {})
+}
+/** Accept / decline a challenge is just a yes/no vote, which the framework already understands. */
+async function onAccept() {
+  await voteGame(true).catch(() => {})
+}
+async function onDecline() {
+  await voteGame(false).catch(() => {})
+}
+
+// --- proposing / challenging ---
+
+/**
+ * A challenge-mode game (a pet battle) can't be proposed to the room — it's aimed at a person, so
+ * picking it switches the menu to a list of who's here to challenge. `null` means "showing games".
+ */
+const challengeType = ref<string | null>(null)
+
+/** Who you could challenge: everyone else standing in the room. */
+const challengeTargets = computed(() =>
+  Object.values(others.value).map(o => ({ id: o.id, name: o.name })))
+
+async function onProposeGame(type: string) {
+  const info = gameCatalogue.value.find(g => g.type === type)
+
+  // A duel needs a target first; a room game goes straight to the vote.
+  if (info?.mode === 'challenge') {
+    challengeType.value = type
+
+    return
+  }
+
+  showPropose.value = false
+  await proposeGame(type).catch(() => {})
+}
+
+async function onChallenge(opponentId: number) {
+  const type = challengeType.value
+  challengeType.value = null
+  showPropose.value = false
+  if (type) await proposeGame(type, opponentId).catch(() => {})
+}
+
+function togglePropose() {
+  showPropose.value = !showPropose.value
+  challengeType.value = null
+  if (showPropose.value) void loadGameCatalogue()
+}
+async function onGameDismiss() {
+  // An ended game is just cleared away locally; anything still live is called off for the room.
+  if (game.value?.status === 'ended') game.value = null
+  else await cancelGame().catch(() => {})
+}
+
+/**
+ * A meeting takes the room over: everyone is whisked to the entrance and, for its duration, hears
+ * everyone else at full volume rather than by distance. The teleport is ours to perform (the
+ * server only records that it happened); the full-volume voice is {@link applyProximity}'s doing.
+ */
+watch(gameMeeting, (on, was) => {
+  if (on && !was) {
+    if (map.value) warp(map.value.spawn.x, map.value.spawn.y)
+    unbindKeys()
+  } else if (!on && was && inThisRoom.value && !editing.value && !dressing.value) {
+    bindKeys()
+  }
+})
 
 /**
  * How tall the room is when the conversation is showing — dragged by the band's bottom edge
@@ -148,6 +412,13 @@ const occupantCount = computed(() => Object.keys(others.value).length + (me.valu
 
 let frame: number | undefined
 let lastAt = 0
+/**
+ * When this stage started drawing. Every animated tile is a function of the seconds since, so
+ * water ripples and grass sways at the same rate no matter how long the tab has been open —
+ * `performance.now()` alone is a number large enough that the sine of it starts to lose
+ * resolution after a few days.
+ */
+let openedAt = performance.now()
 let ro: ResizeObserver | undefined
 let cssW = 0
 let cssH = 0
@@ -155,6 +426,9 @@ let cssH = 0
 const wasAudible = new Set<number>()
 
 const camera = reactive<Camera>({ x: 0, y: 0, zoom: 1, width: 0, height: 0 })
+
+/** Behind everything: what's beyond the walls of a room that doesn't fill the canvas. */
+const OUTSIDE = '#20242c'
 
 // --- joining ---
 
@@ -206,6 +480,8 @@ async function enter() {
       x: p.x ?? null,
       y: p.y ?? null,
       facing: p.facing ?? null,
+      look: p.user.space_avatar,
+      pet: p.user.space_pet,
     })))
     // …and put yourself back where you were standing, if the room still allows it.
     const mine = roster.find(p => p.user.id === user.value?.id)
@@ -249,6 +525,7 @@ async function leave() {
   unsubscribeMoves()
   wasAudible.clear()
   audibleIds.value = []
+  facingObject.value = null
   await disconnect()
 }
 
@@ -263,8 +540,12 @@ function loop(now: number) {
   lastAt = now
 
   if (inThisRoom.value) {
-    tick(dt)
+    // A meeting freezes the room — nobody walks, so movement isn't ticked; everything else runs
+    // so the countdown and the voice keep going.
+    if (!gameMeeting.value) tick(dt)
     applyProximity()
+    checkFurniture()
+    checkGame()
   }
 
   draw()
@@ -284,6 +565,10 @@ function applyProximity() {
   if (!m || !self) return
 
   const audible: number[] = []
+  // In a meeting the room argues face to face: everyone hears everyone, so distance stops
+  // deciding volume and every connection is held open. The rest of the loop is unchanged, which
+  // is why this is a flag on the gain rather than a mode switch on the call.
+  const meeting = gameMeeting.value
 
   for (const member of knownMembers()) {
     const them = others.value[member.id]
@@ -291,18 +576,23 @@ function applyProximity() {
     // be picked up on their first whisper, which is at most a twelfth of a second away.
     if (!them) continue
 
-    const gain = audibility(m, self, them)
+    const gain = meeting ? 1 : audibility(m, self, them)
     setPeerProximity(member.id, gain)
-    setPeerInRange(member.id, inConnectRange(m, self, them))
+    setPeerInRange(member.id, meeting ? true : inConnectRange(m, self, them))
 
     if (gain > 0) {
       audible.push(member.id)
 
       // An arrival worth a fanfare is one you can actually hear — not one somewhere in the
       // building. This is why useVoice suppresses its own join effects in proximity mode.
-      if (!wasAudible.has(member.id)) fireEffect('join', member.id, them.name)
+      //
+      // Silenced entirely during a game: a meeting flips the whole room to full volume in one
+      // frame, which otherwise reads as everyone arriving at once and greets you with a chime
+      // per person (and a matching burst when the meeting ends). The earshot bookkeeping below
+      // still runs, so nothing bursts when the game is over either.
+      if (!wasAudible.has(member.id) && !gameRunning.value) fireEffect('join', member.id, them.name)
     }
-    else if (wasAudible.has(member.id)) {
+    else if (wasAudible.has(member.id) && !gameRunning.value) {
       fireEffect('leave', member.id, them.name)
     }
   }
@@ -316,11 +606,136 @@ function applyProximity() {
   }
 }
 
+// --- using the furniture ---
+
+/**
+ * What pressing E would open, from where you're standing.
+ *
+ * Only interactive pieces count — a plant is scenery, and prompting you to press E on it would
+ * make the prompt worthless everywhere it matters.
+ */
+function checkFurniture() {
+  const m = map.value
+  const self = me.value
+
+  // While a game is running, E belongs to the game (a task, a report), so the furniture prompt
+  // stands down — you can't put a record on in the middle of a round.
+  const found = m && self && !gameRunning.value ? decorInFront(m.objects, self) : null
+
+  // Only when it changes: this runs sixty times a second.
+  if (found?.id !== facingObject.value?.id) facingObject.value = found
+}
+
+/** The label on the prompt — "Press E to put something on". */
+const interactHint = computed(() => {
+  const kind = facingObject.value ? decorKind(facingObject.value.kind) : null
+
+  return kind ? `${kind.verb ?? 'Use'} the ${kind.label.toLowerCase()}` : ''
+})
+
+/**
+ * Use it.
+ *
+ * The server decides what a given object opens, from its own copy of the map — we send an id
+ * and get back a widget. What comes back is the *channel's* widget of that type: the same music
+ * player `m!` would have made, the same one everybody else at the speaker is looking at. So
+ * this is a doorway to something the app already has rather than a new thing that happens to
+ * live in a room, and listening along, the queue and the floating shelf all work already.
+ */
+async function useFurniture() {
+  const object = facingObject.value
+  if (!object || using.value || !inThisRoom.value) return
+
+  using.value = true
+
+  try {
+    const res = await api<{ data: Widget }>(`/api/channels/${props.channel.id}/space/interact`, {
+      method: 'POST',
+      body: { object_id: object.id },
+    })
+
+    const kind = decorKind(object.kind)
+
+    // Music is the one widget that doesn't go on the shelf directly. It has a dedicated brain
+    // (useMusicPin) that owns the pinned widget, the listen-along opt-in and the Spotify
+    // hand-off, and the floating window it opens renders *that* rather than the generic card —
+    // so a window opened around it without pinning first would come up empty and close itself.
+    if (res.data.type === 'music') {
+      useMusicPin().pin(res.data)
+
+      return
+    }
+
+    openWindow({
+      kind: 'widget',
+      widgetId: res.data.id,
+      channelId: props.channel.id,
+      widgetType: res.data.type,
+      title: kind?.label ?? 'Widget',
+    })
+  }
+  catch {
+    // The room may have been rebuilt out from under the prompt. Nothing to say — the prompt
+    // will vanish on the next frame along with the object it was pointing at.
+  }
+  finally {
+    using.value = false
+  }
+}
+
+/**
+ * E, or Enter, to use what you're standing at.
+ *
+ * Bound here rather than in useSpacePresence because it belongs to the *stage* — the movement
+ * keys are unbound when the room leaves the screen and so is this, for the same reason: E should
+ * type an E when you're reading another channel.
+ */
+function onInteractKey(e: KeyboardEvent) {
+  if (e.key !== 'e' && e.key !== 'E' && e.key !== 'Enter') return
+  if (!inThisRoom.value) return
+  // A sheet is open over the room — the editor, or the picker. Neither is a place where a
+  // letter should reach past it and switch the telly on.
+  if (editing.value || dressing.value) return
+
+  const el = e.target as HTMLElement | null
+  if (el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.isContentEditable)) return
+
+  // During a game, E does the game: a task at your feet, or a body to report. Nothing else, so
+  // that "press E" always means the one thing worth doing where you're standing.
+  if (gameRunning.value) {
+    if (gameNearTaskId.value) { e.preventDefault(); void onDoTask() }
+    else if (gameNearBody.value) { e.preventDefault(); void onReportOrMeeting() }
+
+    return
+  }
+
+  if (!facingObject.value) return
+
+  e.preventDefault()
+  void useFurniture()
+}
+
+/**
+ * A new look, saved by the dialog and now worn.
+ *
+ * The dialog has already written it to the server; this is the part that puts it on the sprite
+ * standing in the room, which would otherwise keep the old one until the next time the roster
+ * was rebuilt — that is, until you walked out and back in.
+ */
+function onDressed(look: Parameters<typeof restyle>[0], pet: Parameters<typeof restyle>[1]) {
+  dressing.value = false
+  restyle(look, pet)
+}
+
 // --- drawing ---
 
 /**
- * The room's palette, taken from the app's own theme so it follows the accent and the
- * light/dark switch.
+ * The two colours the room still borrows from the app's theme.
+ *
+ * The ground isn't one of them: grass, water and floorboards are drawn from a fixed overworld
+ * palette (see lib/spaceTiles), because no amount of somebody's chosen indigo makes a pond.
+ * What's left here is *annotation* — the tint on a private zone and the colour its name is
+ * written in — which should match the app, since it's the app talking rather than the room.
  *
  * Reading the custom properties directly does *not* work: they're declared as
  * `oklch(0.955 calc(0.016 * var(--cs)) var(--h))`, and `getPropertyValue` hands back that
@@ -329,8 +744,8 @@ function applyProximity() {
  *
  * So we resolve them the only way the platform offers: park the value on a real element's
  * `color` and read the *computed* style back, which the browser has by then flattened to an
- * actual colour. Cached, because that's a layout read and this runs every frame — and
- * re-resolved once a second so flipping the theme catches up without anything watching it.
+ * actual colour. Cached, because that's a layout read — and re-resolved once a second so
+ * flipping the theme catches up without anything watching it.
  */
 let palette: MapTheme | null = null
 let paletteAt = 0
@@ -357,11 +772,7 @@ function theme(): MapTheme {
   }
 
   palette = {
-    floor: resolve('var(--muted)', '#f1f5f9'),
-    floorAlt: resolve('var(--background)', '#ffffff'),
-    wall: resolve('var(--border)', '#cbd5e1'),
-    wallTop: resolve('var(--accent)', '#e2e8f0'),
-    zone: 'rgb(99 102 241 / 0.08)',
+    zone: 'rgb(99 102 241 / 0.10)',
     zoneBorder: 'rgb(99 102 241 / 0.45)',
     text: resolve('var(--foreground)', '#0f172a'),
     muted: resolve('var(--muted-foreground)', '#64748b'),
@@ -408,20 +819,166 @@ function draw() {
   camera.zoom = Math.max(0.6, Math.min(1.4, camera.height / (TILE * 16)))
 
   ctx.clearRect(0, 0, camera.width, camera.height)
-  drawMap(ctx, m, camera, palette)
+  // Everything outside the room, so a map with void round it reads as a place rather than as a
+  // hole in the page.
+  ctx.fillStyle = OUTSIDE
+  ctx.fillRect(0, 0, camera.width, camera.height)
+
+  drawMap(ctx, m, camera, palette, (performance.now() - openedAt) / 1000)
+
+  // The game's things on the floor — tasks to walk to, bodies to find — under everyone.
+  if (gameRunning.value) drawGame(ctx)
 
   // How far your own voice carries. Only your own — six overlapping rings would be a fog.
-  if (me.value) drawEarshot(ctx, camera, me.value, 'rgb(99 102 241 / 0.13)', 'rgb(99 102 241 / 0)')
+  // Hidden during a game, where earshot is a giveaway rather than an affordance.
+  if (me.value && !gameRunning.value) drawEarshot(ctx, camera, me.value, 'rgb(99 102 241 / 0.13)', 'rgb(99 102 241 / 0)')
 
   // Painter's algorithm: whoever is further down the map is nearer the viewer, so they're
   // drawn last and overlap correctly. Without it two people on adjacent tiles overlap
-  // according to object key order, which changes as people come and go.
-  const cast = [
-    ...Object.values(others.value).map(o => ({ who: o, self: false, walking: isWalking(o) })),
-    ...(me.value ? [{ who: me.value, self: true, walking: moving.value }] : []),
-  ].sort((a, b) => a.who.y - b.who.y)
+  // according to object key order, which changes as people come and go. Pets are sorted into
+  // the same list rather than drawn after their owner, or a pet standing a tile north of you
+  // would be painted over your head.
+  const cast: Array<{ y: number, paint: () => void }> = []
 
-  for (const member of cast) drawPerson(ctx, member.who, member.self, member.walking, palette)
+  for (const o of Object.values(others.value)) {
+    cast.push({ y: o.y, paint: () => drawPerson(ctx, o, false, isWalking(o)) })
+    if (o.pet && o.petAt) cast.push({ y: o.petAt.y, paint: () => drawCompanion(ctx, o) })
+  }
+
+  if (me.value) {
+    const self = me.value
+    cast.push({ y: self.y, paint: () => drawPerson(ctx, self, true, moving.value) })
+    if (self.pet && self.petAt) cast.push({ y: self.petAt.y, paint: () => drawCompanion(ctx, self) })
+  }
+
+  cast.sort((a, b) => a.y - b.y)
+  for (const item of cast) item.paint()
+
+  // The "press E" prompt is drawn over the room rather than in the DOM, because it belongs to a
+  // *tile* — pinning an HTML bubble to a moving world-space position means a transform update
+  // every frame, which is the one thing canvas is already doing.
+  drawPrompt(ctx)
+}
+
+/**
+ * A pet, at its own position rather than its owner's.
+ *
+ * `moving` is measured from the gap to its owner rather than from its actual velocity: a pet
+ * that has just been blocked by a couch is still trying, and should still be bobbing.
+ */
+function drawCompanion(ctx: CanvasRenderingContext2D, owner: Occupant) {
+  if (!owner.pet || !owner.petAt) return
+
+  const size = TILE * camera.zoom
+  const p = toScreen(camera, owner.petAt.x, owner.petAt.y)
+  const chasing = Math.hypot(owner.x - owner.petAt.x, owner.y - owner.petAt.y) > 1.05
+
+  ctx.save()
+  // Faded with earshot exactly as its owner is, so a distant pair reads as one distant pair.
+  ctx.globalAlpha = owner.id === user.value?.id
+    ? 1
+    : 0.4 + (map.value && me.value ? audibility(map.value, me.value, owner) : 0) * 0.6
+
+  drawPet(ctx, owner.pet, owner.petAt.facing, p.x, p.y, size, chasing, performance.now() / 1000)
+  ctx.restore()
+}
+
+/** "Press E to watch something", floating over whatever you're standing at. */
+function drawPrompt(ctx: CanvasRenderingContext2D) {
+  const object = facingObject.value
+  const kind = object ? decorKind(object.kind) : null
+  if (!object || !kind || !inThisRoom.value) return
+
+  const size = TILE * camera.zoom
+  const p = toScreen(camera, object.x + (kind.w - 1) / 2, object.y - 0.6)
+  const label = `E · ${kind.verb ?? 'Use'}`
+
+  ctx.save()
+  ctx.font = `600 ${Math.max(10, size * 0.3)}px system-ui, sans-serif`
+  ctx.textAlign = 'center'
+  ctx.textBaseline = 'middle'
+
+  const w = ctx.measureText(label).width + size * 0.5
+  const h = size * 0.5
+
+  ctx.fillStyle = 'rgb(23 23 30 / 0.88)'
+  ctx.beginPath()
+  ctx.roundRect(p.x - w / 2, p.y - h / 2, w, h, h / 2)
+  ctx.fill()
+
+  ctx.fillStyle = '#ffffff'
+  ctx.fillText(label, p.x, p.y + 1)
+  ctx.restore()
+}
+
+/**
+ * The game's things on the floor: your tasks, and any bodies.
+ *
+ * Tasks are drawn only for the player they belong to — the state already hides everyone else's,
+ * so there's nothing here to leak — as a bobbing marker over the tile you have to reach. Bodies
+ * are drawn for everyone, in the fallen colour of whoever they were, because finding one is how a
+ * round turns into a meeting.
+ */
+function drawGame(ctx: CanvasRenderingContext2D) {
+  const s = amState.value
+  if (!s) return
+
+  const size = TILE * camera.zoom
+  const t = performance.now() / 1000
+
+  if (s.phase === 'play') {
+    for (const task of s.my_tasks) {
+      if (task.done) continue
+
+      const p = toScreen(camera, task.x, task.y)
+      const bob = Math.sin(t * 3 + task.x + task.y) * size * 0.08
+      const cy = p.y - size * 0.6 + bob
+
+      // A little amber diamond, haloed so it reads over any floor.
+      ctx.save()
+      ctx.globalAlpha = 0.9
+      ctx.translate(p.x, cy)
+      ctx.rotate(Math.PI / 4)
+      const r = size * 0.16
+      ctx.fillStyle = 'rgb(250 204 21)'
+      ctx.strokeStyle = 'rgb(120 80 0 / 0.6)'
+      ctx.lineWidth = 2
+      ctx.fillRect(-r, -r, r * 2, r * 2)
+      ctx.strokeRect(-r, -r, r * 2, r * 2)
+      ctx.restore()
+    }
+  }
+
+  for (const body of s.bodies) {
+    const p = toScreen(camera, body.x, body.y)
+    const hue = spriteHue(body.user)
+
+    ctx.save()
+    // A dark pool under a slumped figure.
+    ctx.fillStyle = 'rgb(120 0 0 / 0.35)'
+    ctx.beginPath()
+    ctx.ellipse(p.x, p.y + size * 0.32, size * 0.4, size * 0.16, 0, 0, Math.PI * 2)
+    ctx.fill()
+
+    ctx.fillStyle = `hsl(${hue} 45% 42%)`
+    ctx.beginPath()
+    ctx.ellipse(p.x, p.y + size * 0.24, size * 0.28, size * 0.16, 0, 0, Math.PI * 2)
+    ctx.fill()
+
+    // A cross for the eyes, so it reads as "down" rather than "lying down having a nap".
+    ctx.strokeStyle = '#fff'
+    ctx.lineWidth = Math.max(1.5, size * 0.04)
+    const ex = size * 0.08
+    for (const dx of [-size * 0.1, size * 0.1]) {
+      ctx.beginPath()
+      ctx.moveTo(p.x + dx - ex, p.y + size * 0.18 - ex)
+      ctx.lineTo(p.x + dx + ex, p.y + size * 0.18 + ex)
+      ctx.moveTo(p.x + dx + ex, p.y + size * 0.18 - ex)
+      ctx.lineTo(p.x + dx - ex, p.y + size * 0.18 + ex)
+      ctx.stroke()
+    }
+    ctx.restore()
+  }
 }
 
 /** Which walk frame the whole room is on. One clock, so everybody's stride is in step. */
@@ -441,7 +998,6 @@ function drawPerson(
   o: Occupant,
   self: boolean,
   walking: boolean,
-  palette: MapTheme,
 ) {
   const size = TILE * camera.zoom
   const p = toScreen(camera, o.x, o.y)
@@ -470,7 +1026,8 @@ function drawPerson(
     ctx.stroke()
   }
 
-  drawTrainer(ctx, camera, o, {
+  drawTrainer(ctx, o, p.x, p.y, size, {
+    look: normaliseLook(o.look),
     hue: spriteHue(o.id),
     self,
     walking,
@@ -524,13 +1081,19 @@ const audiblePeople = computed(() =>
   audibleIds.value.map(id => others.value[id]).filter((o): o is NonNullable<typeof o> => !!o))
 
 async function onMapSaved() {
-  editing.value = false
+  editing.value = null
   await loadMap()
 }
 
 onMounted(async () => {
+  openedAt = performance.now()
   await loadMap()
   subscribeMap()
+
+  // The room's game, if one's afoot. Loaded and listened to alongside the map, on the same
+  // channel stream — a game you walk in on should already be on screen, not a beat behind.
+  await loadGame()
+  subscribeGame()
 
   resize()
   ro = new ResizeObserver(resize)
@@ -540,16 +1103,20 @@ onMounted(async () => {
   // `place` needs to know which tiles you're allowed to stand on.
   reattach()
 
+  window.addEventListener('keydown', onInteractKey)
+
   frame = requestAnimationFrame(loop)
 })
 
 onBeforeUnmount(() => {
   if (frame) cancelAnimationFrame(frame)
+  window.removeEventListener('keydown', onInteractKey)
   ro?.disconnect()
   probe?.remove()
   probe = null
   palette = null
   unsubscribeMap()
+  unsubscribeGame()
 
   /*
    * Note what is *not* torn down: the call, and your place in the room.
@@ -575,6 +1142,7 @@ watch(inThisRoom, (now) => {
 
   wasAudible.clear()
   audibleIds.value = []
+  facingObject.value = null
   if (attached.value) unsubscribeMoves()
 })
 </script>
@@ -677,12 +1245,92 @@ watch(inThisRoom, (now) => {
           {{ chatHidden ? 'Show chat' : 'Hide chat' }}
         </button>
 
+        <!-- What you look like walking around. Yours, not the room's, so it isn't owner-gated. -->
+        <button
+          type="button"
+          class="rounded p-1.5 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+          title="Change how you look, and pick a companion"
+          @click="dressing = true"
+        >
+          <Shirt class="h-4 w-4" />
+        </button>
+
+        <!-- Start a game. Only when you're in the room and none is already on the table; a game in
+             progress is driven by the panel over the map, not from up here. -->
+        <div v-if="canProposeGame" class="relative">
+          <button
+            type="button"
+            class="rounded p-1.5 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+            title="Start a game in the room"
+            @click="togglePropose"
+          >
+            <Gamepad2 class="h-4 w-4" />
+          </button>
+
+          <div
+            v-if="showPropose"
+            class="absolute right-0 top-full z-30 mt-1 w-60 space-y-1 rounded-lg border bg-background p-1.5 shadow-xl"
+          >
+            <!-- The games to choose from. A duel switches this list to a list of people. -->
+            <template v-if="!challengeType">
+              <p class="px-2 py-1 text-[11px] font-medium text-muted-foreground">Start a game</p>
+              <button
+                v-for="g in gameCatalogue"
+                :key="g.type"
+                type="button"
+                class="w-full rounded-md px-2 py-1.5 text-left transition-colors hover:bg-muted"
+                @click="onProposeGame(g.type)"
+              >
+                <span class="block text-sm font-medium">
+                  {{ g.label }}
+                  <span v-if="g.mode === 'challenge'" class="text-[10px] font-normal text-muted-foreground">· challenge</span>
+                </span>
+                <span class="block text-[11px] leading-snug text-muted-foreground">{{ g.blurb }}</span>
+              </button>
+              <p v-if="!gameCatalogue.length" class="px-2 py-1 text-xs text-muted-foreground">Loading…</p>
+            </template>
+
+            <!-- Who to challenge. -->
+            <template v-else>
+              <button
+                class="flex w-full items-center gap-1 px-2 py-1 text-[11px] font-medium text-muted-foreground hover:text-foreground"
+                @click="challengeType = null"
+              >
+                ‹ Pick who to battle
+              </button>
+              <button
+                v-for="t in challengeTargets"
+                :key="t.id"
+                type="button"
+                class="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm transition-colors hover:bg-muted"
+                @click="onChallenge(t.id)"
+              >
+                <span class="h-2.5 w-2.5 shrink-0 rounded-full" :style="{ backgroundColor: `hsl(${spriteHue(t.id)} 62% 52%)` }" />
+                <span class="min-w-0 flex-1 truncate">{{ t.name }}</span>
+              </button>
+              <p v-if="!challengeTargets.length" class="px-2 py-1 text-xs text-muted-foreground">Nobody else is here to challenge.</p>
+            </template>
+          </div>
+        </div>
+
+        <!-- Decorating is open to anyone; it only ever touches the furniture. Hidden from the
+             owner, who reaches the same furniture (and everything else) through the full editor. -->
+        <button
+          v-if="!canEdit && !editing"
+          type="button"
+          class="rounded p-1.5 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+          title="Rearrange the furniture"
+          @click="editing = 'decor'"
+        >
+          <Sofa class="h-4 w-4" />
+        </button>
+
         <button
           v-if="canEdit && !editing"
           type="button"
           class="rounded p-1.5 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
           title="Edit this room"
-          @click="editing = true"
+          @click="editing = 'full'"
         >
           <Pencil class="h-4 w-4" />
         </button>
@@ -712,6 +1360,10 @@ watch(inThisRoom, (now) => {
               Move with the arrow keys or WASD. You'll hear people within about {{ FAR_TILES }} tiles,
               louder the closer you get — and everyone inside a room hears each other, and nobody outside it.
             </p>
+            <p class="text-xs text-muted-foreground">
+              Walk up to the speaker, the TV or an arcade cabinet and press <kbd class="rounded border px-1">E</kbd> to
+              put something on for whoever's nearby.
+            </p>
           </div>
         </div>
 
@@ -733,9 +1385,27 @@ watch(inThisRoom, (now) => {
           <MicOff class="h-3.5 w-3.5" /> You're muted — click to talk
         </button>
 
-        <!-- Who can hear you right now. The rule is invisible otherwise. -->
+        <!--
+          Standing at something you can use. The canvas already draws a marker over the object
+          itself; this is the half that says what the key does, and gives a pointer a target —
+          not everybody will think to press a letter.
+        -->
+        <button
+          v-if="inThisRoom && facingObject"
+          type="button"
+          class="absolute bottom-2 left-1/2 flex -translate-x-1/2 items-center gap-2 rounded-full bg-foreground px-3 py-1.5 text-xs font-medium text-background shadow-lg transition hover:opacity-90 disabled:opacity-60"
+          :disabled="using"
+          @click="useFurniture"
+        >
+          <Loader2 v-if="using" class="h-3.5 w-3.5 animate-spin" />
+          <span v-else class="rounded border border-background/40 px-1 text-[10px] leading-4">E</span>
+          {{ interactHint }}
+        </button>
+
+        <!-- Who can hear you right now. The rule is invisible otherwise. Stood down during a
+             game, where the HUD owns the bottom of the screen and earshot is a tell. -->
         <div
-          v-if="inThisRoom"
+          v-if="inThisRoom && !gameRunning"
           class="pointer-events-none absolute bottom-2 left-2 max-w-[60%] rounded-md bg-background/85 px-2 py-1 text-[11px] text-muted-foreground shadow-sm"
         >
           <template v-if="audiblePeople.length">
@@ -745,6 +1415,40 @@ watch(inThisRoom, (now) => {
             Nobody's in earshot — walk over to somebody to talk.
           </template>
         </div>
+
+        <!-- The game, when there is one. Which panel is a question of which game: Among Us draws
+             its HUD and meetings over the map, a pet battle its arena. Both draw their own overlays
+             and manage their own pointer events; the stage just feeds them what they can't know
+             (who's where) and carries out what their buttons ask for. -->
+        <template v-if="showGamePanel && game">
+          <SpaceGamePanel
+            v-if="game.type === 'amongus'"
+            :game="game"
+            :players="gamePlayers"
+            :near-task-id="gameNearTaskId"
+            :near-body="gameNearBody"
+            :kill-target="gameKillTarget"
+            :cooldown-left="gameCooldownLeft"
+            @vote="voteGame"
+            @dismiss="onGameDismiss"
+            @do-task="onDoTask"
+            @report="onReportOrMeeting"
+            @meeting="onReportOrMeeting"
+            @kill="onKill"
+            @game-vote="onGameVote"
+          />
+          <PetBattlePanel
+            v-else-if="game.type === 'petbattle'"
+            :game="game"
+            :names="roomNames"
+            :my-id="user?.id ?? null"
+            @accept="onAccept"
+            @decline="onDecline"
+            @dismiss="onGameDismiss"
+            @move="onBattleMove"
+            @forfeit="onForfeit"
+          />
+        </template>
       </div>
 
       <!-- Cameras, screens and the volume of everyone near you. -->
@@ -759,8 +1463,15 @@ watch(inThisRoom, (now) => {
       v-if="editing && map"
       :channel-id="channel.id"
       :map="map"
-      @close="editing = false"
+      :mode="editing"
+      @close="editing = null"
       @saved="onMapSaved"
+    />
+
+    <SpaceAppearanceDialog
+      v-if="dressing"
+      @close="dressing = false"
+      @saved="onDressed"
     />
   </div>
 </template>

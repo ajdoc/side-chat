@@ -4,6 +4,9 @@ namespace App\Http\Requests\SideSpace;
 
 use App\Http\Requests\ServerOwnerRequest;
 use App\Models\SideSpaceMap;
+use App\Support\SideSpace\Decorations;
+use App\Support\SideSpace\Tiles;
+use Illuminate\Validation\Rule;
 use Illuminate\Validation\Validator;
 
 /**
@@ -46,6 +49,18 @@ class UpdateSideSpaceMapRequest extends ServerOwnerRequest
             'zones.*.w' => ['required', 'integer', 'min:1'],
             'zones.*.h' => ['required', 'integer', 'min:1'],
 
+            // Furniture. A decoration carries only what the author chose — where it goes and
+            // what it is. Its size, whether it's solid and what pressing E on it opens are all
+            // read from the catalogue, so there is nothing here for a client to lie about.
+            // `sometimes`, unlike zones: a map saved without it is an unfurnished room rather
+            // than a malformed request, which keeps every room built before furniture existed
+            // saveable by a client that has never heard of it.
+            'objects' => ['sometimes', 'array', 'max:'.Decorations::MAX_PER_MAP],
+            'objects.*.id' => ['required', 'string', 'max:40'],
+            'objects.*.kind' => ['required', 'string', Rule::in(Decorations::keys())],
+            'objects.*.x' => ['required', 'integer', 'min:0'],
+            'objects.*.y' => ['required', 'integer', 'min:0'],
+
             'spawn' => ['required', 'array'],
             'spawn.x' => ['required', 'integer', 'min:0'],
             'spawn.y' => ['required', 'integer', 'min:0'],
@@ -61,6 +76,7 @@ class UpdateSideSpaceMapRequest extends ServerOwnerRequest
     {
         return [
             fn (Validator $validator) => $this->validateGrid($validator),
+            fn (Validator $validator) => $this->validateObjects($validator),
             fn (Validator $validator) => $this->validateZones($validator),
             fn (Validator $validator) => $this->validateSpawn($validator),
         ];
@@ -96,6 +112,30 @@ class UpdateSideSpaceMapRequest extends ServerOwnerRequest
         }
     }
 
+    /**
+     * Furniture has to fit on the map, stand on something that exists, and not be inside other
+     * furniture. The rules themselves live in {@see Decorations::problems} — shared with the
+     * member-only decorate endpoint — because they're the same rules whether the tiles arrived
+     * in this payload or were already stored.
+     */
+    private function validateObjects(Validator $validator): void
+    {
+        if ($validator->errors()->isNotEmpty()) {
+            return;
+        }
+
+        $problems = Decorations::problems(
+            (array) $this->input('objects', []),
+            (array) $this->input('tiles'),
+            (int) $this->input('width'),
+            (int) $this->input('height'),
+        );
+
+        foreach ($problems as $i => $message) {
+            $validator->errors()->add("objects.$i", $message);
+        }
+    }
+
     /** A zone has to fit on the map, and has to contain somewhere to stand. */
     private function validateZones(Validator $validator): void
     {
@@ -105,7 +145,6 @@ class UpdateSideSpaceMapRequest extends ServerOwnerRequest
 
         $width = (int) $this->input('width');
         $height = (int) $this->input('height');
-        $tiles = (array) $this->input('tiles');
         $seen = [];
 
         foreach ((array) $this->input('zones', []) as $i => $zone) {
@@ -114,18 +153,19 @@ class UpdateSideSpaceMapRequest extends ServerOwnerRequest
             }
             $seen[] = $zone['id'];
 
-            if ($zone['x'] + $zone['w'] > $width || $zone['y'] + $zone['h'] > $height) {
+            if ($width < $zone['x'] + $zone['w'] || $height < $zone['y'] + $zone['h']) {
                 $validator->errors()->add("zones.$i", "Zone \"{$zone['name']}\" runs off the map.");
 
                 continue;
             }
 
             // A zone made entirely of wall is a room nobody can be inside, which would silently
-            // do nothing — better to refuse it than to let it look like it worked.
+            // do nothing — better to refuse it than to let it look like it worked. Furniture
+            // counts: a meeting room packed wall-to-wall with desks is just as uninhabitable.
             $standable = false;
             for ($y = $zone['y']; $y < $zone['y'] + $zone['h'] && ! $standable; $y++) {
                 for ($x = $zone['x']; $x < $zone['x'] + $zone['w']; $x++) {
-                    if (($tiles[$y][$x] ?? SideSpaceMap::WALL) === SideSpaceMap::FLOOR) {
+                    if ($this->standable($x, $y)) {
                         $standable = true;
                         break;
                     }
@@ -138,19 +178,30 @@ class UpdateSideSpaceMapRequest extends ServerOwnerRequest
         }
     }
 
-    /** Spawn has to be a floor tile — it's where people are put when they have no position. */
+    /** Spawn has to be somewhere you can stand — it's where people are put with no position. */
     private function validateSpawn(Validator $validator): void
     {
         if ($validator->errors()->isNotEmpty()) {
             return;
         }
 
-        $tiles = (array) $this->input('tiles');
-        $x = (int) $this->input('spawn.x');
-        $y = (int) $this->input('spawn.y');
-
-        if (($tiles[$y][$x] ?? SideSpaceMap::WALL) !== SideSpaceMap::FLOOR) {
-            $validator->errors()->add('spawn', 'The entrance has to be on a floor tile.');
+        if (! $this->standable((int) $this->input('spawn.x'), (int) $this->input('spawn.y'))) {
+            $validator->errors()->add('spawn', 'The entrance has to be somewhere people can stand.');
         }
+    }
+
+    /**
+     * Can somebody stand on this tile of the *payload* — ground walkable, nothing solid on it?
+     *
+     * The same question {@see SideSpaceMap::isWalkable} answers about a saved map, asked of a
+     * map that isn't saved yet. Two implementations of one rule is a smell, but the alternative
+     * is hydrating an unsaved model purely to validate it, and the rule is three lines.
+     */
+    private function standable(int $x, int $y): bool
+    {
+        $tiles = (array) $this->input('tiles');
+
+        return Tiles::isWalkable($tiles[$y][$x] ?? Tiles::VOID)
+            && ! Decorations::blocks((array) $this->input('objects', []), $x, $y);
     }
 }

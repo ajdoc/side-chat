@@ -13,7 +13,7 @@ use Illuminate\Foundation\Auth\User as Authenticatable;
 use Illuminate\Notifications\Notifiable;
 use Laravel\Passport\HasApiTokens;
 
-#[Fillable(['name', 'email', 'password', 'avatar', 'provider', 'provider_id', 'theme_mode', 'theme_color', 'spotify_id', 'spotify_access_token', 'spotify_refresh_token', 'spotify_token_expires_at', 'spotify_product'])]
+#[Fillable(['name', 'email', 'password', 'avatar', 'provider', 'provider_id', 'theme_mode', 'theme_color', 'space_avatar', 'space_pet', 'spotify_id', 'spotify_access_token', 'spotify_refresh_token', 'spotify_token_expires_at', 'spotify_product'])]
 #[Hidden(['password', 'remember_token'])]
 class User extends Authenticatable
 {
@@ -40,6 +40,9 @@ class User extends Authenticatable
         return [
             'email_verified_at' => 'datetime',
             'password' => 'hashed',
+            // How you're drawn in a Side Space — see App\Support\SideSpace\Avatars. One setting
+            // with five parts, never queried by, so it rides as JSON rather than five columns.
+            'space_avatar' => 'array',
             // Third-party OAuth credentials — encrypted at rest.
             'spotify_access_token' => 'encrypted',
             'spotify_refresh_token' => 'encrypted',

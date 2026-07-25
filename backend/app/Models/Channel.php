@@ -3,6 +3,7 @@
 namespace App\Models;
 
 use App\Contracts\MessageContainer;
+use Database\Factories\ChannelFactory;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
@@ -11,7 +12,7 @@ use Illuminate\Database\Eloquent\Relations\HasOne;
 
 class Channel extends Model
 {
-    /** @use HasFactory<\Database\Factories\ChannelFactory> */
+    /** @use HasFactory<ChannelFactory> */
     use HasFactory;
 
     /**
@@ -147,6 +148,12 @@ class Channel extends Model
     public function spaceMap(): HasOne
     {
         return $this->hasOne(SideSpaceMap::class);
+    }
+
+    /** The game currently living in this Side Space, if any — proposed, running or just ended. */
+    public function spaceGame(): HasOne
+    {
+        return $this->hasOne(SpaceGame::class);
     }
 
     /** Belongs to a DM or a group chat rather than a server. */

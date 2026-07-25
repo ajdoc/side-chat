@@ -85,6 +85,7 @@ function ownerWithSpaceChannel(string $preset = 'office'): array
         'height' => $map['height'],
         'tiles' => $map['tiles'],
         'zones' => $map['zones'],
+        'objects' => $map['objects'],
         'spawn' => $map['spawn'],
     ]);
 

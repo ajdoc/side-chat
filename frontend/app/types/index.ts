@@ -1,3 +1,6 @@
+import type { AvatarLook } from '~/lib/spaceAvatar'
+import type { PetKind } from '~/lib/spacePets'
+
 export type ThemeMode = 'light' | 'dark' | 'system'
 // Each one drives the whole palette (surfaces, borders, hovers), not just the
 // accent — see the accent registry in assets/css/tailwind.css.
@@ -11,6 +14,15 @@ export interface User {
   provider: string | null
   theme_mode: ThemeMode
   theme_color: ThemeColor
+  /**
+   * How this person is drawn walking around a Side Space, and what's following them.
+   *
+   * Always a complete look — the server fills in anything unchosen — because every client
+   * draws a sprite for everybody, and "hasn't picked yet" has to arrive as something drawable
+   * rather than as an absence each of them handles differently. See lib/spaceAvatar.
+   */
+  space_avatar: AvatarLook
+  space_pet: PetKind | null
   created_at: string
 }
 
@@ -858,4 +870,101 @@ export interface ServerJoinRequest {
 export interface InvitePreview {
   server: { id: number, name: string, members_count: number }
   status: 'none' | 'pending' | 'member'
+}
+
+/**
+ * A game living in a Side Space — the framework half, the same for every game.
+ *
+ * Mirrors what `GameService::present` hands back: the public facts about the game plus this
+ * viewer's *redacted* slice of its state. `state` is `null` while a game is only being voted on
+ * (it has none yet) and typed per game once it's running — Among Us is the one below.
+ */
+export interface SpaceGamePayload {
+  type: string
+  label: string
+  status: 'voting' | 'running' | 'ended'
+  created_by: number | null
+  /** Who was challenged, for a duel — null for a room-wide game. */
+  opponent: number | null
+  /** 'vote' (put to the room) or 'challenge' (aimed at one person). */
+  start_mode: 'vote' | 'challenge'
+  min_players: number
+  /** Present only while a room-wide vote is open. */
+  vote: { yes: number, present: number, mine: boolean | null } | null
+  /** The game's own state, typed per game — null while only being proposed. */
+  state: AmongUsState | PetBattleState | null
+}
+
+/** One entry of the propose menu — a game the room can be asked to play. */
+export interface SpaceGameInfo {
+  type: string
+  label: string
+  blurb: string
+  /** How it starts: put to the room, or aimed at one person. */
+  mode: 'vote' | 'challenge'
+  min: number
+  max: number
+}
+
+/** One fighter in a pet battle, everything about it on show — a battle keeps no secrets. */
+export interface PetBattleFighter {
+  id: number
+  name: string
+  pet: PetKind
+  element: 'grass' | 'fire' | 'water'
+  hp: number
+  max_hp: number
+  guarding: boolean
+}
+
+/** A turn-based pet battle, as any viewer sees it (the same for everyone but for `you`). */
+export interface PetBattleState {
+  /** The two fighters, in a stable left/right order. */
+  players: PetBattleFighter[]
+  /** Whose move it is. */
+  turn: number | null
+  round: number
+  /** Which fighter you are, or null if you're only watching. */
+  you: number | null
+  log: string[]
+  /** The winner's id, once there is one. */
+  winner: number | null
+}
+
+/** A crewmate's task: a spot on the map to walk to and a flag for whether it's done. */
+export interface AmongUsTask {
+  id: string
+  x: number
+  y: number
+  done: boolean
+}
+
+/**
+ * Among Us's state, as *this* player is allowed to see it.
+ *
+ * The secrecy is in what's missing: `players[id].role` is null for anyone whose role you
+ * haven't earned the right to know, and `my_tasks` is your list alone. `my_role` and
+ * `my_cooldown` are yours; everything else is public.
+ */
+export interface AmongUsState {
+  phase: 'play' | 'meeting'
+  players: Record<number, { alive: boolean, role: 'crew' | 'impostor' | null }>
+  my_role: 'crew' | 'impostor' | null
+  my_tasks: AmongUsTask[]
+  bodies: { user: number, x: number, y: number }[]
+  /** Epoch ms your kill is free again, if you're an impostor. */
+  my_cooldown: number | null
+  meeting: {
+    by: number
+    reason: 'body' | 'emergency'
+    ends_at: number
+    /** Ids of players who have voted — not who they voted for. */
+    voted: number[]
+    /** Your own vote, once cast. */
+    mine: number | 'skip' | null
+  } | null
+  log: string[]
+  task_goal: number
+  task_done: number
+  winner: null | 'crew' | 'impostor'
 }

@@ -23,7 +23,16 @@ return Application::configure(basePath: dirname(__DIR__))
         ['middleware' => ['auth:api']],
     )
     ->withMiddleware(function (Middleware $middleware): void {
-        //
+        /*
+         * A Side Space's map rows are not text. They're a grid of tile characters, and one of
+         * those characters is a space — the void outside a room that isn't a rectangle. Trimming
+         * a row therefore eats the corners off any round room and leaves the grid a different
+         * width than it says it is, which the map validator correctly refuses.
+         *
+         * So the tile rows, and only the tile rows, keep their whitespace. See
+         * App\Support\SideSpace\Tiles.
+         */
+        $middleware->trimStrings(except: ['tiles.*']);
     })
     ->withExceptions(function (Exceptions $exceptions): void {
         $exceptions->shouldRenderJsonWhen(

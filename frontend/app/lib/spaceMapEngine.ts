@@ -21,12 +21,37 @@
  * teleporting. Collision therefore tests the tile they are moving *into*, rounded.
  */
 
+import type { AvatarLook } from './spaceAvatar'
+import type { SpaceObject } from './spaceDecor'
+import type { PetKind } from './spacePets'
+import { decorBlocks, drawDecor } from './spaceDecor'
+import {
+  CARPET,
+  drawTallTile,
+  drawTile,
+  FLOOR,
+  GRASS,
+  isTallTile,
+  isWalkableTile,
+  PATH,
+  SAND,
+  TALL_GRASS,
+  TREE,
+  VOID,
+  WALL,
+  WATER,
+  WOOD,
+} from './spaceTiles'
+
 /** One tile, in pixels, before the camera's zoom. */
 export const TILE = 32
 
-export const FLOOR = '.'
-export const WALL = '#'
-export const VOID = ' '
+/*
+ * The tile alphabet is re-exported rather than redefined: it lives with the code that knows how
+ * to *draw* each character, and everything else in the room only ever needs to name one.
+ */
+export { CARPET, FLOOR, GRASS, PATH, SAND, TALL_GRASS, TILE_BRUSHES, TREE, VOID, WALL, WATER, WOOD } from './spaceTiles'
+export type { SpaceObject } from './spaceDecor'
 
 /**
  * How far sound carries, in tiles.
@@ -65,9 +90,11 @@ export interface SpaceMap {
   name: string
   width: number
   height: number
-  /** `height` rows of `width` characters. See FLOOR / WALL / VOID. */
+  /** `height` rows of `width` characters. See the tile alphabet in spaceTiles. */
   tiles: string[]
   zones: SpaceZone[]
+  /** The furniture standing on the ground. Kinds and positions only — see spaceDecor. */
+  objects: SpaceObject[]
   spawn: { x: number, y: number }
   updated_by?: string | null
   updated_at?: string
@@ -81,6 +108,16 @@ export interface Occupant {
   x: number
   y: number
   facing: Facing
+  /** How they're drawn. Whispered with their position, so a newcomer needs no lookup. */
+  look?: AvatarLook
+  /** What's following them, if anything. */
+  pet?: PetKind | null
+  /**
+   * Where their pet actually is, which is not where they are — it trails a tile or so behind.
+   * Local to each client and never sent: everybody computes the same trot from the same path,
+   * and a pet that arrived over the wire would cost as much traffic as a second person.
+   */
+  petAt?: { x: number, y: number, facing: Facing }
 }
 
 // --- the grid ---
@@ -96,7 +133,10 @@ export function tileAt(map: SpaceMap, x: number, y: number): string {
  * anywhere else — walking off the top of the world is the same event as walking into a wall.
  */
 export function isWalkable(map: SpaceMap, x: number, y: number): boolean {
-  return tileAt(map, Math.round(x), Math.round(y)) === FLOOR
+  const tx = Math.round(x)
+  const ty = Math.round(y)
+
+  return isWalkableTile(tileAt(map, tx, ty)) && !decorBlocks(map.objects, tx, ty)
 }
 
 /** The zone containing a tile, or null out in the open. First match wins. */
@@ -213,34 +253,58 @@ export function toTile(cam: Camera, px: number, py: number): { x: number, y: num
   }
 }
 
-/** The palette, taken as CSS colours so the caller can hand us theme-resolved values. */
+/**
+ * The bits of the room's palette that still come from the app's theme.
+ *
+ * Only two things do, and both are annotation rather than scenery: the tint on a private zone
+ * and the colour its name is written in. The ground itself is fixed — see spaceTiles for why a
+ * room's grass shouldn't change colour when somebody picks a different accent.
+ */
 export interface MapTheme {
-  floor: string
-  floorAlt: string
-  wall: string
-  wallTop: string
   zone: string
   zoneBorder: string
   text: string
   muted: string
 }
 
-/**
- * Paint the room: floors, walls, zones.
- *
- * Only the tiles the camera can actually see are visited — a 80×80 map is 6400 tiles, and
- * drawing all of them 60 times a second to show the fifth of them on screen is the kind of
- * waste that only shows up on somebody else's laptop.
- */
-export function drawMap(ctx: CanvasRenderingContext2D, map: SpaceMap, cam: Camera, theme: MapTheme): void {
+/** Which tiles the camera can actually see. Everything drawn works from this. */
+function viewport(map: SpaceMap, cam: Camera) {
   const size = TILE * cam.zoom
-  const cols = Math.ceil(cam.width / size / 2) + 1
-  const rows = Math.ceil(cam.height / size / 2) + 1
+  const cols = Math.ceil(cam.width / size / 2) + 2
+  const rows = Math.ceil(cam.height / size / 2) + 2
 
-  const x0 = Math.max(0, Math.floor(cam.x) - cols)
-  const x1 = Math.min(map.width - 1, Math.ceil(cam.x) + cols)
-  const y0 = Math.max(0, Math.floor(cam.y) - rows)
-  const y1 = Math.min(map.height - 1, Math.ceil(cam.y) + rows)
+  return {
+    size,
+    x0: Math.max(0, Math.floor(cam.x) - cols),
+    x1: Math.min(map.width - 1, Math.ceil(cam.x) + cols),
+    y0: Math.max(0, Math.floor(cam.y) - rows),
+    y1: Math.min(map.height - 1, Math.ceil(cam.y) + rows),
+  }
+}
+
+/**
+ * Paint the room: the ground, then everything standing on it.
+ *
+ * Only the tiles the camera can actually see are visited — an 80×80 map is 6400 tiles, and
+ * drawing all of them 60 times a second to show a fifth of them is the kind of waste that only
+ * shows up on somebody else's laptop.
+ *
+ * Three passes, and the order is the whole of the depth sorting:
+ *
+ *   1. **Ground.** Flat, one tile per square.
+ *   2. **Tall ground.** Tree canopies, which overhang the tile above them and would be painted
+ *      over by whatever is up there if they went in pass one.
+ *   3. **Furniture.** Sorted north to south, so a bookshelf against the top wall is behind the
+ *      couch in front of it rather than in front of it by accident of array order.
+ *
+ * People are *not* drawn here. They're interleaved with nothing — the caller draws them after,
+ * sorted among themselves — because a room where you walk behind the sofa is a much larger
+ * change than it sounds, and this is not that change.
+ *
+ * `t` is seconds since the room opened, and is what makes water move.
+ */
+export function drawMap(ctx: CanvasRenderingContext2D, map: SpaceMap, cam: Camera, theme: MapTheme, t = 0): void {
+  const { size, x0, x1, y0, y1 } = viewport(map, cam)
 
   for (let y = y0; y <= y1; y++) {
     for (let x = x0; x <= x1; x++) {
@@ -249,24 +313,49 @@ export function drawMap(ctx: CanvasRenderingContext2D, map: SpaceMap, cam: Camer
 
       const p = toScreen(cam, x - 0.5, y - 0.5)
 
-      if (tile === FLOOR) {
-        // A checker, faint enough not to be a pattern you notice — but present, because a
-        // featureless floor gives you nothing to judge your own movement against.
-        ctx.fillStyle = (x + y) % 2 === 0 ? theme.floor : theme.floorAlt
-        ctx.fillRect(p.x, p.y, size + 1, size + 1)
-      }
-      else {
-        // Walls get a lighter cap so the grid reads as having height rather than as a
-        // flat blocked-out square.
-        ctx.fillStyle = theme.wall
-        ctx.fillRect(p.x, p.y, size + 1, size + 1)
-        ctx.fillStyle = theme.wallTop
-        ctx.fillRect(p.x, p.y, size + 1, Math.max(2, size * 0.22))
-      }
+      drawTile(ctx, tile, x, y, p.x, p.y, size, {
+        up: tileAt(map, x, y - 1),
+        down: tileAt(map, x, y + 1),
+        left: tileAt(map, x - 1, y),
+        right: tileAt(map, x + 1, y),
+      }, t)
     }
   }
 
+  for (let y = y0; y <= y1; y++) {
+    for (let x = x0; x <= x1; x++) {
+      const tile = tileAt(map, x, y)
+      if (!isTallTile(tile)) continue
+
+      const p = toScreen(cam, x - 0.5, y - 0.5)
+      drawTallTile(ctx, tile, x, y, p.x, p.y, size)
+    }
+  }
+
+  drawObjects(ctx, map, cam)
   drawZones(ctx, map, cam, theme)
+}
+
+/**
+ * The furniture.
+ *
+ * Sorted by the *bottom* of each piece rather than its origin, so a two-tile-deep rug and a
+ * bookshelf standing at its far edge come out in the order you'd expect. Off-screen pieces are
+ * skipped generously — a tall sprite reaches up out of its own footprint, so the cull has to
+ * allow a tile of slack or bookshelves pop in as you scroll towards them.
+ */
+function drawObjects(ctx: CanvasRenderingContext2D, map: SpaceMap, cam: Camera): void {
+  const { size, x0, x1, y0, y1 } = viewport(map, cam)
+  const t = performance.now() / 1000
+
+  const visible = (map.objects ?? [])
+    .filter(o => o.x <= x1 + 2 && o.x >= x0 - 2 && o.y <= y1 + 2 && o.y >= y0 - 2)
+    .sort((a, b) => a.y - b.y)
+
+  for (const object of visible) {
+    const p = toScreen(cam, object.x - 0.5, object.y - 0.5)
+    drawDecor(ctx, object, p.x, p.y, size, t)
+  }
 }
 
 /** Zones, as a tinted rectangle with its name along the top edge. */
@@ -353,266 +442,18 @@ export function facingOf(dx: number, dy: number, fallback: Facing): Facing {
   return fallback
 }
 
-// --- the trainer sprite ---
+// --- people ---
 
-/**
- * People are drawn as little pixel-art trainers, in the spirit of a Game Boy overworld: a
- * 16×16 grid, four facings, and a two-frame walk cycle.
- *
- * Original artwork, not lifted from anywhere — it's the *idiom* that's borrowed (chunky
- * outline, cap, side view narrower than the front) rather than any particular character.
- *
- * The grid is written as strings because that is the only way pixel art stays legible in a
- * source file; each character is a palette slot:
- *
- *   `.` transparent   `o` outline      `C` cap and shirt (this person's colour)
- *   `S` skin          `E` eye          `H` hair (the back of the head)
- *   `K` pack straps   `P` trousers     `B` boots
- *
- * Only three grids are stored. `left` is `right` mirrored at render time, because drawing the
- * same pixels backwards is free and maintaining two copies of one sprite is not.
+/*
+ * The trainer sprite used to live here. It now lives in spaceAvatar, because it stopped being
+ * one sprite: a look is composed of a body and a hairstyle with their own palettes, and pets
+ * are a second cast of sprites again. What's left in this file is the room — geometry,
+ * proximity and paint — which is the half that has to be reasoned about without a browser.
  */
-export const SPRITE_SIZE = 16
-
-type SpriteDir = 'down' | 'up' | 'right'
-
-const SPRITES: Record<SpriteDir, [string[], string[]]> = {
-  down: [
-    [
-      '................',
-      '.....oooooo.....',
-      '....oCCCCCCo....',
-      '....oCCCCCCo....',
-      '...ooSSSSSSoo...',
-      '...oSSSSSSSSo...',
-      '...oSEESSEESo...',
-      '...oSSSSSSSSo...',
-      '....oSSSSSSo....',
-      '.....oooooo.....',
-      '...oKCCCCCCKo...',
-      '..oKKCCCCCCKKo..',
-      '..oSKCCCCCCKSo..',
-      '...ooPPPPPPoo...',
-      '....oPPooPPo....',
-      '....oBBooBBo....',
-    ],
-    [
-      '................',
-      '.....oooooo.....',
-      '....oCCCCCCo....',
-      '....oCCCCCCo....',
-      '...ooSSSSSSoo...',
-      '...oSSSSSSSSo...',
-      '...oSEESSEESo...',
-      '...oSSSSSSSSo...',
-      '....oSSSSSSo....',
-      '.....oooooo.....',
-      '...oKCCCCCCKo...',
-      '..oKKCCCCCCKKo..',
-      '..oSKCCCCCCKSo..',
-      '...ooPPPPPPoo...',
-      '....oPPPPPPo....',
-      '...oBBo..oBBo...',
-    ],
-  ],
-  up: [
-    [
-      '................',
-      '.....oooooo.....',
-      '....oCCCCCCo....',
-      '....oCCCCCCo....',
-      '...ooCCCCCCoo...',
-      '...oHHHHHHHHo...',
-      '...oHHHHHHHHo...',
-      '...oHHHHHHHHo...',
-      '....oHHHHHHo....',
-      '.....oooooo.....',
-      '...oKCCCCCCKo...',
-      '..oKKCCCCCCKKo..',
-      '..oSKCCCCCCKSo..',
-      '...ooPPPPPPoo...',
-      '....oPPooPPo....',
-      '....oBBooBBo....',
-    ],
-    [
-      '................',
-      '.....oooooo.....',
-      '....oCCCCCCo....',
-      '....oCCCCCCo....',
-      '...ooCCCCCCoo...',
-      '...oHHHHHHHHo...',
-      '...oHHHHHHHHo...',
-      '...oHHHHHHHHo...',
-      '....oHHHHHHo....',
-      '.....oooooo.....',
-      '...oKCCCCCCKo...',
-      '..oKKCCCCCCKKo..',
-      '..oSKCCCCCCKSo..',
-      '...ooPPPPPPoo...',
-      '....oPPPPPPo....',
-      '...oBBo..oBBo...',
-    ],
-  ],
-  right: [
-    [
-      '................',
-      '.....oooooo.....',
-      '....oCCCCCCo....',
-      '....oCCCCCCCo...',
-      '...ooSSSSSSo....',
-      '...oHSSSSSSo....',
-      '...oHSSEESSo....',
-      '...oHSSSSSSo....',
-      '....oSSSSSo.....',
-      '.....oooooo.....',
-      '....oCCCCCCo....',
-      '...oKCCCCCCo....',
-      '...oKKCCCCSo....',
-      '....ooPPPPo.....',
-      '.....oPPPo......',
-      '.....oBBBo......',
-    ],
-    [
-      '................',
-      '.....oooooo.....',
-      '....oCCCCCCo....',
-      '....oCCCCCCCo...',
-      '...ooSSSSSSo....',
-      '...oHSSSSSSo....',
-      '...oHSSEESSo....',
-      '...oHSSSSSSo....',
-      '....oSSSSSo.....',
-      '.....oooooo.....',
-      '....oCCCCCCo....',
-      '...oKCCCCCCo....',
-      '...oKKCCCCSo....',
-      '....ooPPPPo.....',
-      '....oPPPPo......',
-      '...oBBo.oBBo....',
-    ],
-  ],
-}
-
-/**
- * Everyone gets their own shirt.
- *
- * Derived from the user id rather than stored, so it needs no column, no migration and no
- * agreement between clients — everybody computes the same hue for the same person. Fixed
- * saturation and lightness keep the whole cast looking like one set of sprites rather than a
- * bag of highlighter pens, and stop anybody drawing a colour that vanishes into the floor.
- */
-export function spriteHue(userId: number): number {
-  // Golden-angle stepping: consecutive ids land far apart on the wheel, so the two people most
-  // likely to be in a room together are the least likely to be wearing the same colour.
-  return (userId * 137.508) % 360
-}
-
-interface SpritePalette {
-  o: string
-  C: string
-  S: string
-  E: string
-  H: string
-  K: string
-  P: string
-  B: string
-}
-
-function paletteFor(hue: number, self: boolean): SpritePalette {
-  return {
-    o: 'rgb(28 26 38)',
-    C: `hsl(${hue} 62% ${self ? 56 : 48}%)`,
-    S: 'rgb(247 206 168)',
-    E: 'rgb(28 26 38)',
-    H: 'rgb(78 52 38)',
-    K: `hsl(${hue} 45% ${self ? 38 : 32}%)`,
-    P: 'rgb(58 62 96)',
-    B: 'rgb(40 38 52)',
-  }
-}
-
-/**
- * Pre-rendered sprites, keyed by everything that changes their pixels.
- *
- * Drawing 256 one-pixel rectangles per person per frame would be 12,800 fills a frame in a
- * room of fifty — enough to cost real milliseconds for a picture that never changes. So each
- * variant is rasterised once into its own little canvas and thereafter blitted with a single
- * `drawImage`. The cache is small and bounded: a handful of variants per person in the room.
- */
-const spriteCache = new Map<string, HTMLCanvasElement>()
-
-/** How many device pixels each sprite pixel is rasterised at. 4× survives any sane zoom. */
-const SPRITE_SCALE = 4
-
-function spriteCanvas(hue: number, dir: SpriteDir, frame: 0 | 1, self: boolean): HTMLCanvasElement {
-  const key = `${Math.round(hue)}|${dir}|${frame}|${self ? 1 : 0}`
-  const cached = spriteCache.get(key)
-  if (cached) return cached
-
-  const palette = paletteFor(hue, self)
-  const canvas = document.createElement('canvas')
-  canvas.width = SPRITE_SIZE * SPRITE_SCALE
-  canvas.height = SPRITE_SIZE * SPRITE_SCALE
-
-  const ctx = canvas.getContext('2d')!
-  const rows = SPRITES[dir][frame]
-
-  for (let y = 0; y < SPRITE_SIZE; y++) {
-    const row = rows[y] ?? ''
-
-    for (let x = 0; x < SPRITE_SIZE; x++) {
-      const ch = row[x]
-      if (!ch || ch === '.') continue
-
-      const colour = palette[ch as keyof SpritePalette]
-      if (!colour) continue
-
-      ctx.fillStyle = colour
-      ctx.fillRect(x * SPRITE_SCALE, y * SPRITE_SCALE, SPRITE_SCALE, SPRITE_SCALE)
-    }
-  }
-
-  spriteCache.set(key, canvas)
-
-  return canvas
-}
-
-/**
- * Draw one person, standing on their tile.
- *
- * The sprite is anchored by its *feet* rather than its centre — a character stands on the
- * ground, so the tile they occupy is the one under their boots, and drawing them centred makes
- * everybody look like they're floating half a tile north of where they actually are.
- *
- * `imageSmoothingEnabled` goes off for the blit: this is pixel art, and letting the browser
- * interpolate it is exactly the mush the style exists to avoid.
- */
-export function drawTrainer(
-  ctx: CanvasRenderingContext2D,
-  cam: Camera,
-  who: { x: number, y: number, facing: Facing },
-  opts: { hue: number, self: boolean, walking: boolean, phase: number },
-): void {
-  const size = TILE * cam.zoom
-  // A shade over one tile, so a sprite reads as a person in a room rather than as a tile.
-  const drawn = size * 1.5
-  const p = toScreen(cam, who.x, who.y)
-
-  const dir: SpriteDir = who.facing === 'up' ? 'up' : who.facing === 'down' ? 'down' : 'right'
-  const frame: 0 | 1 = opts.walking && opts.phase % 2 === 1 ? 1 : 0
-  const sprite = spriteCanvas(opts.hue, dir, frame, opts.self)
-
-  const flip = who.facing === 'left'
-
-  ctx.save()
-  ctx.imageSmoothingEnabled = false
-  ctx.translate(p.x, p.y + size * 0.35)
-
-  if (flip) ctx.scale(-1, 1)
-
-  ctx.drawImage(sprite, -drawn / 2, -drawn, drawn, drawn)
-  ctx.restore()
-}
+export { drawTrainer, spriteHue, SPRITE_SIZE } from './spaceAvatar'
+export type { AvatarLook } from './spaceAvatar'
+export { drawPet, PETS } from './spacePets'
+export type { PetKind } from './spacePets'
 
 /**
  * A blank room of a given size — four walls and floor between them.

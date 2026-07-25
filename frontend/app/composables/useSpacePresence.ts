@@ -1,5 +1,8 @@
 import type { Facing, Occupant, SpaceMap } from '~/lib/spaceMapEngine'
+import type { AvatarLook } from '~/lib/spaceAvatar'
+import type { PetKind } from '~/lib/spacePets'
 import { facingOf, isWalkable, spawnPoint, step } from '~/lib/spaceMapEngine'
+import { normaliseLook } from '~/lib/spaceAvatar'
 
 /** How often a position may go out — matches the whiteboard's live layer and the co-op games. */
 const WHISPER_EVERY = 80
@@ -25,8 +28,24 @@ const STALE_AFTER = 15_000
 const PERSIST_EVERY = 5000
 /** Below this, a remote avatar has arrived and should stop its walk cycle. */
 const MOVING_EPSILON = 0.02
+/**
+ * How far behind you a pet trots, in tiles, and how much faster than you it can move.
+ *
+ * The gap is why it reads as *following* rather than as being dragged: it only moves at all
+ * once you're more than a tile away, so standing still leaves it standing next to you, and
+ * walking off pulls it after you a beat later. Slightly faster than a person so it catches up
+ * on the straights instead of falling further behind every corner.
+ */
+const PET_GAP = 1
+const PET_SPEED = SPEED * 1.15
+/** Past this it stops trying to walk and simply reappears at your heel — see petStep. */
+const PET_LOST = 5
 
-/** A position as it goes over the wire. Tiles, fractional, plus which way they're facing. */
+/**
+ * A position as it goes over the wire. Tiles, fractional, plus which way they're facing — and
+ * what they look like, which rides along for the same reason the name does: somebody who has
+ * just arrived has to be able to draw you from your very first whisper, without a lookup.
+ */
 interface MovePayload {
   id: number
   name: string
@@ -34,6 +53,8 @@ interface MovePayload {
   x: number
   y: number
   facing: Facing
+  look?: AvatarLook
+  pet?: PetKind | null
 }
 
 type RemoteOccupant = Occupant & { tx: number, ty: number, at: number }
@@ -144,20 +165,48 @@ export function useSpacePresence(channelId: number, map: Ref<SpaceMap | null>) {
       ? { x: remembered.x, y: remembered.y }
       : spawnPoint(m)
 
+    const facing = remembered?.facing ?? 'down'
+
     me.value = {
       id: user.value.id,
       name: user.value.name,
       avatar: user.value.avatar,
       x: at.x,
       y: at.y,
-      facing: remembered?.facing ?? 'down',
+      facing,
+      look: normaliseLook(user.value.space_avatar),
+      pet: user.value.space_pet ?? null,
+      // Standing beside you rather than on you, so it's visible the moment you walk in.
+      petAt: { x: at.x - 0.6, y: at.y + 0.3, facing },
     }
     placed = true
     whisperMove(true)
   }
 
+  /**
+   * Teleport, and tell the room at once.
+   *
+   * For the moments the game moves you rather than your legs — an Among Us meeting whisks
+   * everyone back to one spot. Snaps rather than walks (no easing), and forces the whisper so
+   * the jump lands on everyone else's screen immediately rather than on your next step.
+   */
+  function warp(x: number, y: number) {
+    if (!me.value) return
+    me.value = { ...me.value, x, y }
+    whisperMove(true)
+  }
+
   /** Someone else's remembered position, so the room is drawn right before they first move. */
-  function seed(occupants: Array<{ id: number, name: string, avatar: string | null, x: number | null, y: number | null, facing: Facing | null }>) {
+  function seed(occupants: Array<{
+    id: number
+    name: string
+    avatar: string | null
+    x: number | null
+    y: number | null
+    facing: Facing | null
+    look?: AvatarLook | null
+    pet?: PetKind | null
+  }>) {
     if (!map.value) return
 
     const next = { ...others.value }
@@ -174,6 +223,9 @@ export function useSpacePresence(channelId: number, map: Ref<SpaceMap | null>) {
         tx: o.x,
         ty: o.y,
         facing: o.facing ?? 'down',
+        look: normaliseLook(o.look),
+        pet: o.pet ?? null,
+        petAt: { x: o.x - 0.6, y: o.y + 0.3, facing: o.facing ?? 'down' },
         at: Date.now(),
       }
     }
@@ -223,6 +275,57 @@ export function useSpacePresence(channelId: number, map: Ref<SpaceMap | null>) {
 
     moveSelf(m, dt)
     interpolate(dt)
+    movePets(m, dt)
+  }
+
+  /**
+   * Trot every pet after its owner.
+   *
+   * Entirely local. Nothing about a pet goes over the wire but *which* creature it is, riding
+   * along with its owner's position — everybody runs this same function against the same
+   * positions and arrives at the same place, so a second stream of coordinates per person would
+   * buy nothing but traffic.
+   */
+  function movePets(m: SpaceMap, dt: number) {
+    if (me.value?.pet && me.value.petAt) petStep(m, me.value.petAt, me.value, dt)
+
+    for (const o of Object.values(others.value)) {
+      if (o.pet && o.petAt) petStep(m, o.petAt, o, dt)
+    }
+  }
+
+  /**
+   * One pet, one frame.
+   *
+   * Walks with the same collision the people do — a pet strolling through the wall you just
+   * walked round would be the sort of small wrongness that's hard to stop noticing — but gives
+   * up rather than pathfinding: past {@link PET_LOST} tiles it simply reappears at your heel.
+   * Anything cleverer is a navmesh, and the honest answer for a creature that has just spent
+   * ten seconds stuck on a couch is that it caught up while you weren't looking.
+   */
+  function petStep(m: SpaceMap, pet: { x: number, y: number, facing: Facing }, owner: { x: number, y: number, facing: Facing }, dt: number) {
+    const dx = owner.x - pet.x
+    const dy = owner.y - pet.y
+    const d = Math.hypot(dx, dy)
+
+    if (d > PET_LOST) {
+      pet.x = owner.x
+      pet.y = owner.y
+
+      return
+    }
+
+    if (d <= PET_GAP) return
+
+    // Never overshoot into its owner: at most the distance that closes the gap.
+    const travel = Math.min(PET_SPEED * dt, d - PET_GAP)
+    const next = step(m, pet, (dx / d) * travel, (dy / d) * travel)
+
+    // A pet whose owner has walked behind furniture can end up pressed against it. Sliding is
+    // handled by `step`; this catches the case where both axes are blocked, and waits.
+    pet.facing = facingOf(next.x - pet.x, next.y - pet.y, pet.facing)
+    pet.x = next.x
+    pet.y = next.y
   }
 
   function moveSelf(m: SpaceMap, dt: number) {
@@ -285,6 +388,8 @@ export function useSpacePresence(channelId: number, map: Ref<SpaceMap | null>) {
       x: Math.round(me.value.x * 10) / 10,
       y: Math.round(me.value.y * 10) / 10,
       facing: me.value.facing,
+      look: me.value.look,
+      pet: me.value.pet ?? null,
     } satisfies MovePayload)
   }
 
@@ -300,6 +405,14 @@ export function useSpacePresence(channelId: number, map: Ref<SpaceMap | null>) {
       existing.ty = payload.y
       existing.facing = payload.facing
       existing.at = Date.now()
+
+      // Somebody who has just changed their hair mid-room shouldn't have to walk out and back
+      // in for anyone to see it. Mutated in place, like the position, so it costs no re-render.
+      if (payload.look) existing.look = payload.look
+      existing.pet = payload.pet ?? null
+      if (existing.pet && !existing.petAt) {
+        existing.petAt = { x: payload.x, y: payload.y, facing: payload.facing }
+      }
 
       return
     }
@@ -317,6 +430,9 @@ export function useSpacePresence(channelId: number, map: Ref<SpaceMap | null>) {
         tx: payload.x,
         ty: payload.y,
         facing: payload.facing,
+        look: normaliseLook(payload.look),
+        pet: payload.pet ?? null,
+        petAt: { x: payload.x - 0.6, y: payload.y + 0.3, facing: payload.facing },
         at: Date.now(),
       },
     }
@@ -455,12 +571,34 @@ export function useSpacePresence(channelId: number, map: Ref<SpaceMap | null>) {
     releaseKeys()
   }
 
+  /**
+   * You changed how you look while standing in the room.
+   *
+   * Applied here rather than waited for on the next whisper, because the person most bothered
+   * by their new hair is the one who chose it — and the forced whisper that follows means
+   * everybody else sees it within the same frame or two rather than on your next step.
+   */
+  function restyle(look: AvatarLook, pet: PetKind | null) {
+    if (!me.value) return
+
+    me.value = {
+      ...me.value,
+      look,
+      pet,
+      petAt: me.value.petAt ?? { x: me.value.x - 0.6, y: me.value.y + 0.3, facing: me.value.facing },
+    }
+
+    whisperMove(true)
+  }
+
   return {
     me,
     others,
     moving,
     attached,
     place,
+    restyle,
+    warp,
     seed,
     tick,
     isWalking,

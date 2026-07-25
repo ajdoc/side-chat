@@ -26,6 +26,9 @@ class SideSpaceMapResource extends JsonResource
             'height' => $this->height,
             'tiles' => $this->tiles,
             'zones' => $this->zones,
+            // Furniture. Positions and kinds only — the browser has the same catalogue and
+            // looks the rest up, so there is nothing to send that it doesn't already know.
+            'objects' => $this->objects ?? [],
             'spawn' => $this->spawn,
             'updated_by' => $this->whenLoaded('editor', fn () => $this->editor?->name),
             'updated_at' => $this->updated_at,

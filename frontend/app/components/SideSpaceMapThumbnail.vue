@@ -1,20 +1,30 @@
 <script setup lang="ts">
-import { FLOOR, VOID } from '~/lib/spaceMapEngine'
+import { TILE_BRUSHES, VOID } from '~/lib/spaceMapEngine'
 
 /**
  * A tiny picture of a room, drawn straight from its tile grid.
  *
  * Deliberately not an illustration: the preset picker shows the actual geometry the server
- * will seed, so choosing "Office" and getting an office is something you can see before you
- * commit rather than after. SVG rather than canvas because it's static, it's small, and it
- * wants to scale with its box without anybody measuring anything.
+ * will seed, so choosing "Park" and getting a park is something you can see before you commit
+ * rather than after. SVG rather than canvas because it's static, it's small, and it wants to
+ * scale with its box without anybody measuring anything.
  *
- * One `<rect>` per *run* of identical tiles rather than per tile — a 30×20 grid is 600 tiles
- * and most rows are one long stretch of floor, so this is usually a couple of dozen rects.
+ * One `<rect>` per *run* of identical tiles rather than per tile — a 30×20 grid is 600 tiles and
+ * most rows are one long stretch of the same thing, so this is usually a couple of dozen rects.
+ *
+ * Colours come from the same swatches the editor's brushes use, which is what makes the
+ * thumbnail recognisably the room rather than a floor plan of it: the pond is blue, the path is
+ * sand-coloured, the trees are green. It doesn't attempt the tile *art* — at four pixels a tile
+ * there is nothing to draw.
  */
 const props = defineProps<{ tiles: string[], width: number, height: number }>()
 
-interface Run { x: number, y: number, w: number, floor: boolean }
+interface Run { x: number, y: number, w: number, fill: string }
+
+/** Tile character → the flat colour that stands for it. */
+const SWATCH: Record<string, string> = Object.fromEntries(
+  TILE_BRUSHES.map(b => [b.tile, b.swatch]),
+)
 
 const runs = computed<Run[]>(() => {
   const out: Run[] = []
@@ -30,7 +40,7 @@ const runs = computed<Run[]>(() => {
       // nothing at all — it's what's *outside* the room).
       if (x === props.width || here !== prev) {
         if (prev !== undefined && prev !== VOID) {
-          out.push({ x: start, y, w: x - start, floor: prev === FLOOR })
+          out.push({ x: start, y, w: x - start, fill: SWATCH[prev] ?? '#9ca3af' })
         }
         start = x
       }
@@ -55,7 +65,7 @@ const runs = computed<Run[]>(() => {
       :y="r.y"
       :width="r.w"
       height="1"
-      :class="r.floor ? 'fill-background' : 'fill-muted-foreground/50'"
+      :fill="r.fill"
     />
   </svg>
 </template>

@@ -15,24 +15,16 @@ import {
 definePageMeta({ middleware: 'auth', layout: 'app' })
 
 const route = useRoute()
-const api = useApi()
 const { createChannel } = useServer()
 const serverId = computed(() => Number(route.params.serverId))
 
-/** A room you can start a Side Space as. The server owns these; we only draw them. */
-interface MapPreset {
-  key: string
-  label: string
-  description: string
-  width: number
-  height: number
-  tiles: string[]
-}
+// The rooms a Side Space can start as — shared with the editor, which loads the same list to
+// swap an existing room's layout. See useSpacePresets.
+const { presets, load: fetchPresets, error: presetError } = useSpacePresets()
 
 const type = ref<ChannelType>('text')
 const name = ref('')
 const preset = ref('office')
-const presets = ref<MapPreset[]>([])
 const error = ref('')
 const loading = ref(false)
 
@@ -42,20 +34,12 @@ const channelTypes: { value: ChannelType, label: string, hint: string, icon: any
   { value: 'space', label: 'Side Space', hint: 'A room you walk around — you hear whoever is near you', icon: MapIcon },
 ]
 
-/**
- * Fetched rather than hardcoded, so the picker can't drift from the rooms the server will
- * actually build. Only when it's needed — most channels aren't Side Spaces.
- */
+/** Loaded only when it's needed — most channels aren't Side Spaces. */
 async function loadPresets() {
-  if (presets.value.length) return
+  const list = await fetchPresets()
 
-  try {
-    const res = await api<{ data: MapPreset[] }>('/api/space/map-presets')
-    presets.value = res.data
-    preset.value = res.data[0]?.key ?? 'office'
-  } catch {
-    error.value = 'Could not load the room layouts.'
-  }
+  if (presetError.value) error.value = presetError.value
+  else preset.value = list[0]?.key ?? 'office'
 }
 
 watch(type, (t) => {
