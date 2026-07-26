@@ -100,6 +100,22 @@ const error = ref('')
 /** Set when a piece can't go where you clicked, and cleared as soon as one can. */
 const refused = ref('')
 
+/**
+ * The tool rail, on a screen that can't spare 256px for it.
+ *
+ * Painting already works with a finger — the grid takes pointers, not mouse events — but a
+ * fixed rail beside a phone-width canvas leaves a strip of room too small to aim at. So on a
+ * narrow window the rail becomes a drawer over the grid, and picking a brush closes it: you
+ * choose a thing, then you place it, and the grid has the screen for the half that matters.
+ */
+const { narrow } = useNavDrawer()
+const showTools = ref(false)
+
+/** Picking a brush on a phone means "now let me put it down" — so the drawer gets out of the way. */
+function chose() {
+  if (narrow.value) showTools.value = false
+}
+
 const canvas = ref<HTMLCanvasElement | null>(null)
 const wrap = ref<HTMLElement | null>(null)
 const camera = reactive<Camera>({ x: 0, y: 0, zoom: 1, width: 0, height: 0 })
@@ -545,17 +561,20 @@ function chooseTile(char: string) {
   tool.value = 'tile'
   tile.value = char
   refused.value = ''
+  chose()
 }
 
 function chooseDecor(kindName: string) {
   tool.value = 'decor'
   decor.value = kindName
   refused.value = ''
+  chose()
 }
 
 function chooseTool(id: Tool) {
   tool.value = id
   refused.value = ''
+  chose()
 }
 
 watch([width, height], () => fit())
@@ -585,14 +604,19 @@ onBeforeUnmount(() => {
           {{ isDecorMode ? 'Decorate the room' : 'Edit the room' }}
           <AlphaBadge hint="The editor is new — save often, and tell us what it gets wrong." />
         </span>
-        <!-- Renaming is part of rebuilding the room, so it's the owner's alone. -->
-        <Input v-if="!isDecorMode" v-model="name" class="h-8 w-48" placeholder="Room name" />
+        <!-- Renaming is part of rebuilding the room, so it's the owner's alone. Off the phone's
+             header entirely: it's the one control here that isn't needed to finish a change. -->
+        <Input v-if="!isDecorMode && !narrow" v-model="name" class="h-8 w-48" placeholder="Room name" />
         <span v-else class="text-sm text-muted-foreground">{{ name }}</span>
       </div>
 
       <div class="flex shrink-0 items-center gap-2">
         <p v-if="error" class="max-w-sm truncate text-xs text-destructive" :title="error">{{ error }}</p>
-        <Button variant="outline" size="sm" :disabled="saving" @click="emit('close')">Cancel</Button>
+        <Button v-if="narrow" variant="outline" size="sm" class="gap-1.5" @click="showTools = !showTools">
+          <Sofa class="h-4 w-4" /> Tools
+        </Button>
+        <!-- The X beside it does the same thing, and a phone header has room for one of them. -->
+        <Button v-if="!narrow" variant="outline" size="sm" :disabled="saving" @click="emit('close')">Cancel</Button>
         <Button size="sm" :disabled="saving" @click="onSave">
           <Loader2 v-if="saving" class="mr-1.5 h-4 w-4 animate-spin" />
           {{ saving ? 'Saving…' : (isDecorMode ? 'Save furniture' : 'Save room') }}
@@ -603,9 +627,16 @@ onBeforeUnmount(() => {
       </div>
     </header>
 
-    <div class="flex min-h-0 flex-1">
-      <!-- Tools -->
-      <aside class="w-64 shrink-0 space-y-4 overflow-y-auto border-r p-3">
+    <div class="relative flex min-h-0 flex-1">
+      <!-- Tapping the grid behind the open drawer puts it away rather than painting through it. -->
+      <div v-if="narrow && showTools" class="absolute inset-0 z-10 bg-black/30" @click="showTools = false" />
+
+      <!-- Tools: a rail beside the grid, or a drawer over it on a phone. -->
+      <aside
+        v-if="!narrow || showTools"
+        class="w-64 shrink-0 space-y-4 overflow-y-auto border-r bg-background p-3"
+        :class="narrow ? 'absolute inset-y-0 left-0 z-20 max-w-[85%] shadow-xl' : undefined"
+      >
         <!-- The ground. Owner only — a member decorating can't repaint the floor. -->
         <div v-if="!isDecorMode" class="space-y-1.5">
           <Label class="text-xs text-muted-foreground">Ground</Label>
@@ -761,8 +792,8 @@ onBeforeUnmount(() => {
           @pointercancel="onPointerUp"
         />
         <p class="pointer-events-none absolute bottom-2 left-2 rounded bg-background/85 px-2 py-1 text-[11px] text-muted-foreground">
-          {{ tool === 'decor' ? 'Click to put it down. Furniture places one at a time.'
-            : tool === 'erase-decor' ? 'Click a piece of furniture to remove it.'
+          {{ tool === 'decor' ? `${narrow ? 'Tap' : 'Click'} to put it down. Furniture places one at a time.`
+            : tool === 'erase-decor' ? `${narrow ? 'Tap' : 'Click'} a piece of furniture to remove it.`
               : 'Drag to paint. The green square is where people walk in.' }}
         </p>
         <p

@@ -274,6 +274,26 @@ let deviceChangeHandler: (() => void) | undefined
  */
 let proximityMode = false
 const roomMembers = new Map<number, { id: number, name: string, avatar: string | null }>()
+/**
+ * The same roster, as something you can watch.
+ *
+ * `roomMembers` is a plain Map because it's read on every animation frame and rewritten on
+ * every arrival; making it reactive would re-render the room for each. But *somebody having
+ * left* is exactly the kind of thing other parts of the room need to hear about — the map draws
+ * its own avatars from whispers, and a person who walks out stops whispering rather than
+ * announcing it, which left them standing there until the 15-second staleness sweep noticed.
+ *
+ * So the ids alone are mirrored into a shallowRef, written only when the set actually changes.
+ * {@link useSpacePresence} watches it and drops anyone who is no longer on the channel.
+ */
+const memberIds = shallowRef<number[]>([])
+
+function syncMemberIds() {
+  const ids = [...roomMembers.keys()]
+  const before = memberIds.value
+
+  if (ids.length !== before.length || ids.some(id => !before.includes(id))) memberIds.value = ids
+}
 const proximityGains = new Map<number, number>()
 /** Pending teardowns, so a peer who steps briefly out of range isn't dropped on the spot. */
 const dropTimers = new Map<number, ReturnType<typeof setTimeout>>()
@@ -1485,6 +1505,7 @@ export function useVoice() {
             })
           }
         }
+        syncMemberIds()
         status.value = 'connected'
 
         // Your own arrival, for you. `here` is the one place we know we've actually landed —
@@ -1494,6 +1515,7 @@ export function useVoice() {
       })
       .joining((member: { id: number, name: string, avatar: string | null }) => {
         roomMembers.set(member.id, member)
+        syncMemberIds()
 
         if (!proximityMode) createPeer(member.id, member.name, member.avatar)
         // They joined after our last state change, so their roster snapshot may predate
@@ -1511,6 +1533,7 @@ export function useVoice() {
         const name = peers.value.find(p => p.id === member.id)?.name ?? member.name
 
         roomMembers.delete(member.id)
+        syncMemberIds()
         proximityGains.delete(member.id)
         const pending = dropTimers.get(member.id)
         if (pending) {
@@ -1748,6 +1771,7 @@ export function useVoice() {
 
     if (!on) {
       roomMembers.clear()
+      syncMemberIds()
       proximityGains.clear()
       for (const timer of dropTimers.values()) clearTimeout(timer)
       dropTimers.clear()
@@ -2475,6 +2499,8 @@ export function useVoice() {
     setPeerInRange,
     outOfEarshot,
     knownMembers,
+    /** Who is on the presence channel, as a ref — see {@link memberIds}. */
+    memberIds,
     fireEffect,
     inputDevices,
     outputDevices,

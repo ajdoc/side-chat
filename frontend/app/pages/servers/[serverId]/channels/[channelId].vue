@@ -24,13 +24,11 @@ const { channels, server } = useServer()
 const channelId = computed(() => Number(route.params.channelId))
 const channel = computed(() => channels.value.find(c => c.id === channelId.value) ?? null)
 const isVoice = computed(() => channel.value?.type === 'voice')
-// The native builds are chat and voice only, so a Side Space opens as its timeline alone —
-// the room itself is withheld rather than the channel being unreachable. See
-// middleware/native-scope.global.ts.
-const { isNative } = usePlatform()
+// A Side Space is the same room everywhere now — web, desktop and phone. It has no keyboard
+// requirement left: you walk by tapping and dragging the floor, and the stage folds its
+// toolbar and its dock down to a phone's width itself. See SideSpaceStage.
 const { narrow } = useNavDrawer()
-const isSpace = computed(() => channel.value?.type === 'space' && !isNative.value)
-const isWithheldSpace = computed(() => channel.value?.type === 'space' && isNative.value)
+const isSpace = computed(() => channel.value?.type === 'space')
 /** Only the server's owner may rebuild a room; the API refuses everybody else besides. */
 const canEditMap = computed(() => !!server.value?.is_owner)
 
@@ -103,12 +101,6 @@ function openDesk() {
     </template>
     <template v-else-if="isVoice" #call>
       <VoiceChannel :channel="channel" />
-    </template>
-    <template v-else-if="isWithheldSpace" #call>
-      <p class="border-b bg-muted/40 px-4 py-2 text-sm text-muted-foreground">
-        Side Spaces aren’t in the app yet — open this channel on the web to walk around.
-        Its chat works here as normal.
-      </p>
     </template>
   </ChannelView>
 </template>

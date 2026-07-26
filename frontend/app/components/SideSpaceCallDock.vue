@@ -24,7 +24,21 @@ import type { Peer } from '~/types'
  * volume, the separate volume for what they're sharing, the watch/stop-watching stage. None of
  * it is new; a Side Space simply had no surface for it until now.
  */
-defineProps<{ canModerate?: boolean }>()
+const props = defineProps<{
+  canModerate?: boolean
+  /**
+   * A sheet over the room rather than a rail beside it — what a phone-width window asks for.
+   *
+   * The panel is unchanged in what it holds; every control here (a screen, its volume, each
+   * person's volume, muting them for yourself, an owner's force-mute) matters as much on a phone
+   * as anywhere, so none of it is dropped. What changes is that it's opened deliberately, fills
+   * the room's area while it's up, and closes with the X — instead of being permanently squeezed
+   * into a strip too short to show a screen and a slider at once.
+   */
+  sheet?: boolean
+}>()
+
+const emit = defineEmits<{ close: [] }>()
 
 const { user } = useAuth()
 const {
@@ -55,7 +69,13 @@ const {
  */
 const nearby = computed(() => peers.value.filter(p => !outOfEarshot(p)))
 
+/**
+ * Folded up to its header. The rail's own space-saver, and meaningless as a sheet — a sheet you
+ * opened on purpose and close with the X.
+ */
 const collapsed = ref(false)
+
+watch(() => props.sheet, on => { if (on) collapsed.value = false })
 const stageEl = ref<HTMLElement | null>(null)
 const isFullscreen = ref(false)
 const watching = ref<number | 'self' | null>(null)
@@ -124,30 +144,65 @@ watch(sharers, (now, before) => {
 // to make a sound, so closing it silences it too.
 watch(watching, key => setWatchedScreen(key), { immediate: true })
 
-async function toggleFullscreen() {
-  if (!stageEl.value) return
+/**
+ * Fullscreen, where there is one.
+ *
+ * iOS' web view has no Element.requestFullscreen at all — `document.fullscreenEnabled` is how it
+ * says so — and calling it there rejects into nothing. The button is hidden rather than left to
+ * fail, and the call is guarded anyway because the check runs at mount and the DOM doesn't
+ * promise the method will still be there.
+ */
+const canFullscreen = ref(false)
 
-  if (document.fullscreenElement) await document.exitFullscreen()
-  else await stageEl.value.requestFullscreen()
+async function toggleFullscreen() {
+  if (!stageEl.value || !canFullscreen.value) return
+
+  try {
+    if (document.fullscreenElement) await document.exitFullscreen()
+    else await stageEl.value.requestFullscreen()
+  }
+  catch {
+    // Refused (a permissions policy, or a gesture the browser didn't count). Nothing to say —
+    // the screen is still playing in the panel, which is what you were watching it in.
+  }
 }
 
 function onFullscreenChange() {
   isFullscreen.value = !!document.fullscreenElement
 }
 
-onMounted(() => document.addEventListener('fullscreenchange', onFullscreenChange))
+onMounted(() => {
+  canFullscreen.value = !!document.fullscreenEnabled && typeof Element.prototype.requestFullscreen === 'function'
+  document.addEventListener('fullscreenchange', onFullscreenChange)
+})
 onBeforeUnmount(() => document.removeEventListener('fullscreenchange', onFullscreenChange))
 </script>
 
 <template>
-  <aside class="flex min-h-0 flex-col border-l bg-card/40">
-    <header class="flex h-9 shrink-0 items-center justify-between gap-2 border-b px-2.5">
+  <aside
+    class="flex min-h-0 flex-col"
+    :class="sheet ? 'border-l-0 bg-background shadow-xl' : 'border-l bg-card/40'"
+  >
+    <header
+      class="flex shrink-0 items-center justify-between gap-2 border-b px-2.5"
+      :class="sheet ? 'h-11' : 'h-9'"
+    >
       <span class="flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
         <Users class="h-3.5 w-3.5" />
         In earshot
         <span class="tabular-nums">{{ nearby.length }}</span>
       </span>
       <button
+        v-if="sheet"
+        type="button"
+        class="rounded p-1.5 text-muted-foreground transition hover:bg-muted hover:text-foreground"
+        aria-label="Close"
+        @click="emit('close')"
+      >
+        <X class="h-4 w-4" />
+      </button>
+      <button
+        v-else
         type="button"
         class="rounded px-1.5 py-0.5 text-[11px] text-muted-foreground transition hover:bg-muted hover:text-foreground"
         @click="collapsed = !collapsed"
@@ -185,7 +240,7 @@ onBeforeUnmount(() => document.removeEventListener('fullscreenchange', onFullscr
           </button>
 
           <button
-            v-if="stage.key !== 'self'"
+            v-if="stage.key !== 'self' && canFullscreen"
             type="button"
             class="absolute right-1.5 top-1.5 grid h-7 w-7 place-items-center rounded-md bg-black/50 text-white opacity-0 reveal-touch transition hover:bg-black/70 focus:opacity-100 group-hover:opacity-100"
             :title="isFullscreen ? 'Exit fullscreen' : 'Fullscreen'"
@@ -252,6 +307,8 @@ onBeforeUnmount(() => document.removeEventListener('fullscreenchange', onFullscr
       </p>
 
       <!-- Everyone in earshot. Your own tile first, so the grid never reflows around you. -->
+      <!-- One column: the tiles carry full-width volume sliders, and two columns of those on a
+           phone leaves each too short to aim a thumb at. -->
       <div class="grid shrink-0 grid-cols-1 gap-2">
         <VoiceTile
           :peer="selfPeer"

@@ -6,6 +6,7 @@ import {
   Loader2,
   Map as MapIcon,
   MessageSquare,
+  MoreHorizontal,
   Mic,
   MicOff,
   Pencil,
@@ -401,12 +402,63 @@ const { width: stageHeight, startResize } = useResizable('space-stage', 420, {
   edge: 'bottom',
 })
 
+/**
+ * A phone-shaped window, and what the room does about it.
+ *
+ * The room itself needed nothing to work on a phone — walking has been a tap-and-drag on the
+ * canvas since the web build, and "press E" has always had a button beside it. What didn't fit
+ * was the furniture around it: nine icon buttons in one header row, and a 224px dock of faces
+ * bolted to the side of a 390px screen. So on a narrow window the header keeps only the
+ * controls you reach for mid-conversation (mic, and the way out) and folds the rest into a
+ * menu, and the dock moves under the room instead of beside it.
+ *
+ * Same `(max-width: 767px)` question the sidebar asks, deliberately: this is about the width of
+ * the window, not about which shell it is. A desktop window dragged narrow gets the same
+ * treatment, and a tablet in landscape keeps the full row.
+ */
+const { narrow } = useNavDrawer()
+
+/** The folded-away half of the toolbar, open. Narrow windows only — wide ones show it inline. */
+const showMore = ref(false)
+
+/**
+ * The people panel, on a narrow window: a sheet over the room rather than a rail beside it.
+ *
+ * It was a strip under the room to begin with, collapsed so as not to eat the height. That was
+ * wrong twice over — it was easy to miss entirely, and half-open it was too short to hold a
+ * screen *and* the volume sliders and per-person mutes that are the whole reason the panel
+ * exists. As a sheet it gets the room's full area for as long as you're using it, and the room
+ * is still there underneath the moment you close it.
+ */
+const showPeople = ref(false)
+
+watch(narrow, () => {
+  showMore.value = false
+  showPeople.value = false
+})
+
+/** Somebody near you is sharing something — worth a dot on the button that opens the panel. */
+const someoneSharing = computed(() => peers.value.some(p => p.screenSharing || p.audioSharing))
+
+/** A menu row when folded away, a bare icon button when the header has room for it. */
+const toolClass = computed(() => narrow.value
+  ? 'flex w-full items-center gap-2 rounded-md px-2 py-2 text-left text-sm transition-colors hover:bg-muted'
+  : 'rounded p-1.5 transition-colors hover:bg-muted')
+
+function fromMenu(run: () => void) {
+  showMore.value = false
+  run()
+}
+
 /** Only a server's owner may move somebody else's microphone or remove them from the room. */
 const { server } = useServer()
 const canModerate = computed(() =>
   server.value?.id === props.channel.server_id && !!server.value?.is_owner)
 /** Are we in *this* room's call, as opposed to some other channel's? */
 const inThisRoom = computed(() => inCall.value && activeCallChannel.value === props.channel.id)
+
+// Nothing left to look at in the people sheet once you've walked out.
+watch(inThisRoom, (still) => { if (!still) showPeople.value = false })
 
 /** The zone you're standing in, named in a banner so the audio rules are never a surprise. */
 const currentZone = computed(() => (map.value && me.value ? zoneAt(map.value, me.value.x, me.value.y) : null))
@@ -939,7 +991,10 @@ function drawPrompt(ctx: CanvasRenderingContext2D) {
 
   const size = TILE * camera.zoom
   const p = toScreen(camera, object.x + (kind.w - 1) / 2, object.y - 0.6)
-  const label = `E · ${kind.verb ?? 'Use'}`
+  // No key to name on a phone — there, the tag is the verb alone and the button below is how
+  // you do it.
+  const verb = kind.verb ?? 'Use'
+  const label = narrow.value ? verb : `E · ${verb}`
 
   ctx.save()
   ctx.font = `600 ${Math.max(10, size * 0.3)}px system-ui, sans-serif`
@@ -1221,170 +1276,230 @@ watch(inThisRoom, (now) => {
         >{{ currentZone.name }}</span>
       </div>
 
-      <div class="flex shrink-0 items-center gap-1">
-        <template v-if="inThisRoom">
-          <button
-            type="button"
-            class="rounded p-1.5 transition-colors hover:bg-muted"
-            :class="micOpen ? 'text-foreground' : 'text-destructive'"
-            :title="selfMuted ? 'Unmute' : 'Mute'"
-            @click="toggleMute"
-          >
-            <component :is="micOpen ? Mic : MicOff" class="h-4 w-4" />
-          </button>
-          <button
-            type="button"
-            class="rounded p-1.5 transition-colors hover:bg-muted"
-            :class="selfDeafened ? 'text-destructive' : 'text-foreground'"
-            :title="selfDeafened ? 'Undeafen' : 'Deafen'"
-            @click="toggleDeafen"
-          >
-            <component :is="selfDeafened ? HeadphoneOff : Headphones" class="h-4 w-4" />
-          </button>
-          <button
-            type="button"
-            class="rounded p-1.5 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
-            :title="isCameraOn ? 'Turn camera off' : 'Turn camera on'"
-            @click="toggleCamera"
-          >
-            <component :is="isCameraOn ? Video : VideoOff" class="h-4 w-4" />
-          </button>
-          <button
-            type="button"
-            class="rounded p-1.5 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
-            :title="isSharing ? 'Stop sharing' : 'Share your screen'"
-            @click="toggleScreenShare"
-          >
-            <component :is="isSharing ? ScreenShareOff : ScreenShare" class="h-4 w-4" />
-          </button>
-          <!-- Sound with no picture: a track, or a video everyone's listening to rather than
-               watching. Rides the same slot a screen's audio does. -->
-          <button
-            type="button"
-            class="rounded p-1.5 transition-colors hover:bg-muted"
-            :class="isAudioSharing ? 'text-primary' : 'text-muted-foreground hover:text-foreground'"
-            :title="isAudioSharing ? 'Stop sharing sound' : 'Share sound from a tab'"
-            @click="toggleAudioShare"
-          >
-            <AudioLines class="h-4 w-4" />
-          </button>
-          <Button variant="ghost" size="sm" class="gap-1.5 text-destructive" @click="leave">
-            <PhoneOff class="h-4 w-4" /> Leave
-          </Button>
-        </template>
+      <div class="relative flex shrink-0 items-center gap-1">
+        <!-- The two controls that never fold away: whether you're audible, and the way in or
+             out. On a phone everything else is a tap further away, which is the right trade —
+             these are the ones you reach for mid-sentence. -->
+        <button
+          v-if="inThisRoom"
+          type="button"
+          class="rounded p-1.5 transition-colors hover:bg-muted"
+          :class="micOpen ? 'text-foreground' : 'text-destructive'"
+          :title="selfMuted ? 'Unmute' : 'Mute'"
+          @click="toggleMute"
+        >
+          <component :is="micOpen ? Mic : MicOff" class="h-4 w-4" />
+        </button>
 
-        <Button v-else size="sm" class="gap-1.5" :disabled="joining || loading" @click="enter">
-          <Loader2 v-if="joining" class="h-4 w-4 animate-spin" />
-          <MapIcon v-else class="h-4 w-4" />
-          {{ joining ? 'Entering…' : 'Enter the space' }}
+        <!-- The way to everyone's cameras, screens and volumes, which on a wide window is simply
+             a panel on the right and needs no button at all. -->
+        <button
+          v-if="narrow && inThisRoom"
+          type="button"
+          class="relative rounded p-1.5 transition-colors hover:bg-muted"
+          :class="showPeople ? 'text-primary' : 'text-muted-foreground'"
+          :aria-expanded="showPeople"
+          title="Who's in earshot — cameras, screens and volumes"
+          @click="showPeople = !showPeople"
+        >
+          <Users class="h-4 w-4" />
+          <!-- Somebody put a screen or a track on while you were looking at the room. -->
+          <span
+            v-if="someoneSharing && !showPeople"
+            class="absolute right-0.5 top-0.5 h-2 w-2 rounded-full bg-primary ring-2 ring-background"
+          />
+        </button>
+
+        <Button v-if="inThisRoom" variant="ghost" size="sm" class="gap-1.5 text-destructive" @click="leave">
+          <PhoneOff class="h-4 w-4" /> <span :class="narrow ? 'sr-only' : undefined">Leave</span>
         </Button>
 
-        <!-- Show or hide the conversation. Hidden by default, and remembered. It stays mounted
-             either way and keeps its scroll, draft and subscription — see ChannelView's
-             `collapseTimeline` — so this is free to flip as often as you like. -->
-        <button
-          type="button"
-          class="flex items-center gap-1.5 rounded px-2 py-1 text-xs text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
-          :title="chatHidden ? 'Show the channel chat below the room' : 'Hide the chat and give the room the whole window'"
-          @click="chatHidden = !chatHidden"
-        >
-          <MessageSquare class="h-3.5 w-3.5" />
-          {{ chatHidden ? 'Show chat' : 'Hide chat' }}
-        </button>
+        <Button v-if="!inThisRoom" size="sm" class="gap-1.5" :disabled="joining || loading" @click="enter">
+          <Loader2 v-if="joining" class="h-4 w-4 animate-spin" />
+          <MapIcon v-else class="h-4 w-4" />
+          {{ joining ? 'Entering…' : narrow ? 'Enter' : 'Enter the space' }}
+        </Button>
 
-        <!-- What you look like walking around. Yours, not the room's, so it isn't owner-gated. -->
         <button
+          v-if="narrow"
           type="button"
           class="rounded p-1.5 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
-          title="Change how you look, and pick a companion"
-          @click="dressing = true"
+          :aria-expanded="showMore"
+          title="More room controls"
+          @click="showMore = !showMore"
         >
-          <Shirt class="h-4 w-4" />
+          <MoreHorizontal class="h-4 w-4" />
         </button>
 
-        <!-- Start a game. Only when you're in the room and none is already on the table; a game in
-             progress is driven by the panel over the map, not from up here. -->
-        <div v-if="canProposeGame" class="relative">
+        <!-- Everything else: inline on a wide header, a menu under the ⋯ on a narrow one. It's
+             one list either way, wearing different clothes (see `toolClass`), so there is no
+             second copy of these buttons to keep in step. -->
+        <div
+          v-if="!narrow || showMore"
+          :class="narrow
+            ? 'absolute right-0 top-full z-30 mt-1 w-56 space-y-0.5 rounded-lg border bg-background p-1.5 shadow-xl'
+            : 'flex items-center gap-1'"
+        >
+          <template v-if="inThisRoom">
+            <button
+              type="button"
+              :class="[toolClass, selfDeafened ? 'text-destructive' : 'text-foreground']"
+              :title="selfDeafened ? 'Undeafen' : 'Deafen'"
+              @click="fromMenu(toggleDeafen)"
+            >
+              <component :is="selfDeafened ? HeadphoneOff : Headphones" class="h-4 w-4 shrink-0" />
+              <span v-if="narrow">{{ selfDeafened ? 'Undeafen' : 'Deafen' }}</span>
+            </button>
+            <button
+              type="button"
+              :class="[toolClass, 'text-muted-foreground hover:text-foreground']"
+              :title="isCameraOn ? 'Turn camera off' : 'Turn camera on'"
+              @click="fromMenu(toggleCamera)"
+            >
+              <component :is="isCameraOn ? Video : VideoOff" class="h-4 w-4 shrink-0" />
+              <span v-if="narrow">{{ isCameraOn ? 'Turn camera off' : 'Turn camera on' }}</span>
+            </button>
+            <button
+              type="button"
+              :class="[toolClass, 'text-muted-foreground hover:text-foreground']"
+              :title="isSharing ? 'Stop sharing' : 'Share your screen'"
+              @click="fromMenu(toggleScreenShare)"
+            >
+              <component :is="isSharing ? ScreenShareOff : ScreenShare" class="h-4 w-4 shrink-0" />
+              <span v-if="narrow">{{ isSharing ? 'Stop sharing' : 'Share your screen' }}</span>
+            </button>
+            <!-- Sound with no picture: a track, or a video everyone's listening to rather than
+                 watching. Rides the same slot a screen's audio does. -->
+            <button
+              type="button"
+              :class="[toolClass, isAudioSharing ? 'text-primary' : 'text-muted-foreground hover:text-foreground']"
+              :title="isAudioSharing ? 'Stop sharing sound' : 'Share sound from a tab'"
+              @click="fromMenu(toggleAudioShare)"
+            >
+              <AudioLines class="h-4 w-4 shrink-0" />
+              <span v-if="narrow">{{ isAudioSharing ? 'Stop sharing sound' : 'Share sound' }}</span>
+            </button>
+          </template>
+
+          <!-- Show or hide the conversation. Hidden by default, and remembered. It stays mounted
+               either way and keeps its scroll, draft and subscription — see ChannelView's
+               `collapseTimeline` — so this is free to flip as often as you like. -->
           <button
             type="button"
-            class="rounded p-1.5 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
-            title="Start a game in the room"
-            @click="togglePropose"
+            :class="[
+              narrow ? toolClass : 'flex items-center gap-1.5 rounded px-2 py-1 text-xs transition-colors hover:bg-muted',
+              'text-muted-foreground hover:text-foreground',
+            ]"
+            :title="chatHidden ? 'Show the channel chat below the room' : 'Hide the chat and give the room the whole window'"
+            @click="fromMenu(() => (chatHidden = !chatHidden))"
           >
-            <Gamepad2 class="h-4 w-4" />
+            <MessageSquare class="h-3.5 w-3.5 shrink-0" />
+            {{ chatHidden ? 'Show chat' : 'Hide chat' }}
           </button>
 
-          <div
-            v-if="showPropose"
-            class="absolute right-0 top-full z-30 mt-1 w-60 space-y-1 rounded-lg border bg-background p-1.5 shadow-xl"
+          <!-- What you look like walking around. Yours, not the room's, so it isn't owner-gated. -->
+          <button
+            type="button"
+            :class="[toolClass, 'text-muted-foreground hover:text-foreground']"
+            title="Change how you look, and pick a companion"
+            @click="fromMenu(() => (dressing = true))"
           >
-            <!-- The games to choose from. A duel switches this list to a list of people. -->
-            <template v-if="!challengeType">
-              <p class="px-2 py-1 text-[11px] font-medium text-muted-foreground">Start a game</p>
-              <button
-                v-for="g in gameCatalogue"
-                :key="g.type"
-                type="button"
-                class="w-full rounded-md px-2 py-1.5 text-left transition-colors hover:bg-muted"
-                @click="onProposeGame(g.type)"
-              >
-                <span class="block text-sm font-medium">
-                  {{ g.label }}
-                  <span v-if="g.mode === 'challenge'" class="text-[10px] font-normal text-muted-foreground">· challenge</span>
-                </span>
-                <span class="block text-[11px] leading-snug text-muted-foreground">{{ g.blurb }}</span>
-              </button>
-              <p v-if="!gameCatalogue.length" class="px-2 py-1 text-xs text-muted-foreground">Loading…</p>
-            </template>
+            <Shirt class="h-4 w-4 shrink-0" />
+            <span v-if="narrow">Change how you look</span>
+          </button>
 
-            <!-- Who to challenge. -->
-            <template v-else>
-              <button
-                class="flex w-full items-center gap-1 px-2 py-1 text-[11px] font-medium text-muted-foreground hover:text-foreground"
-                @click="challengeType = null"
-              >
-                ‹ Pick who to battle
-              </button>
-              <button
-                v-for="t in challengeTargets"
-                :key="t.id"
-                type="button"
-                class="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm transition-colors hover:bg-muted"
-                @click="onChallenge(t.id)"
-              >
-                <span class="h-2.5 w-2.5 shrink-0 rounded-full" :style="{ backgroundColor: `hsl(${spriteHue(t.id)} 62% 52%)` }" />
-                <span class="min-w-0 flex-1 truncate">{{ t.name }}</span>
-              </button>
-              <p v-if="!challengeTargets.length" class="px-2 py-1 text-xs text-muted-foreground">Nobody else is here to challenge.</p>
-            </template>
-          </div>
+          <!-- Start a game. Only when you're in the room and none is already on the table; a game
+               in progress is driven by the panel over the map, not from up here. -->
+          <button
+            v-if="canProposeGame"
+            type="button"
+            :class="[toolClass, 'text-muted-foreground hover:text-foreground']"
+            title="Start a game in the room"
+            @click="fromMenu(togglePropose)"
+          >
+            <Gamepad2 class="h-4 w-4 shrink-0" />
+            <span v-if="narrow">Start a game</span>
+          </button>
+
+          <!-- Decorating is open to anyone; it only ever touches the furniture. Hidden from the
+               owner, who reaches the same furniture (and everything else) through the full editor. -->
+          <button
+            v-if="!canEdit && !editing"
+            type="button"
+            :class="[toolClass, 'text-muted-foreground hover:text-foreground']"
+            title="Rearrange the furniture"
+            @click="fromMenu(() => (editing = 'decor'))"
+          >
+            <Sofa class="h-4 w-4 shrink-0" />
+            <span v-if="narrow">Rearrange the furniture</span>
+          </button>
+
+          <button
+            v-if="canEdit && !editing"
+            type="button"
+            :class="[toolClass, 'text-muted-foreground hover:text-foreground']"
+            title="Edit this room"
+            @click="fromMenu(() => (editing = 'full'))"
+          >
+            <Pencil class="h-4 w-4 shrink-0" />
+            <span v-if="narrow">Edit this room</span>
+          </button>
         </div>
 
-        <!-- Decorating is open to anyone; it only ever touches the furniture. Hidden from the
-             owner, who reaches the same furniture (and everything else) through the full editor. -->
-        <button
-          v-if="!canEdit && !editing"
-          type="button"
-          class="rounded p-1.5 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
-          title="Rearrange the furniture"
-          @click="editing = 'decor'"
+        <!-- The game menu hangs off the whole cluster rather than off its button, so it lands in
+             the same place whether that button is in the header or in the ⋯ menu (which has by
+             then closed behind it). -->
+        <div
+          v-if="showPropose"
+          class="absolute right-0 top-full z-40 mt-1 w-60 space-y-1 rounded-lg border bg-background p-1.5 shadow-xl"
         >
-          <Sofa class="h-4 w-4" />
-        </button>
+          <!-- The games to choose from. A duel switches this list to a list of people. -->
+          <template v-if="!challengeType">
+            <p class="px-2 py-1 text-[11px] font-medium text-muted-foreground">Start a game</p>
+            <button
+              v-for="g in gameCatalogue"
+              :key="g.type"
+              type="button"
+              class="w-full rounded-md px-2 py-1.5 text-left transition-colors hover:bg-muted"
+              @click="onProposeGame(g.type)"
+            >
+              <span class="block text-sm font-medium">
+                {{ g.label }}
+                <span v-if="g.mode === 'challenge'" class="text-[10px] font-normal text-muted-foreground">· challenge</span>
+              </span>
+              <span class="block text-[11px] leading-snug text-muted-foreground">{{ g.blurb }}</span>
+            </button>
+            <p v-if="!gameCatalogue.length" class="px-2 py-1 text-xs text-muted-foreground">Loading…</p>
+          </template>
 
-        <button
-          v-if="canEdit && !editing"
-          type="button"
-          class="rounded p-1.5 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
-          title="Edit this room"
-          @click="editing = 'full'"
-        >
-          <Pencil class="h-4 w-4" />
-        </button>
+          <!-- Who to challenge. -->
+          <template v-else>
+            <button
+              class="flex w-full items-center gap-1 px-2 py-1 text-[11px] font-medium text-muted-foreground hover:text-foreground"
+              @click="challengeType = null"
+            >
+              ‹ Pick who to battle
+            </button>
+            <button
+              v-for="t in challengeTargets"
+              :key="t.id"
+              type="button"
+              class="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm transition-colors hover:bg-muted"
+              @click="onChallenge(t.id)"
+            >
+              <span class="h-2.5 w-2.5 shrink-0 rounded-full" :style="{ backgroundColor: `hsl(${spriteHue(t.id)} 62% 52%)` }" />
+              <span class="min-w-0 flex-1 truncate">{{ t.name }}</span>
+            </button>
+            <p v-if="!challengeTargets.length" class="px-2 py-1 text-xs text-muted-foreground">Nobody else is here to challenge.</p>
+          </template>
+        </div>
       </div>
     </div>
 
-    <div class="flex min-h-0 flex-1">
+    <!-- Room and dock: side by side when there's width for it. A 224px rail against a 390px
+         screen leaves the room too thin to walk in, so on a phone the dock becomes a sheet over
+         the room instead — see the Users button above. -->
+    <div class="relative flex min-h-0 flex-1">
       <!-- The room. -->
       <div ref="wrap" class="relative min-w-0 flex-1 overflow-hidden">
         <!-- `touch-none` is load-bearing: without it a drag across the room is a scroll gesture
@@ -1413,14 +1528,18 @@ watch(inThisRoom, (now) => {
         >
           <div class="max-w-xs space-y-1">
             <p class="text-sm font-medium">Walk around and talk to whoever's near you</p>
+            <!-- Lead with the control you actually have. On a phone the arrow keys are noise;
+                 on a desktop the tap is the afterthought. -->
             <p class="text-xs text-muted-foreground">
-              Move with the arrow keys or WASD — or tap where you want to go, and drag to steer.
+              <template v-if="narrow">Tap where you want to go, and drag to steer.</template>
+              <template v-else>Move with the arrow keys or WASD — or tap where you want to go, and drag to steer.</template>
               You'll hear people within about {{ FAR_TILES }} tiles,
               louder the closer you get — and everyone inside a room hears each other, and nobody outside it.
             </p>
             <p class="text-xs text-muted-foreground">
-              Walk up to the speaker, the TV or an arcade cabinet and press <kbd class="rounded border px-1">E</kbd> to
-              put something on for whoever's nearby.
+              Walk up to the speaker, the TV or an arcade cabinet
+              <template v-if="narrow">and tap the button that appears to put something on for whoever's nearby.</template>
+              <template v-else>and press <kbd class="rounded border px-1">E</kbd> to put something on for whoever's nearby.</template>
             </p>
           </div>
         </div>
@@ -1456,7 +1575,7 @@ watch(inThisRoom, (now) => {
           @click="useFurniture"
         >
           <Loader2 v-if="using" class="h-3.5 w-3.5 animate-spin" />
-          <span v-else class="rounded border border-background/40 px-1 text-[10px] leading-4">E</span>
+          <span v-else-if="!narrow" class="rounded border border-background/40 px-1 text-[10px] leading-4">E</span>
           {{ interactHint }}
         </button>
 
@@ -1510,7 +1629,13 @@ watch(inThisRoom, (now) => {
       </div>
 
       <!-- Cameras, screens and the volume of everyone near you. -->
-      <SideSpaceCallDock v-if="inThisRoom" class="w-56 shrink-0" :can-moderate="canModerate" />
+      <SideSpaceCallDock
+        v-if="inThisRoom && (!narrow || showPeople)"
+        :class="narrow ? 'absolute inset-0 z-30' : 'w-56 shrink-0'"
+        :can-moderate="canModerate"
+        :sheet="narrow"
+        @close="showPeople = false"
+      />
     </div>
 
     <!-- Drag the room's bottom edge to trade height with the conversation. Pointless when the

@@ -1,10 +1,14 @@
 /**
  * What the first native release is allowed to show.
  *
- * The app builds are chat, voice, the Side Desk, and the server administration that goes with
- * them. What's still withheld is the Side Space — a walkable room needs a keyboard and a window
- * — and it ships in the same bundle as everything else (there is one bundle), so the boundary
- * has to be drawn at navigation time rather than at build time.
+ * The app builds are chat, voice, the Side Desk, Side Spaces, and the server administration that
+ * goes with them — which is to say very nearly the web app. What's left out is what has no route
+ * of its own here. Everything ships in the same bundle as the web app (there is one bundle), so
+ * the boundary has to be drawn at navigation time rather than at build time.
+ *
+ * Nothing is withheld by *platform* any more. The Side Space was the last one — it wanted a
+ * keyboard and a window — and it now folds its own toolbar and dock down to a phone's width
+ * (see SideSpaceStage), so both shells get the whole room.
  *
  * The Side Desk used to be turned away here too, by stripping its `?desk=` flag. That's gone:
  * its board now pans and zooms under a finger (see Whiteboard), which was the thing that made

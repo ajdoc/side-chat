@@ -13,11 +13,23 @@ frontend reaches all five platforms with a rebuild and no porting.
 
 ## Scope of the first release
 
-The apps are **chat and voice only**. Everything else Side Chat has grown — Side Spaces, the
-Side Desk, server administration — is present in the bundle but gated off at navigation time
-by [`middleware/native-scope.global.ts`](frontend/app/middleware/native-scope.global.ts),
-which holds the allowlist of routes. The sidebar and channel header hide the buttons that
-lead to blocked places; a Side Space channel opens as its chat alone.
+The apps carry **chat, voice, the Side Desk, Side Spaces and server administration** — very
+nearly the whole web app. Routes outside that set are present in the bundle but gated off at
+navigation time by
+[`middleware/native-scope.global.ts`](frontend/app/middleware/native-scope.global.ts), which
+holds the allowlist. The sidebar and channel header hide the buttons that lead to blocked
+places.
+
+No feature is now withheld by platform. The **Side Space** was the last one, and it isn't a
+route question — both shells reach the channel; what it needed was to fit. Walking has always
+been tap-and-drag on the canvas, so what changed is the furniture around it: on a window
+narrower than 768px the room's toolbar keeps the mic and the way out and folds the rest into a
+`⋯` menu, the "in earshot" dock — shared screens, per-person volume, per-screen volume, local
+mutes, an owner's force-mute — opens as a full sheet over the room from a people button that
+carries a dot when somebody nearby starts sharing, and the map editor's tool rail becomes a
+drawer that closes when you pick a brush.
+Same breakpoint the sidebar uses, and it asks about the *window*, not the shell — a desktop
+window dragged narrow gets the same layout.
 
 To widen the apps later, add routes to that allowlist and drop the matching `isNative`
 guards. There is nothing else holding the gate shut.

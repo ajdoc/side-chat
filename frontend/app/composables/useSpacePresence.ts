@@ -126,6 +126,16 @@ let lastPersistAt = 0
 let pruneTimer: ReturnType<typeof setInterval> | undefined
 let idleTimer: ReturnType<typeof setInterval> | undefined
 let persistOnUnload: (() => void) | undefined
+/**
+ * Stops the roster watch below, and the detached scope it lives in.
+ *
+ * Detached deliberately: `subscribe()` is called from a mounted stage, so a plain `watch` would
+ * be adopted by that component's scope and torn down the moment you clicked to another channel
+ * — while you are still standing in the room, which is precisely when nobody is watching the
+ * roster. Same reasoning as the timers beside it.
+ */
+const roomScope = effectScope(true)
+let stopMemberWatch: (() => void) | undefined
 /** True once we've been placed, so a late map load doesn't teleport somebody mid-stride. */
 let placed = false
 
@@ -560,6 +570,34 @@ export function useSpacePresence(channelId: number, map: Ref<SpaceMap | null>) {
     }).catch(() => {})
   }
 
+  /**
+   * Take away the avatar of anybody who is no longer on the presence channel.
+   *
+   * Leaving a room is silent from this composable's point of view: positions are whispers, and
+   * somebody who walks out simply stops whispering. That left them standing in the room until
+   * {@link prune} noticed they'd gone quiet — fifteen seconds of a person who isn't there, which
+   * reads as a bug because it is one. Presence knows the moment the socket goes (it's how the
+   * call tears their peer down), so this follows the roster useVoice keeps.
+   *
+   * Every way out is the same event here: hanging up, closing the tab, being disconnected by a
+   * moderator, or walking into a different Side Space.
+   */
+  function watchMembers() {
+    if (stopMemberWatch) return
+
+    const { memberIds } = useVoice()
+
+    stopMemberWatch = roomScope.run(() => watch(memberIds, (ids) => {
+      const here = new Set(ids)
+      const staying = Object.fromEntries(
+        Object.entries(others.value).filter(([id]) => here.has(Number(id))),
+      )
+
+      // Same shallow-ref discipline as `prune`: only write when somebody actually went.
+      if (Object.keys(staying).length !== Object.keys(others.value).length) others.value = staying
+    }))
+  }
+
   /** Drop anybody who has gone quiet — a tab that died without presence noticing yet. */
   function prune() {
     const cutoff = Date.now() - STALE_AFTER
@@ -589,6 +627,10 @@ export function useSpacePresence(channelId: number, map: Ref<SpaceMap | null>) {
     // again returns that same subscription rather than opening a second one. Which is the
     // point — movement and the WebRTC handshake are two conversations on one channel.
     channel = echo.join(`voice.${channelId}`).listenForWhisper('sp-move', onMove)
+
+    // Presence is what actually says somebody left; the sweep below is only for a tab that died
+    // without the socket noticing.
+    watchMembers()
 
     pruneTimer = setInterval(prune, 4000)
     // The idle heartbeat lives on its own clock rather than in the render loop, because the
@@ -628,6 +670,9 @@ export function useSpacePresence(channelId: number, map: Ref<SpaceMap | null>) {
     channel?.stopListeningForWhisper?.('sp-move')
     channel = null
     attachedTo = null
+
+    stopMemberWatch?.()
+    stopMemberWatch = undefined
 
     clearInterval(pruneTimer)
     clearInterval(idleTimer)
