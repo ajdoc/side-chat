@@ -295,6 +295,23 @@ const lastStates = new Map<number, StatePayload>()
  */
 const DROP_GRACE_MS = 3000
 
+/**
+ * Is this person outside earshot — near enough to be dialled, too far to be part of the room?
+ *
+ * That gap is real and deliberate: the connection opens at `CONNECT_TILES` and hearing stops at
+ * `FAR_TILES`, so a peer at full connection strength and zero volume is the *normal* state of
+ * somebody across the room, and being in a sealed zone you're not in scores zero at any distance.
+ *
+ * It used to be a purely audio distinction, and that was half a feature. Their voice faded out and
+ * everything else about them didn't: their tile sat in the dock, their camera played, their screen
+ * claimed the stage. Distance has to gate the whole person, or "proximity" only means volume.
+ *
+ * Always false outside a Side Space, where every peer's proximity is a flat 1.
+ */
+function outOfEarshot(peer: { proximity: number }): boolean {
+  return proximityMode && peer.proximity <= 0
+}
+
 // --- adaptive screen-share sampling (mode 'auto'; see startScreenShare) ---
 // A hidden <video> playing the shared track and a tiny canvas we down-sample it into, so the
 // motion check compares a few hundred pixels a second rather than a whole screen. `prev` is
@@ -529,6 +546,17 @@ export function useVoice() {
   const pttHeld = useState<boolean>('voice:pttHeld', () => false)
   const selfDeafened = useState<boolean>('voice:selfDeafened', () => false)
   const selfSpeaking = useState<boolean>('voice:selfSpeaking', () => false)
+  // Where a screen comes from. `getDisplayMedia` in a browser or in Electron; a native capture
+  // piped back as a MediaStream on a phone, which is what put screen sharing on the phone build
+  // at all. Nothing below this line knows or cares which. See useDisplayCapture.
+  const {
+    supported: canShareScreen,
+    unsupportedReason: screenShareUnavailableReason,
+    probe: probeDisplayCapture,
+    capture: captureDisplay,
+    release: releaseDisplayCapture,
+  } = useDisplayCapture()
+
   const screenStream = useState<MediaStream | null>('voice:screenStream', () => null)
   const cameraStream = useState<MediaStream | null>('voice:cameraStream', () => null)
   /**
@@ -776,13 +804,18 @@ export function useVoice() {
     // `screenMuted` is the listener's own veto on top of all that — "keep talking, but I've
     // heard enough of your music". Yours alone, never sent, and remembered for next time.
     //
-    // Note what's *missing*: `proximity`. A shared screen is something you deliberately chose
-    // to watch, so it shouldn't fade out because the person sharing it wandered across the
-    // room — you'd be left watching a silent film. Distance governs voices; it has no business
-    // governing the thing everybody is gathered around.
+    // Distance is not a fader here, it's a gate. A shared screen's sound is deliberately *not*
+    // scaled by `proximity` — something you chose to watch shouldn't fade to a silent film because
+    // the person sharing it paced across the room — but somebody you cannot hear at all is
+    // somebody you are not standing with, and a room where a stranger's music reaches you from two
+    // rooms away isn't a room. So: full volume while they're audible, nothing when they're not.
+    //
+    // Only in a Side Space, where "out of earshot" is a thing that exists. In a voice channel or a
+    // DM every peer's proximity is a flat 1 and this is the same expression it always was.
     handle.screenAudio.volume = peer.screenVolume
     handle.screenAudio.muted = muted
       || peer.screenMuted
+      || outOfEarshot(peer)
       || (peer.screenSharing && watchedScreen.value !== id)
   }
 
@@ -841,6 +874,60 @@ export function useVoice() {
   }
 
   // --- peer connections ---
+
+  /**
+   * The encoder settings a shared screen is sent with: capped bitrate, and the framerate and
+   * degradation the current content mode asks for.
+   *
+   * Applied when a share starts, and again whenever a screen sender is *adopted* mid-share (see
+   * {@link adoptedVideo}) — a peer who joined while we were already sharing has to get the same
+   * treatment as everyone who was there when it started, or they receive an uncapped stream.
+   */
+  function applyScreenParams(sender: RTCRtpSender) {
+    const { degradation, maxFramerate } = screenModeSettings(resolvedScreenMode)
+    const params = sender.getParameters()
+
+    params.encodings = params.encodings?.length ? params.encodings : [{}]
+    params.encodings[0]!.maxBitrate = SCREEN_MAX_BITRATE
+    params.encodings[0]!.maxFramerate = maxFramerate
+    params.degradationPreference = degradation
+
+    return sender.setParameters(params).catch(() => {})
+  }
+
+  /**
+   * A video slot we've just learned about, filled with whatever we're already sending.
+   *
+   * The polite peer creates no video transceivers and adopts the impolite peer's as their tracks
+   * arrive (see createPeer). That adoption is also the *first moment* it has anywhere to put its
+   * own camera or screen — and if it was already sharing when the pair was made, nobody put
+   * anything there. The share simply never reached them: the newcomer sat looking at a person who
+   * the roster said was sharing a screen, with no picture, until the sharer stopped and started
+   * again. Which is exactly the bug this is here to close, and the same one the screen-audio slot
+   * above already handled for sound.
+   *
+   * The offer this needs is raised by `onnegotiationneeded`, which the direction change marks and
+   * which is free to fire by now — the first exchange is what delivered this track.
+   */
+  function adoptedVideo(transceiver: RTCRtpTransceiver, track: MediaStreamTrack | null, screen: boolean) {
+    if (!track) return
+
+    if (transceiver.direction !== 'sendrecv') transceiver.direction = 'sendrecv'
+
+    void transceiver.sender.replaceTrack(track).then(async () => {
+      if (screen) {
+        await applyScreenParams(transceiver.sender)
+
+        return
+      }
+
+      // A camera is only ever bitrate-capped, so there's no helper worth having for one line.
+      const params = transceiver.sender.getParameters()
+      params.encodings = params.encodings?.length ? params.encodings : [{}]
+      params.encodings[0]!.maxBitrate = CAMERA_MAX_BITRATE
+      await transceiver.sender.setParameters(params).catch(() => {})
+    })
+  }
 
   function createPeer(id: number, name: string, avatar: string | null) {
     if (handles.has(id) || !localStream || !user.value) return
@@ -948,9 +1035,12 @@ export function useVoice() {
       preferEfficientVideo(handle.cameraTransceiver)
       preferEfficientVideo(handle.screenTransceiver)
 
+      // Whatever we're already sending goes into the slots as they're made, so somebody who
+      // joins mid-share sees the share in the very first offer. Through the same path the polite
+      // peer takes on adoption, so both sides of a mid-share join get the encoder caps too.
       if (screenAudioTrack) void handle.screenAudioTransceiver.sender.replaceTrack(screenAudioTrack)
-      if (cameraTrack) void handle.cameraTransceiver.sender.replaceTrack(cameraTrack)
-      if (screenTrack) void handle.screenTransceiver.sender.replaceTrack(screenTrack)
+      adoptedVideo(handle.cameraTransceiver, cameraTrack, false)
+      adoptedVideo(handle.screenTransceiver, screenTrack, true)
     }
 
     pc.onnegotiationneeded = async () => {
@@ -1055,8 +1145,10 @@ export function useVoice() {
 
       if (!handle.cameraTransceiver) {
         handle.cameraTransceiver = transceiver
+        adoptedVideo(transceiver, cameraTrack, false)
       } else if (transceiver !== handle.cameraTransceiver && !handle.screenTransceiver) {
         handle.screenTransceiver = transceiver
+        adoptedVideo(transceiver, screenTrack, true)
       }
 
       const camera = transceiver === handle.cameraTransceiver
@@ -1871,17 +1963,15 @@ export function useVoice() {
 
     let display: MediaStream
     try {
-      display = await navigator.mediaDevices.getDisplayMedia({
+      display = await captureDisplay({
         // Cap what we capture, not just what we send: a 1440p/4K desktop encoded once per
-        // peer is what stutters a machine that's also gaming. The browser downscales to the
+        // peer is what stutters a machine that's also gaming. The capture is downscaled to the
         // chosen height (default 720p), which is what actually cuts the encode load — see
         // setScreenResolution for changing it live.
-        video: {
-          frameRate: { ideal: SCREEN_MAX_FRAMERATE, max: SCREEN_MAX_FRAMERATE },
-          height: { ideal: screenResolution.value, max: screenResolution.value },
-        },
+        height: screenResolution.value,
+        frameRate: SCREEN_MAX_FRAMERATE,
         // Ask for the tab/system audio too — sharing a video with no sound is half a share.
-        // It's the browser's "Share tab audio" tick, so it's opt-in and often simply absent
+        // It's the picker's "Share tab audio" tick, so it's opt-in and often simply absent
         // (a whole-screen share on many platforms has none), which the code below tolerates.
         // No echo risk: this is the source's own audio, captured directly, never the mic.
         audio: true,
@@ -1900,8 +1990,7 @@ export function useVoice() {
     // (started below) corrects it within a second or two once it can see what's on screen.
     const initialMode = screenMode.value === 'auto' ? 'detail' : screenMode.value
     resolvedScreenMode = initialMode
-    const { hint, degradation, maxFramerate } = screenModeSettings(initialMode)
-    screenTrack.contentHint = hint
+    screenTrack.contentHint = screenModeSettings(initialMode).hint
 
     // The browser's own "Stop sharing" bar bypasses our button entirely. Either track ending
     // (the user stops the video, or just the audio) tears the whole share down.
@@ -1918,18 +2007,11 @@ export function useVoice() {
         if (video.direction !== 'sendrecv') video.direction = 'sendrecv'
         await video.sender.replaceTrack(screenTrack)
 
-        const params = video.sender.getParameters()
-        params.encodings = params.encodings?.length ? params.encodings : [{}]
-        params.encodings[0]!.maxBitrate = SCREEN_MAX_BITRATE
-        // Detail content is encoded at a low framerate (see SCREEN_DETAIL_FRAMERATE); motion
-        // keeps the full rate. The capture stays at 30 either way, so an 'auto' flip to motion
-        // is instant — it's the *encode* rate we're trimming, not the source.
-        params.encodings[0]!.maxFramerate = maxFramerate
-        // Under CPU/upload pressure, degrade the axis the mode says matters less — for
-        // 'detail' shed framerate and keep the text sharp, for 'motion' the reverse. Not
-        // every engine honours it, hence the tolerant set. See screenModeSettings.
-        params.degradationPreference = degradation
-        await video.sender.setParameters(params).catch(() => {})
+        // Capped bitrate, the mode's framerate, and the axis to shed under pressure. Detail
+        // content is encoded at a low framerate (see SCREEN_DETAIL_FRAMERATE) while motion keeps
+        // the full rate; the capture stays at 30 either way, so an 'auto' flip is instant — it's
+        // the *encode* rate being trimmed, not the source. See applyScreenParams.
+        await applyScreenParams(video.sender)
       }
 
       const sound = handle.screenAudioTransceiver
@@ -1963,6 +2045,9 @@ export function useVoice() {
     screenAudioTrack?.stop()
     screenAudioTrack = null
     screenStream.value = null
+    // Stopping the tracks is enough for a browser capture; a native one is an OS-level
+    // recording that outlives them, notification and all, until it's told to stop.
+    await releaseDisplayCapture()
 
     await publishState()
   }
@@ -1994,9 +2079,10 @@ export function useVoice() {
 
     let display: MediaStream
     try {
-      display = await navigator.mediaDevices.getDisplayMedia({
-        // Asked for as cheaply as the browser will allow, since it's stopped a line later.
-        video: { frameRate: { max: 1 }, height: { max: 240 } },
+      display = await captureDisplay({
+        // Asked for as cheaply as the capture will allow, since it's stopped a line later.
+        frameRate: 1,
+        height: 240,
         audio: true,
       })
     } catch {
@@ -2046,10 +2132,11 @@ export function useVoice() {
     )
     await renegotiateAll()
 
-    // Stopped, not merely un-sent — this is what drops the browser's "sharing" indicator.
+    // Stopped, not merely un-sent — this is what drops the "sharing" indicator.
     screenAudioTrack?.stop()
     screenAudioTrack = null
     audioShareStream.value = null
+    await releaseDisplayCapture()
 
     await publishState()
   }
@@ -2386,6 +2473,7 @@ export function useVoice() {
     setProximityMode,
     setPeerProximity,
     setPeerInRange,
+    outOfEarshot,
     knownMembers,
     fireEffect,
     inputDevices,
@@ -2403,6 +2491,11 @@ export function useVoice() {
     setScreenMode,
     toggleScreenShare,
     toggleAudioShare,
+    // Whether this device can share at all, and why not when it can't — so the call bar can
+    // withhold the button (or explain it) instead of offering one that throws.
+    canShareScreen,
+    screenShareUnavailableReason,
+    probeDisplayCapture,
     toggleCamera,
     disconnectUser,
     disconnectAll,

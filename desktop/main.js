@@ -11,7 +11,7 @@
 // 3. Screen sharing needs a source picker. Chromium's own picker isn't available to an
 //    Electron app, so `setDisplayMediaRequestHandler` supplies one.
 
-const { app, BrowserWindow, desktopCapturer, net, protocol, session, shell } = require('electron')
+const { app, BrowserWindow, desktopCapturer, ipcMain, net, protocol, session, shell } = require('electron')
 const path = require('node:path')
 const { pathToFileURL } = require('node:url')
 
@@ -75,6 +75,11 @@ function createWindow() {
     minWidth: 720,
     minHeight: 520,
     backgroundColor: '#0b0b0e',
+    // The icon the *running* window and its taskbar entry use. On Windows and macOS the
+    // packaged executable carries its own icon and this is ignored, but on Linux and in
+    // `npm run dev` it is the only thing standing between us and the default Electron logo.
+    // It comes from the web bundle because `build/` is a build resource and isn't packaged.
+    icon: path.join(BUNDLE, 'icon-512.png'),
     // The app draws its own dark/light chrome; a white flash while the bundle boots reads
     // as a broken launch.
     show: false,
@@ -133,16 +138,93 @@ function grantMediaPermissions(partition) {
 }
 
 /**
- * Answer `getDisplayMedia` with the whole screen.
+ * System audio can only be captured on Windows.
  *
- * Electron hands the app the responsibility for picking a source. A proper picker UI is
- * follow-up work; for now the primary screen is offered, with system audio where the
- * platform supports it, which is what "share my screen" means to most people in a call.
+ * Chromium's loopback capture is a Windows implementation; on macOS and Linux Electron has no
+ * equivalent, and asking for it there yields a share with no sound rather than an error. The
+ * picker says so out loud instead of offering a tick box that quietly does nothing.
+ */
+const SUPPORTS_LOOPBACK_AUDIO = process.platform === 'win32'
+
+/**
+ * Answer `getDisplayMedia` by asking which screen or window to share.
+ *
+ * Electron hands the app the responsibility for picking a source — Chromium's own picker is
+ * not available to it. Until now that responsibility was discharged by silently taking
+ * `sources[0]`, the primary screen, which is why pressing "Share screen" on the desktop app
+ * never asked anything and quite often shared the wrong monitor.
+ *
+ * So the picker is drawn by the app itself, in the renderer, from the source list and
+ * thumbnails gathered here. `useSystemPicker` is deliberately off: it only exists on Windows 11
+ * and macOS 15, and a control that appears on some machines and not others is worse than one
+ * that looks the same everywhere.
+ *
+ * One request is live at a time — `getDisplayMedia` is only ever called from a button the user
+ * pressed — so a second request supersedes the first rather than queueing behind it.
  */
 function provideScreenSources(partition) {
-  partition.setDisplayMediaRequestHandler((_request, callback) => {
-    desktopCapturer.getSources({ types: ['screen'] }).then((sources) => {
-      callback({ video: sources[0], audio: process.platform === 'win32' ? 'loopback' : undefined })
-    }).catch(() => callback({}))
-  }, { useSystemPicker: true })
+  /** The in-flight request: Electron's callback, plus the sources it may be answered with. */
+  let pending = null
+
+  function settle(response) {
+    if (!pending) return
+    const { callback, abandon } = pending
+    pending = null
+    // Taken off the window again, or a long session of shares would stack a listener each.
+    abandon?.()
+    callback(response)
+  }
+
+  ipcMain.on('screen-share:pick', (_event, { sourceId, audio } = {}) => {
+    const source = pending?.sources.find(s => s.id === sourceId)
+    if (!source) return settle({}) // it went away while the picker was open
+
+    settle({
+      video: source,
+      // `loopback` is the whole machine's output, which is what "share the sound too" means
+      // for a screen; a window's own audio is not separable on any platform Electron runs on.
+      audio: audio && SUPPORTS_LOOPBACK_AUDIO ? 'loopback' : undefined,
+    })
+  })
+
+  // An empty response is how a request is refused. The renderer's getDisplayMedia rejects,
+  // which useVoice already treats as "changed their mind at the picker", not as an error.
+  ipcMain.on('screen-share:cancel', () => settle({}))
+
+  partition.setDisplayMediaRequestHandler(async (request, callback) => {
+    settle({}) // a previous picker still open is now moot
+
+    let sources
+    try {
+      sources = await desktopCapturer.getSources({
+        types: ['screen', 'window'],
+        thumbnailSize: { width: 320, height: 200 },
+        fetchWindowIcons: true,
+      })
+    } catch {
+      return callback({})
+    }
+
+    const win = BrowserWindow.getAllWindows()[0]
+    if (!win || win.isDestroyed() || !sources.length) return callback({})
+
+    // Closing the window mid-pick would otherwise leave getDisplayMedia hanging forever.
+    const onClosed = () => settle({})
+    win.once('closed', onClosed)
+    pending = { callback, sources, abandon: () => win.off('closed', onClosed) }
+
+    win.webContents.send('screen-share:request', {
+      sources: sources.map(source => ({
+        id: source.id,
+        name: source.name,
+        kind: source.id.startsWith('screen:') ? 'screen' : 'window',
+        thumbnail: source.thumbnail.isEmpty() ? null : source.thumbnail.toDataURL(),
+        icon: source.appIcon && !source.appIcon.isEmpty() ? source.appIcon.toDataURL() : null,
+      })),
+      // Whether the caller asked for sound at all (an audio-only share always does), and
+      // whether this machine can actually provide it.
+      audioRequested: request.audioRequested !== false,
+      audioSupported: SUPPORTS_LOOPBACK_AUDIO,
+    })
+  }, { useSystemPicker: false })
 }

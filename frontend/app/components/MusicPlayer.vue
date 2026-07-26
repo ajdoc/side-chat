@@ -729,7 +729,7 @@ onBeforeUnmount(() => {
               <span v-if="track.artist" class="block truncate text-muted-foreground">{{ track.artist }}</span>
             </button>
             <span class="flex-none tabular-nums text-muted-foreground">{{ fmt(track.duration) }}</span>
-            <span class="flex flex-none items-center opacity-0 group-hover:opacity-100">
+            <span class="flex flex-none items-center opacity-0 reveal-touch group-hover:opacity-100">
               <button class="p-0.5 text-muted-foreground hover:text-foreground disabled:opacity-30" title="Move up" :disabled="i === 0" @click="moveTrack(i + 1, -1)"><ArrowUp class="h-3.5 w-3.5" /></button>
               <button class="p-0.5 text-muted-foreground hover:text-foreground disabled:opacity-30" title="Move down" :disabled="i === upcoming.length - 1" @click="moveTrack(i + 1, 1)"><ArrowDown class="h-3.5 w-3.5" /></button>
               <button class="p-0.5 text-muted-foreground hover:text-destructive" title="Remove" @click="removeTrack(track)"><X class="h-3.5 w-3.5" /></button>

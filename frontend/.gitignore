@@ -22,3 +22,6 @@ logs
 .env
 .env.*
 !.env.example
+
+# Staging dir for `make icons`; the derivatives it produces are committed, this is not.
+.icons

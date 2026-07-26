@@ -131,10 +131,17 @@ watch([expandedIds, servers, activeServerId], () => {
   }
 }, { immediate: true })
 
-// The native builds ship chat and voice only, so the sidebar hides the doors that lead
-// anywhere else (see middleware/native-scope.global.ts, which would bounce them anyway).
-const { isNative, isMobile } = usePlatform()
+// Running a server — creating one, adding channels, inviting people, approving the requests
+// that come back — now works on the phone too, so the sidebar no longer hides those doors from
+// the native builds. What is still withheld there (Side Spaces, the Side Desk) is withheld by
+// middleware/native-scope.global.ts. `isMobile` remains only for the floating-window shelf,
+// which wants a pointer and room to put things.
+const { isMobile } = usePlatform()
 const { narrow, open: drawerOpen, close: closeDrawer } = useNavDrawer()
+// The sidebar hides several controls behind hover — a server's settings menu, a channel's
+// rename/delete. On a touch screen that isn't "harder to find", it's unreachable, so those
+// controls stand permanently open for a finger. See useTouch.
+const coarse = useCoarsePointer()
 
 // Live count, kept in sync by the join-request Reverb subscription opened in openServer().
 const { requests: joinRequests } = useJoinRequests()
@@ -237,9 +244,9 @@ function chatTitle(conversation: Conversation) {
 }
 
 async function copyInvite() {
-  if (!server.value) return
+  if (!inviteServer.value) return
   try {
-    await navigator.clipboard.writeText(server.value.invite_url)
+    await navigator.clipboard.writeText(inviteServer.value.invite_url)
     copied.value = true
     setTimeout(() => (copied.value = false), 2000)
   } catch {
@@ -255,6 +262,22 @@ async function syncServer() {
 // --- invite link ---
 const showInvite = ref(false)
 const copied = ref(false)
+/**
+ * Which server's link is on show.
+ *
+ * The dialog used to read `server` from useServer — the one you're *standing in* — while the
+ * menu that opens it hangs off any row in the list, and the navigation it fired alongside had
+ * not landed yet. So it showed the previous server's link, or nothing. Every row already
+ * carries its own `invite_url` (the servers index returns it), so the dialog takes the server
+ * it was opened for and no navigation is needed at all.
+ */
+const inviteServer = ref<Server | null>(null)
+
+function askInvite(s: Server) {
+  inviteServer.value = s
+  copied.value = false
+  showInvite.value = true
+}
 
 // --- renaming, leaving and deleting ---
 // The destructive ones are irreversible and none is undoable, so each goes through a
@@ -435,7 +458,8 @@ onBeforeUnmount(() => { userStream.unsubscribe(); stopPresence() })
       :style="narrow ? undefined : { width: `${sidebarWidth}px` }"
     >
       <ResizeHandle v-if="!narrow" edge="right" @resize="startSidebarResize" />
-      <div class="flex h-12 shrink-0 items-center border-b px-4 font-semibold">
+      <div class="flex h-12 shrink-0 items-center gap-2 border-b px-4 font-semibold">
+        <img src="/brand/logo.png" alt="" class="h-6 w-6 shrink-0 rounded-md" >
         Side Chat
       </div>
 
@@ -555,7 +579,8 @@ onBeforeUnmount(() => { userStream.unsubscribe(); stopPresence() })
                   </button>
                   <NuxtLink
                     :to="`/servers/${item.server.id}`"
-                    class="flex min-w-0 flex-1 items-center gap-2 py-1.5 pr-2 text-sm"
+                    class="flex min-w-0 flex-1 items-center gap-2 py-1.5 text-sm"
+                    :class="coarse ? 'pr-10' : 'pr-2'"
                   >
                     <span class="grid h-5 w-5 shrink-0 place-items-center rounded bg-secondary text-[9px] font-semibold text-secondary-foreground">
                       {{ initialsOf(item.server.name) }}
@@ -570,8 +595,13 @@ onBeforeUnmount(() => { userStream.unsubscribe(); stopPresence() })
 
                   <DropdownMenu>
                     <DropdownMenuTrigger as-child>
+                      <!-- Invite, nickname, leave and delete all live behind this. On a mouse
+                           it appears on hover, which on a touch screen meant they did not
+                           exist at all — so a coarse pointer gets it permanently, with a
+                           finger-sized target. -->
                       <button
-                        class="absolute right-3 top-1/2 hidden -translate-y-1/2 rounded bg-muted p-1 text-muted-foreground transition hover:text-foreground group-hover/sv:block"
+                        class="absolute right-3 top-1/2 -translate-y-1/2 rounded bg-muted text-muted-foreground transition hover:text-foreground"
+                        :class="coarse ? 'block p-2' : 'hidden p-1 group-hover/sv:block'"
                         :title="`${item.server.name} settings`"
                         @click.prevent
                       >
@@ -579,10 +609,10 @@ onBeforeUnmount(() => { userStream.unsubscribe(); stopPresence() })
                       </button>
                     </DropdownMenuTrigger>
                     <DropdownMenuContent align="start" class="w-56">
-                      <DropdownMenuItem @select="navigateTo(`/servers/${item.server.id}`); showInvite = true">
+                      <DropdownMenuItem @select="askInvite(item.server)">
                         <UserPlus class="mr-2 h-4 w-4" /> Invite people
                       </DropdownMenuItem>
-                      <DropdownMenuItem v-if="!isNative" @select="navigateTo(`/servers/${item.server.id}/requests`)">
+                      <DropdownMenuItem @select="navigateTo(`/servers/${item.server.id}/requests`)">
                         <Check class="mr-2 h-4 w-4" /> Pending requests
                         <span
                           v-if="item.isActive && pendingCount"
@@ -657,19 +687,24 @@ onBeforeUnmount(() => { userStream.unsubscribe(); stopPresence() })
                       >{{ item.voice.length }}</span>
                     </NuxtLink>
 
+                    <!-- Owner-only rename/delete. Hover-revealed for a mouse; always present
+                         on touch, where there is no hover to reveal them with. -->
                     <span
                       v-if="item.isOwner"
-                      class="absolute right-3 top-1/2 hidden -translate-y-1/2 items-center gap-0.5 rounded bg-muted px-0.5 group-hover/ch:flex"
+                      class="absolute right-3 top-1/2 -translate-y-1/2 items-center gap-0.5 rounded bg-muted px-0.5"
+                      :class="coarse ? 'flex' : 'hidden group-hover/ch:flex'"
                     >
                       <button
-                        class="rounded p-1 text-muted-foreground hover:text-foreground"
+                        class="rounded text-muted-foreground hover:text-foreground"
+                        :class="coarse ? 'p-2' : 'p-1'"
                         :title="`Rename ${item.channel.name}`"
                         @click.prevent="askRenameChannel(item.channel)"
                       >
                         <Pencil class="h-3.5 w-3.5" />
                       </button>
                       <button
-                        class="rounded p-1 text-muted-foreground hover:text-destructive"
+                        class="rounded text-muted-foreground hover:text-destructive"
+                        :class="coarse ? 'p-2' : 'p-1'"
                         :title="`Delete ${item.channel.name}`"
                         @click.prevent="askDeleteChannel(item.channel)"
                       >
@@ -709,7 +744,7 @@ onBeforeUnmount(() => { userStream.unsubscribe(); stopPresence() })
                 </div>
 
                 <NuxtLink
-                  v-else-if="item.kind === 'add-channel' && !isNative"
+                  v-else-if="item.kind === 'add-channel'"
                   :to="`/servers/${item.server.id}/channels/new`"
                   class="mx-2 flex items-center gap-2 rounded py-1.5 pl-7 pr-2 text-sm text-muted-foreground transition hover:bg-muted hover:text-foreground"
                 >
@@ -808,6 +843,11 @@ onBeforeUnmount(() => { userStream.unsubscribe(); stopPresence() })
          wherever you are — including in a conversation you have never once opened. -->
     <IncomingCall />
 
+    <!-- "Which screen?" on the desktop build, where the browser's own picker doesn't exist.
+         Here rather than in a call, because a share can be started from a voice channel, a DM
+         call or a Side Space, and all three go through one getDisplayMedia. Inert elsewhere. -->
+    <ScreenSourcePicker />
+
     <!-- The floating-window shelf — popped-out widgets, conversations, and the pinned music
          player. Mounted here (not inside a page) so a floated window outlives the page it was
          opened from: a video keeps playing, a chat keeps updating, and the pinned song follows
@@ -827,16 +867,16 @@ onBeforeUnmount(() => { userStream.unsubscribe(); stopPresence() })
     />
 
     <Dialog v-model:open="showInvite">
-      <DialogContent v-if="server">
+      <DialogContent v-if="inviteServer">
         <DialogHeader>
-          <DialogTitle>Invite people to {{ server.name }}</DialogTitle>
+          <DialogTitle>Invite people to {{ inviteServer.name }}</DialogTitle>
           <DialogDescription>
             Share this link. Anyone who opens it can request to join — a member has to
             approve them before they're let in.
           </DialogDescription>
         </DialogHeader>
         <div class="flex items-center gap-2">
-          <Input :model-value="server.invite_url" readonly class="flex-1 font-mono text-xs" />
+          <Input :model-value="inviteServer.invite_url" readonly class="flex-1 font-mono text-xs" />
           <Button variant="outline" size="icon" :title="copied ? 'Copied!' : 'Copy link'" @click="copyInvite">
             <Check v-if="copied" class="h-4 w-4 text-green-600 dark:text-green-400" />
             <Copy v-else class="h-4 w-4" />

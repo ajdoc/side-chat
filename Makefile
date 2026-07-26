@@ -1,7 +1,7 @@
 .DEFAULT_GOAL := help
 COMPOSE := docker compose
 
-.PHONY: help build up down restart logs ps migrate fresh shell tinker composer artisan npm octane-build octane-up octane-down octane-logs app-bundle app-desktop app-desktop-win app-mobile app-apk
+.PHONY: help build up down restart logs ps icons win-codesign-cache migrate fresh shell tinker composer artisan npm octane-build octane-up octane-down octane-logs app-bundle app-desktop app-desktop-win app-mobile app-apk
 
 # Where the packaged apps look for the API and the WebSocket server.
 #
@@ -108,12 +108,51 @@ app-desktop-win: app-bundle ## Build the Windows desktop app via a staging dir o
 	rm -rf "$(WIN_STAGE)"
 	mkdir -p "$(WIN_STAGE)"
 	cp desktop/main.js desktop/preload.js desktop/package.json "$(WIN_STAGE)/"
+	# build/ holds the app icon. electron-builder finds it by convention (buildResources), so
+	# leaving it behind doesn't fail the build — it silently ships Electron's default icon.
+	cp -r desktop/build "$(WIN_STAGE)/build"
 	cp -r frontend/.output/public "$(WIN_STAGE)/web"
+	cd "$(WIN_STAGE)" && npm install
+	$(MAKE) win-codesign-cache
 	# electron-builder directly, not `npm run dist` — the bundle is already staged here, and
 	# that script's copy step reaches for a frontend/ that doesn't exist beside it.
-	cd "$(WIN_STAGE)" && npm install && npm exec -- electron-builder
+	cd "$(WIN_STAGE)" && npm exec -- electron-builder
 	@echo ""
 	@echo "  Installer -> $(WIN_STAGE)/dist"
+
+# electron-builder fetches a `winCodeSign` bundle before it touches the exe. That bundle is
+# not only about signing: it carries **rcedit**, which is what stamps the app icon and version
+# info into the executable. Its archive contains two macOS symlinks, and creating a symlink on
+# Windows needs a privilege ordinary accounts don't have, so the unpack dies with
+#
+#     Cannot create symbolic link : A required privilege is not held by the client
+#
+# and takes the whole build with it — after `dist/win-unpacked/` exists but before the icon is
+# applied, which is why the symptom looks like "my icon didn't work" rather than "my build
+# failed". The documented cure is Developer Mode or an Administrator shell.
+#
+# Neither is needed here. The two symlinks are in `darwin/`, which a Windows build never
+# touches, so the archive is unpacked once *excluding that directory* into the exact path
+# electron-builder looks for. It finds the cache populated and skips the unpack entirely.
+WCS_VERSION := winCodeSign-2.6.0
+WCS_CACHE := /mnt/c/Users/$(WIN_USER)/AppData/Local/electron-builder/Cache/winCodeSign
+WCS_URL := https://github.com/electron-userland/electron-builder-binaries/releases/download/$(WCS_VERSION)/$(WCS_VERSION).7z
+
+win-codesign-cache: ## Seed electron-builder's winCodeSign cache without needing symlink privilege
+	@if [ -f "$(WCS_CACHE)/$(WCS_VERSION)/rcedit-x64.exe" ]; then \
+		echo "winCodeSign already cached ($(WCS_VERSION))"; \
+	else \
+		echo "Seeding winCodeSign cache — unpacking $(WCS_VERSION) without its macOS symlinks"; \
+		mkdir -p "$(WCS_CACHE)"; \
+		curl -fsSL "$(WCS_URL)" -o "$(WCS_CACHE)/$(WCS_VERSION).7z"; \
+		printf '@echo off\r\n"%%~1" x -bd -y "-x!darwin" "-x!darwin\\*" -o"%%~2" "%%~3"\r\n' > "$(WIN_STAGE)/unpack-wcs.bat"; \
+		cd "$(WIN_STAGE)" && cmd.exe /c unpack-wcs.bat \
+			'node_modules\7zip-bin\win\x64\7za.exe' \
+			'C:\Users\$(WIN_USER)\AppData\Local\electron-builder\Cache\winCodeSign\$(WCS_VERSION)' \
+			'C:\Users\$(WIN_USER)\AppData\Local\electron-builder\Cache\winCodeSign\$(WCS_VERSION).7z'; \
+		test -f "$(WCS_CACHE)/$(WCS_VERSION)/rcedit-x64.exe" \
+			|| { echo "winCodeSign unpack did not produce rcedit — see APPS.md"; exit 1; }; \
+	fi
 
 # Node for the host-side tooling. A Linux node if there is one; otherwise the Windows node
 # this machine has, invoked by path. Windows *npm* can't be used against the WSL filesystem
@@ -150,6 +189,10 @@ ANDROID_JDK ?= $(call firstdir,"/mnt/c/Program Files/Android/Android Studio/jbr"
 # Debug by default: signed with the throwaway debug key, installable on your own device.
 # `make app-apk GRADLE_TASK=assembleRelease` needs a keystore configured in app/build.gradle.
 GRADLE_TASK ?= assembleDebug
+# What the finished APK is called. Gradle names it after the module and variant — `app-debug.apk`
+# — which says nothing to whoever is sent it. One build produces one APK (the staging dir is
+# rebuilt each time), so it gets one name.
+APK_NAME ?= SideChat-beta.apk
 
 # Not a dependency on app-mobile: the toolchain is checked first, so a machine without an SDK
 # finds out in a second rather than after a full bundle and sync.
@@ -177,9 +220,32 @@ app-apk: ## Build an Android APK → mobile/dist (Windows SDK + JDK)
 		>> "$(WIN_STAGE_ANDROID)/gradle.properties"
 	cd "$(WIN_STAGE_ANDROID)" && cmd.exe /c "gradlew.bat $(GRADLE_TASK)"
 	mkdir -p mobile/dist
-	find "$(WIN_STAGE_ANDROID)/app/build/outputs" -name '*.apk' -exec cp {} mobile/dist/ \;
+	@apk=$$(find "$(WIN_STAGE_ANDROID)/app/build/outputs" -name '*.apk' -print -quit); \
+	test -n "$$apk" || { echo "Gradle produced no APK."; exit 1; }; \
+	cp "$$apk" "mobile/dist/$(APK_NAME)"
 	@echo ""
-	@echo "  APK -> $$(ls mobile/dist/*.apk 2>/dev/null | tr '\n' ' ')"
+	@echo "  APK -> mobile/dist/$(APK_NAME)"
+
+ICONS := frontend/.icons
+ANDROID_RES := mobile/android/app/src/main/res
+
+icons: ## Regenerate every app icon from frontend/public/brand/icon-source.png
+	$(COMPOSE) exec -T frontend sh -c 'npm i --no-save --silent --prefix /tmp/imgtool sharp && node /app/scripts/gen-icons.mjs'
+	@# The container only has frontend/ mounted, so the desktop and mobile shells are served
+	@# from here rather than written to directly.
+	cp $(ICONS)/favicon.ico $(ICONS)/apple-touch-icon.png $(ICONS)/icon-192.png $(ICONS)/icon-512.png frontend/public/
+	cp $(ICONS)/logo.png frontend/public/brand/logo.png
+	mkdir -p desktop/build
+	cp $(ICONS)/icon-1024.png desktop/build/icon.png
+	cp $(ICONS)/icon-1024.png mobile/ios/App/App/Assets.xcassets/AppIcon.appiconset/AppIcon-512@2x.png
+	@for d in mdpi hdpi xhdpi xxhdpi xxxhdpi; do \
+	  for n in ic_launcher ic_launcher_round ic_launcher_foreground; do \
+	    cp $(ICONS)/android-$$d-$$n.png $(ANDROID_RES)/mipmap-$$d/$$n.png; \
+	  done; \
+	done
+	$(COMPOSE) exec -T frontend rm -rf /app/.icons
+	@echo ""
+	@echo "  Icons regenerated. They are committed artefacts — review the diff and commit."
 
 octane-build: ## Build the opt-in Octane images (FrankenPHP worker + Swoole)
 	$(COMPOSE) build app

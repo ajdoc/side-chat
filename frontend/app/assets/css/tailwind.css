@@ -219,6 +219,42 @@
 }
 
 @layer components {
+  /* Marks a control that a row reveals on hover — an unpin, a jump, a delete.
+     There is no hover on a touch screen, so those controls weren't merely hard to find,
+     they could not be reached at all. A coarse pointer gets them standing open.
+
+     A class rather than a `coarse` flag threaded through each component: the reveal is
+     already expressed in Tailwind (`opacity-0 group-hover:opacity-100`) and this only has
+     to win against it, which is the one honest use for `!important` here. */
+  @media (pointer: coarse) {
+    .reveal-touch {
+      opacity: 1 !important;
+    }
+  }
+
+  /* Something you press and hold. `user-select: none` alone isn't enough on a phone: iOS puts
+     up its own copy/share callout on a long press, and that is a separate opt-out. Without it,
+     the system menu appears over the action bar the same gesture just opened. */
+  .long-pressable {
+    -webkit-touch-callout: none;
+    -webkit-user-select: none;
+    user-select: none;
+  }
+
+  /* A strip that scrolls sideways without saying so — a header's row of actions on a phone,
+     where a 10px horizontal bar under six buttons costs more than it explains. The strip
+     still scrolls by finger, and on a desktop the row simply fits and never overflows. */
+  .scroll-strip {
+    overflow-x: auto;
+    overflow-y: hidden;
+    scrollbar-width: none;
+    -webkit-overflow-scrolling: touch;
+    overscroll-behavior-x: contain;
+  }
+  .scroll-strip::-webkit-scrollbar {
+    display: none;
+  }
+
   /* The message canvas: flat --background plus a soft wash of the accent, so the
      open area has some depth instead of reading as an empty grey sheet. */
   .app-shell {

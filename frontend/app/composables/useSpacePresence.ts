@@ -91,6 +91,32 @@ const moving = shallowRef(false)
 /** Which keys are down. Held rather than handled per-event so movement is continuous. */
 const held = new Set<string>()
 
+/**
+ * Where a pointer has asked us to walk, in tiles, or null for "nowhere".
+ *
+ * The room was keyboard-only, which on a phone browser means it cannot be played at all — there
+ * are no arrow keys, and the native app's on-screen pad isn't there either. So there's a second
+ * way in: point at the floor and walk towards it. One target rather than a direction, because
+ * that covers both gestures with the same state — a *held* pointer rewrites the target as it
+ * drags (so it steers, like a thumbstick), and a *tap* leaves the last target standing so you
+ * keep walking to where you tapped.
+ *
+ * Held at module scope alongside {@link me} and for the same reason: it's part of standing in the
+ * room, not part of the canvas that happens to be showing it.
+ */
+let steer: { x: number, y: number } | null = null
+
+/**
+ * How close counts as arrived, in tiles, and how little progress in one frame counts as stuck.
+ *
+ * Arrival has to be forgiving: {@link SPEED} tiles a second covers ~0.08 of a tile per frame, so
+ * a tighter radius would have you oscillating across the target for ever. Stuck matters because
+ * a target can be somewhere you cannot reach — behind a wall, inside the pond — and without this
+ * you'd walk into that wall until you thought to tap somewhere else.
+ */
+const ARRIVE_WITHIN = 0.12
+const STUCK_BELOW = 0.004
+
 /** The room we're currently attached to, or null. Guards against double-subscribing. */
 let attachedTo: number | null = null
 let channel: any = null
@@ -242,7 +268,26 @@ export function useSpacePresence(channelId: number, map: Ref<SpaceMap | null>) {
     if (isTyping(e.target)) return
 
     held.add(e.key.toLowerCase())
+    // Reaching for the keys cancels wherever a tap was taking you: two things steering one
+    // avatar is how you end up fighting your own room.
+    steer = null
     e.preventDefault()
+  }
+
+  /**
+   * Walk towards a point in the room. The pointer's way in — see {@link steer}.
+   *
+   * Called on press and again for every drag, so holding and dragging is continuous steering,
+   * while pressing and letting go is "go there".
+   */
+  function walkTo(x: number, y: number) {
+    if (!me.value) return
+    steer = { x, y }
+  }
+
+  /** Stop wherever we are, abandoning a pointer target. For the buttons that take movement away. */
+  function stopWalking() {
+    steer = null
   }
 
   function onKeyUp(e: KeyboardEvent) {
@@ -263,6 +308,7 @@ export function useSpacePresence(channelId: number, map: Ref<SpaceMap | null>) {
   /** Let go of everything — on blur, and whenever the room leaves the screen. */
   function releaseKeys() {
     held.clear()
+    steer = null
     moving.value = false
   }
 
@@ -332,8 +378,23 @@ export function useSpacePresence(channelId: number, map: Ref<SpaceMap | null>) {
   function moveSelf(m: SpaceMap, dt: number) {
     if (!me.value) return
 
-    const dx = (held.has('arrowright') || held.has('d') ? 1 : 0) - (held.has('arrowleft') || held.has('a') ? 1 : 0)
-    const dy = (held.has('arrowdown') || held.has('s') ? 1 : 0) - (held.has('arrowup') || held.has('w') ? 1 : 0)
+    let dx = (held.has('arrowright') || held.has('d') ? 1 : 0) - (held.has('arrowleft') || held.has('a') ? 1 : 0)
+    let dy = (held.has('arrowdown') || held.has('s') ? 1 : 0) - (held.has('arrowup') || held.has('w') ? 1 : 0)
+    let pointed = false
+
+    // No key down, but a pointer has asked for somewhere: head for it. The direction is recomputed
+    // every frame rather than once on the tap, so walking round a couch still ends up where you
+    // pointed instead of alongside it.
+    if (dx === 0 && dy === 0 && steer) {
+      const gap = Math.hypot(steer.x - me.value.x, steer.y - me.value.y)
+
+      if (gap <= ARRIVE_WITHIN) steer = null
+      else {
+        dx = steer.x - me.value.x
+        dy = steer.y - me.value.y
+        pointed = true
+      }
+    }
 
     if (dx === 0 && dy === 0) {
       if (moving.value) {
@@ -355,7 +416,21 @@ export function useSpacePresence(channelId: number, map: Ref<SpaceMap | null>) {
 
     const next = step(m, me.value, (dx / len) * distance, (dy / len) * distance)
 
-    me.value = { ...me.value, ...next, facing: facingOf(dx, dy, me.value.facing) }
+    // Walking into something with a pointer target set: give the target up rather than lean on the
+    // wall for ever. Keys don't need this — you can see you're stuck and let go.
+    if (steer && Math.hypot(next.x - me.value.x, next.y - me.value.y) < STUCK_BELOW) {
+      steer = null
+    }
+
+    /*
+     * Which way to face. `facingOf` lets vertical win any tie, which is right for the keyboard
+     * (a diagonal is two whole keys) but wrong for a pointer, where the direction is a fraction:
+     * walking almost due east with a hair of south in it would have you facing south the whole
+     * way. So a pointed direction is reduced to its dominant axis first.
+     */
+    const [fx, fy] = pointed && Math.abs(dx) > Math.abs(dy) ? [dx, 0] : pointed ? [0, dy] : [dx, dy]
+
+    me.value = { ...me.value, ...next, facing: facingOf(fx, fy, me.value.facing) }
 
     whisperMove()
     persist()
@@ -626,6 +701,8 @@ export function useSpacePresence(channelId: number, map: Ref<SpaceMap | null>) {
     warp,
     seed,
     tick,
+    walkTo,
+    stopWalking,
     isWalking,
     subscribe,
     unsubscribe,

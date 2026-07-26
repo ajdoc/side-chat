@@ -294,35 +294,91 @@ final class MapPresets
 
     /*
      * Six rooms in the shape of the badges: an arena you'd challenge someone in, crossed with the
-     * office everything else here is. Each is the same 26×16 shell — a leader's dais at the top,
-     * an office desk in the corner, torches down the sides — dressed in its own element. Built,
-     * like every preset, so a row can't quietly be the wrong length; the theme is in the floor and
-     * the furniture, laid over one scaffold.
+     * office everything else here is.
+     *
+     * They started out as one 26×16 box with a dais painted at the top, and it showed — a gym whose
+     * "rooms" are rectangles of tint is a floor plan with a theme, and the thing that makes
+     * proximity worth having is *walls*. So the shell is a building now: you come in at the south
+     * into a lobby, walk up through a doorway into the arena, and there are three sealed rooms off
+     * it — a leader's chamber at the far end and a wing on each side, each a private zone you can
+     * genuinely close a conversation inside. 36×24, which is about four times the floor of the old
+     * shell and roughly as big as a room can be before crossing it is a chore.
+     *
+     * One corridor (x 16–19) runs the length of it, front door to chamber door, and every gym keeps
+     * it clear: a themed pond or tree line that sealed the arena off from its own entrance would be
+     * a room nobody can get into. See {@see gym}.
      */
 
+    /** The gym shell's size. All six are this, dressed differently. */
+    private const GYM_W = 36;
+
+    private const GYM_H = 24;
+
     /**
-     * The bones every gym shares: the room, the leader's zone, and the furniture that frames an
-     * arena regardless of its element. Each gym takes this and dresses it.
+     * The bones every gym shares: the building, its three sealed rooms, and the furniture that
+     * frames an arena regardless of its element. Each gym takes this and dresses it.
      *
-     * @return array{tiles: array<int, string>, objects: array<int, array{0: string, 1: int, 2: int}>, zone: array<string, mixed>}
+     * @return array{
+     *     tiles: array<int, string>,
+     *     objects: array<int, array{0: string, 1: int, 2: int}>,
+     *     zones: array<int, array<string, mixed>>
+     * }
      */
     private static function gymScaffold(string $floor): array
     {
+        $tiles = self::room(self::GYM_W, self::GYM_H, $floor);
+
+        // The leader's chamber, at the far end, entered through a two-tile gap in its south wall.
+        self::chamber($tiles, 12, 0, 12, 7, $floor, [[17, 6], [18, 6]]);
+
+        // A wing either side of the arena, each entered from it.
+        self::chamber($tiles, 0, 7, 10, 8, $floor, [[9, 10], [9, 11]]);
+        self::chamber($tiles, 26, 7, 10, 8, $floor, [[26, 10], [26, 11]]);
+
+        // The lobby: a wall across the room with the front door in the middle of it. Everything
+        // south of it is the hall you arrive in — deliberately *not* a zone, because the point of
+        // an entrance is that the room can hear you come in.
+        self::rect($tiles, 1, 18, 34, 1, Tiles::WALL);
+        self::rect($tiles, 17, 18, 2, 1, $floor);
+
         return [
-            'tiles' => self::room(26, 16, $floor),
+            'tiles' => $tiles,
             'objects' => [
-                // Sconces down the long walls.
-                ['torch', 2, 1], ['torch', 23, 1], ['torch', 2, 13], ['torch', 23, 13],
-                // The challenger's desk — the office half of the mashup, and the computer you'd
-                // sign the challenge in on.
-                ['desk', 3, 12], ['chair', 3, 11], ['computer', 6, 12],
+                // The leader's chamber: statues either side of the way in, torchlight behind them.
+                ['statue', 15, 2], ['statue', 20, 2], ['torch', 14, 1], ['torch', 21, 1],
+                ['painting', 17, 0], ['window', 18, 0],
+
+                // The west wing is the office half of the mashup: the desk you'd sign a challenge
+                // in at, and the board of who has beaten whom.
+                ['desk', 2, 9], ['chair', 2, 10], ['computer', 5, 9],
+                ['bookshelf', 1, 12], ['plant', 8, 13], ['noticeboard', 4, 7],
+
+                // The east wing is where you wait your turn.
+                ['tv', 28, 9], ['couch', 28, 12], ['arcade', 32, 8], ['racer', 32, 12],
+                ['stool', 31, 12], ['plant', 34, 13], ['shelf', 30, 7],
+
+                // Sconces at the arena's four corners.
+                ['torch', 10, 7], ['torch', 25, 7], ['torch', 10, 17], ['torch', 25, 17],
+
+                // The lobby: somewhere to sit, something to put on, and the mat you walk in over.
+                ['bench', 12, 21], ['bench', 22, 21], ['watercooler', 2, 21], ['easel', 5, 20],
+                ['speaker', 32, 20], ['mat', 17, 22], ['mat', 18, 22], ['plant', 33, 22],
+                ['noticeboard', 10, 18], ['poster', 25, 18], ['clock', 17, 23],
             ],
-            'zone' => ['id' => 'dais', 'name' => 'Leader’s dais', 'kind' => 'private', 'x' => 9, 'y' => 1, 'w' => 8, 'h' => 3],
+            'zones' => [
+                ['id' => 'dais', 'name' => 'Leader’s chamber', 'kind' => 'private', 'x' => 13, 'y' => 1, 'w' => 10, 'h' => 5],
+                ['id' => 'west-wing', 'name' => 'Challengers’ room', 'kind' => 'private', 'x' => 1, 'y' => 8, 'w' => 8, 'h' => 6],
+                ['id' => 'east-wing', 'name' => 'Waiting room', 'kind' => 'private', 'x' => 27, 'y' => 8, 'w' => 8, 'h' => 6],
+            ],
         ];
     }
 
     /**
-     * Assemble a gym from the scaffold plus its own tiles and furniture.
+     * Assemble a gym from the scaffold plus its own ground and furniture.
+     *
+     * The paint runs *first* and the scaffold's furniture assumes plain floor under it, so a gym's
+     * rects keep out of the three rooms and the lobby and confine themselves to the arena and the
+     * two alcoves either side of the chamber — which is where a theme wants to be anyway.
      *
      * @param  array<int, array{0: int, 1: int, 2: int, 3: int, 4: string}>  $paint  rects of [x, y, w, h, tile]
      * @param  array<int, array{0: string, 1: int, 2: int}>  $extra  themed furniture
@@ -336,35 +392,37 @@ final class MapPresets
             self::rect($tiles, $x, $y, $w, $h, $tile);
         }
 
-        // Trees and the like are tiles, so any solid furniture would land on nothing to stand on;
-        // the paint runs first and the scaffold's own furniture assumes plain floor under it, so
-        // gyms keep their painted patches clear of the corners the scaffold uses.
         return [
             'label' => $label,
             'description' => $description,
             'name' => $label,
-            'width' => 26,
-            'height' => 16,
+            'width' => self::GYM_W,
+            'height' => self::GYM_H,
             'tiles' => $tiles,
-            'zones' => [$scaffold['zone']],
+            'zones' => $scaffold['zones'],
             'objects' => self::objects([...$scaffold['objects'], ...$extra]),
-            'spawn' => ['x' => 12, 'y' => 14],
+            'spawn' => ['x' => 17, 'y' => 21],
         ];
     }
 
-    /** Cinnabar — the fire gym. Red carpet, torches, a fire in the middle, volcanic rock. */
+    /** Cinnabar — the fire gym. Red carpet, a sand pit with a fire in it, volcanic rock. */
     private static function gymCinnabar(): array
     {
         return self::gym(
             'Cinnabar Gym',
-            'The fire gym — red carpet, a fire pit and volcanic rock, with a challenge desk',
+            'The fire gym — a carpeted hall round a blazing sand pit, with two wings and a challenge desk',
             Tiles::CARPET,
-            [[12, 6, 2, 2, Tiles::SAND]],
             [
-                ['statue', 5, 2], ['statue', 20, 2],
-                ['torch', 12, 1],
-                ['campfire', 12, 6], ['boulder', 8, 9], ['boulder', 17, 9],
-                ['tv', 15, 12], ['painting', 12, 0], ['plant', 24, 14],
+                [13, 9, 10, 7, Tiles::SAND],
+                [2, 2, 6, 4, Tiles::SAND],
+                [28, 2, 6, 4, Tiles::SAND],
+            ],
+            [
+                ['campfire', 17, 12],
+                ['boulder', 14, 10], ['boulder', 21, 10], ['boulder', 14, 14], ['boulder', 21, 14],
+                ['torch', 13, 9], ['torch', 22, 9], ['torch', 13, 15], ['torch', 22, 15],
+                ['statue', 3, 3], ['statue', 32, 3], ['barrel', 6, 5], ['crate', 29, 5],
+                ['painting', 7, 0], ['window', 28, 0],
             ],
         );
     }
@@ -372,132 +430,130 @@ final class MapPresets
     /** Celadon — the grass gym. An indoor garden: grass underfoot, flowers, trees, benches. */
     private static function gymCeladon(): array
     {
-        $tiles = self::room(26, 16, Tiles::GRASS);
-        self::rect($tiles, 10, 5, 6, 2, Tiles::FLOWERS);
-        self::rect($tiles, 3, 8, 3, 3, Tiles::TALL_GRASS);
-        self::rect($tiles, 20, 8, 3, 3, Tiles::TALL_GRASS);
-        foreach ([[7, 3], [18, 3], [11, 9], [14, 9]] as [$x, $y]) {
-            self::stamp($tiles, $x, $y, [Tiles::TREE]);
-        }
-
-        $scaffold = self::gymScaffold(Tiles::GRASS);
-
-        return [
-            'label' => 'Celadon Gym',
-            'description' => 'The grass gym — an indoor garden of flowers and trees, and a desk',
-            'name' => 'Celadon Gym',
-            'width' => 26,
-            'height' => 16,
-            'tiles' => $tiles,
-            'zones' => [$scaffold['zone']],
-            'objects' => self::objects([
-                ...$scaffold['objects'],
-                ['bench', 8, 10], ['bench', 15, 10], ['plant', 5, 2], ['plant', 20, 2],
-                ['noticeboard', 12, 0], ['tv', 18, 12],
-            ]),
-            'spawn' => ['x' => 12, 'y' => 14],
-        ];
-    }
-
-    /** Vermilion — a warehouse gym. Crates, barrels, and the arcade cabinets to challenge on. */
-    private static function gymVermilion(): array
-    {
         return self::gym(
-            'Vermilion Gym',
-            'A warehouse arena of crates and arcade cabinets, with a challenge desk',
-            Tiles::WOOD,
-            [],
+            'Celadon Gym',
+            'The grass gym — an indoor garden of flowers and trees, with two wings and a challenge desk',
+            Tiles::GRASS,
             [
-                ['crate', 6, 2], ['crate', 7, 2], ['barrel', 8, 2],
-                ['arcade', 14, 2], ['racer', 17, 2],
-                ['crate', 6, 9], ['barrel', 7, 9], ['cabinet', 20, 9],
-                ['tv', 15, 12], ['poster', 12, 0], ['plant', 24, 2],
+                [13, 10, 10, 5, Tiles::FLOWERS],
+                [2, 2, 6, 4, Tiles::TALL_GRASS],
+                [28, 2, 6, 4, Tiles::TALL_GRASS],
+                // Four trees in the arena, so the middle isn't one flat lawn. A 1×1 rect says
+                // "a tree here" without needing a second helper.
+                [12, 8, 1, 1, Tiles::TREE], [23, 8, 1, 1, Tiles::TREE],
+                [12, 16, 1, 1, Tiles::TREE], [23, 16, 1, 1, Tiles::TREE],
+            ],
+            [
+                ['bench', 14, 16], ['bench', 20, 16], ['bench', 14, 9], ['bench', 20, 9],
+                ['plant', 11, 12], ['plant', 24, 12], ['lamp', 11, 9], ['lamp', 24, 9],
+                ['statue', 3, 3], ['statue', 32, 3],
+                ['window', 7, 0], ['window', 28, 0],
             ],
         );
     }
 
-    /** Azalea — the bug gym. A forest floor of grass and tall grass, boulders and a campfire. */
+    /** Vermilion — a warehouse gym. Crates, barrels, and the cabinets to challenge on. */
+    private static function gymVermilion(): array
+    {
+        return self::gym(
+            'Vermilion Gym',
+            'A warehouse arena of crates and cabinets, with two wings and a challenge desk',
+            Tiles::WOOD,
+            [
+                // Lanes worn into the boards, and a swept floor either side of the chamber.
+                [16, 7, 4, 11, Tiles::PATH],
+                [2, 2, 6, 4, Tiles::FLOOR],
+                [28, 2, 6, 4, Tiles::FLOOR],
+            ],
+            [
+                ['crate', 12, 9], ['crate', 13, 9], ['barrel', 14, 9],
+                ['crate', 21, 9], ['crate', 22, 9], ['barrel', 23, 9],
+                ['crate', 12, 16], ['barrel', 13, 16], ['crate', 22, 16], ['barrel', 21, 16],
+                ['cabinet', 11, 12], ['cabinet', 24, 12], ['fridge', 11, 13], ['fridge', 24, 13],
+                ['crate', 3, 3], ['crate', 4, 3], ['barrel', 6, 4], ['crate', 30, 3], ['barrel', 32, 4],
+                ['poster', 7, 0], ['poster', 28, 0],
+            ],
+        );
+    }
+
+    /** Azalea — the bug gym. A forest floor of grass and tall grass round a campfire. */
     private static function gymAzalea(): array
     {
-        $tiles = self::room(26, 16, Tiles::GRASS);
-        self::rect($tiles, 12, 4, 2, 9, Tiles::PATH);
-        self::rect($tiles, 4, 3, 4, 3, Tiles::TALL_GRASS);
-        self::rect($tiles, 18, 3, 4, 3, Tiles::TALL_GRASS);
-        foreach ([[6, 9], [19, 9]] as [$x, $y]) {
-            self::stamp($tiles, $x, $y, [Tiles::TREE]);
-        }
-
-        $scaffold = self::gymScaffold(Tiles::GRASS);
-
-        return [
-            'label' => 'Azalea Gym',
-            'description' => 'The bug gym — a forest of tall grass and boulders around a campfire',
-            'name' => 'Azalea Gym',
-            'width' => 26,
-            'height' => 16,
-            'tiles' => $tiles,
-            'zones' => [$scaffold['zone']],
-            'objects' => self::objects([
-                ...$scaffold['objects'],
-                ['boulder', 9, 9], ['boulder', 16, 9], ['bench', 11, 11],
-                ['plant', 4, 2], ['plant', 21, 2], ['noticeboard', 12, 0], ['arcade', 18, 12],
-            ]),
-            'spawn' => ['x' => 12, 'y' => 14],
-        ];
+        return self::gym(
+            'Azalea Gym',
+            'The bug gym — a forest of tall grass and boulders round a campfire, with two wings',
+            Tiles::GRASS,
+            [
+                // A path in from the door, and thickets to lose people in.
+                [16, 7, 4, 11, Tiles::PATH],
+                [11, 8, 5, 4, Tiles::TALL_GRASS],
+                [20, 8, 5, 4, Tiles::TALL_GRASS],
+                [11, 14, 5, 4, Tiles::TALL_GRASS],
+                [20, 14, 5, 4, Tiles::TALL_GRASS],
+                [2, 2, 6, 4, Tiles::TALL_GRASS],
+                [28, 2, 6, 4, Tiles::TALL_GRASS],
+                [12, 12, 1, 1, Tiles::TREE], [23, 12, 1, 1, Tiles::TREE],
+            ],
+            [
+                ['campfire', 17, 12],
+                ['boulder', 14, 13], ['boulder', 21, 13], ['boulder', 11, 16], ['boulder', 24, 16],
+                ['bench', 14, 16], ['bench', 20, 16],
+                ['plant', 3, 3], ['plant', 32, 3], ['barrel', 6, 5], ['crate', 29, 5],
+                ['window', 7, 0], ['window', 28, 0],
+            ],
+        );
     }
 
-    /** Olivine — the steel gym. A lighthouse over the sea: water, a beacon, pillars, cold steel. */
+    /** Olivine — the steel gym. A lighthouse over the sea: pools, a beacon, pillars, cold steel. */
     private static function gymOlivine(): array
     {
-        $tiles = self::room(26, 16, Tiles::FLOOR);
-        // The sea, along the top — furniture stays off it, so this gym skips the dais.
-        self::rect($tiles, 1, 1, 24, 2, Tiles::WATER);
-        self::rect($tiles, 1, 3, 24, 1, Tiles::SAND);
-
-        return [
-            'label' => 'Olivine Gym',
-            'description' => 'The steel gym — a lighthouse beacon over the sea, pillars and cold steel',
-            'name' => 'Olivine Gym',
-            'width' => 26,
-            'height' => 16,
-            'tiles' => $tiles,
-            'zones' => [],
-            'objects' => self::objects([
-                ['lamp', 12, 6], ['pillar', 4, 7], ['pillar', 21, 7],
-                ['statue', 8, 6], ['statue', 17, 6],
-                ['fridge', 6, 11], ['cabinet', 8, 11], ['watercooler', 19, 11],
-                ['desk', 3, 13], ['chair', 3, 12], ['computer', 6, 13],
-                ['tv', 16, 13], ['window', 12, 0], ['torch', 2, 8], ['torch', 23, 8],
-            ]),
-            'spawn' => ['x' => 12, 'y' => 14],
-        ];
+        return self::gym(
+            'Olivine Gym',
+            'The steel gym — a beacon between four pools, pillars and cold steel, with two wings',
+            Tiles::FLOOR,
+            [
+                // Pools either side of the corridor, sanded at the edges. Kept off x 16–19, so the
+                // way from the front door to the chamber is never under water.
+                [11, 9, 4, 4, Tiles::SAND], [12, 10, 2, 2, Tiles::WATER],
+                [21, 9, 4, 4, Tiles::SAND], [22, 10, 2, 2, Tiles::WATER],
+                [11, 14, 4, 4, Tiles::SAND], [12, 15, 2, 2, Tiles::WATER],
+                [21, 14, 4, 4, Tiles::SAND], [22, 15, 2, 2, Tiles::WATER],
+                [2, 2, 6, 4, Tiles::WATER],
+                [28, 2, 6, 4, Tiles::WATER],
+            ],
+            [
+                // The beacon itself, on the corridor where everybody walks past it.
+                ['lamp', 17, 9], ['lamp', 18, 16],
+                ['pillar', 11, 8], ['pillar', 24, 8], ['pillar', 11, 17], ['pillar', 24, 17],
+                ['statue', 15, 12], ['statue', 20, 12],
+                ['cabinet', 16, 17], ['fridge', 19, 17],
+                ['painting', 7, 0], ['painting', 28, 0],
+            ],
+        );
     }
 
-    /** Blackthorn — the dragon gym. A cavern of rock and torchlight around a still pool. */
+    /** Blackthorn — the dragon gym. A cavern of rock and torchlight round a still pool. */
     private static function gymBlackthorn(): array
     {
-        $tiles = self::room(26, 16, Tiles::PATH);
-        self::rect($tiles, 10, 6, 6, 4, Tiles::SAND);
-        self::rect($tiles, 11, 7, 4, 2, Tiles::WATER);
-
-        $scaffold = self::gymScaffold(Tiles::PATH);
-
-        return [
-            'label' => 'Blackthorn Gym',
-            'description' => 'The dragon gym — a torch-lit cavern of rock around a still pool',
-            'name' => 'Blackthorn Gym',
-            'width' => 26,
-            'height' => 16,
-            'tiles' => $tiles,
-            'zones' => [$scaffold['zone']],
-            'objects' => self::objects([
-                ...$scaffold['objects'],
-                ['statue', 5, 2], ['statue', 20, 2], ['torch', 12, 1],
-                ['boulder', 6, 10], ['boulder', 19, 10], ['boulder', 8, 3], ['boulder', 17, 3],
-                ['arcade', 15, 12], ['painting', 12, 0],
-            ]),
-            'spawn' => ['x' => 12, 'y' => 14],
-        ];
+        return self::gym(
+            'Blackthorn Gym',
+            'The dragon gym — a torch-lit cavern of rock round two still pools, with two wings',
+            Tiles::PATH,
+            [
+                [12, 9, 4, 4, Tiles::SAND], [13, 10, 2, 2, Tiles::WATER],
+                [20, 9, 4, 4, Tiles::SAND], [21, 10, 2, 2, Tiles::WATER],
+                [13, 15, 10, 3, Tiles::SAND],
+                [2, 2, 6, 4, Tiles::SAND],
+                [28, 2, 6, 4, Tiles::SAND],
+            ],
+            [
+                ['boulder', 11, 8], ['boulder', 24, 8], ['boulder', 11, 16], ['boulder', 24, 16],
+                ['boulder', 14, 13], ['boulder', 21, 13],
+                ['torch', 12, 12], ['torch', 23, 12], ['torch', 16, 16], ['torch', 19, 16],
+                ['statue', 3, 3], ['statue', 32, 3], ['barrel', 6, 5], ['crate', 29, 5],
+                ['painting', 7, 0], ['painting', 28, 0],
+            ],
+        );
     }
 
     /** Four walls and nothing in them, for somebody who'd rather draw their own. 24×16. */
@@ -555,6 +611,30 @@ final class MapPresets
             $tiles[$y] = $y === 0 || $y === $height - 1
                 ? str_repeat($tile, $width)
                 : $tile.mb_substr($row, 1, $width - 2).$tile;
+        }
+    }
+
+    /**
+     * A room within a room: a rectangle of wall with doorways punched out of it.
+     *
+     * The *outline* only — whatever floor is already inside stays, because a chamber's inside is
+     * usually the same ground as the hall it stands in and the gyms that want otherwise paint it
+     * afterwards. Doors are given as absolute `[x, y]` tiles on the outline rather than as an edge
+     * and an offset: two coordinates are easier to check against a map than a side and a length,
+     * and a doorway in the wrong place is the one mistake here that makes a room unenterable.
+     *
+     * @param  array<int, string>  $tiles
+     * @param  array<int, array{0: int, 1: int}>  $doors
+     */
+    private static function chamber(array &$tiles, int $x, int $y, int $w, int $h, string $floor, array $doors): void
+    {
+        self::rect($tiles, $x, $y, $w, 1, Tiles::WALL);
+        self::rect($tiles, $x, $y + $h - 1, $w, 1, Tiles::WALL);
+        self::rect($tiles, $x, $y, 1, $h, Tiles::WALL);
+        self::rect($tiles, $x + $w - 1, $y, 1, $h, Tiles::WALL);
+
+        foreach ($doors as [$dx, $dy]) {
+            self::rect($tiles, $dx, $dy, 1, 1, $floor);
         }
     }
 

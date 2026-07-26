@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ArrowUpRight, Circle, Eraser, Minus, MousePointer2, PaintBucket, Pencil, Square, StickyNote, Trash2, Type, Undo2 } from 'lucide-vue-next'
+import { ArrowUpRight, Circle, Eraser, Hand, Maximize, Minus, MousePointer2, PaintBucket, Pencil, Square, StickyNote, Trash2, Type, Undo2, ZoomIn, ZoomOut } from 'lucide-vue-next'
 import type { WhiteboardStroke, WhiteboardStrokeKind, WhiteboardStrokePayload } from '~/types'
 import { LOGICAL_WIDTH, boundingBox, hitStroke, renderStroke, simplify } from '~/lib/whiteboardEngine'
 import {
@@ -40,8 +40,11 @@ const {
   whisperLive, whisperCursor, whisperMove, subscribe, unsubscribe,
 } = useWhiteboard(props.basePath, props.streamName)
 
-type Tool = WhiteboardStrokeKind | 'eraser' | 'select' | 'bucket'
+type Tool = WhiteboardStrokeKind | 'eraser' | 'select' | 'bucket' | 'pan'
 const TOOLS: { tool: Tool, icon: any, label: string }[] = [
+  // Pan leads the row because on a touch screen it is the tool you need first: the board is
+  // wider than a phone, and every other tool draws on it rather than moves it.
+  { tool: 'pan', icon: Hand, label: 'Pan — drag the board around' },
   { tool: 'select', icon: MousePointer2, label: 'Select / move' },
   { tool: 'pen', icon: Pencil, label: 'Pen' },
   { tool: 'eraser', icon: Eraser, label: 'Eraser' },
@@ -78,6 +81,28 @@ const BOARD_PAD = 240
  * shrinking and pans sideways instead.
  */
 const MIN_BOARD_CSS = 640
+
+/**
+ * How far in or out the viewer has zoomed, on top of the fit-to-panel scale.
+ *
+ * A private multiplier — it changes nothing about the shared coordinate space, so two people
+ * at different zoom levels are still drawing on the same board. It exists mostly for the
+ * phone: {@link MIN_BOARD_CSS} means the board is never rendered narrower than 640px, which
+ * on a 390px screen is a board you can only ever see two thirds of. Zooming out is how that
+ * screen sees the whole thing.
+ */
+const MIN_ZOOM = 0.35
+const MAX_ZOOM = 4
+const zoom = ref(1)
+
+function setZoom(next: number) {
+  zoom.value = Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, next))
+}
+
+// The one-off "you can move this" nudge, shown to fingers only and retired by the first touch.
+const coarse = useCoarsePointer()
+const touchHint = ref(false)
+let hintTimer: ReturnType<typeof setTimeout> | undefined
 
 /**
  * The tools a fill colour means anything for: the two shapes with an inside, and the bucket
@@ -211,11 +236,13 @@ function resize() {
   const box = wrap.value
   if (!el || !box) return
   const dpr = window.devicePixelRatio || 1
-  const viewW = Math.max(box.clientWidth, MIN_BOARD_CSS)
-  scale.value = viewW / LOGICAL_WIDTH
+  const fitW = Math.max(box.clientWidth, MIN_BOARD_CSS)
+  scale.value = (fitW / LOGICAL_WIDTH) * zoom.value
 
   const { right, bottom } = contentExtent()
-  const w = Math.max(viewW, (right + BOARD_PAD) * scale.value)
+  // The floor is the *panel*, not the fit width: zoomed out, the whole board is allowed to
+  // become narrower than MIN_BOARD_CSS and finally fit on a phone, which is the point of it.
+  const w = Math.max(box.clientWidth, (right + BOARD_PAD) * scale.value, LOGICAL_WIDTH * scale.value)
   const h = Math.max(box.clientHeight, (bottom + BOARD_PAD) * scale.value)
   // Resizing a canvas wipes it, so leave it alone when nothing actually changed.
   if (Math.round(w) === Math.round(cssW.value) && Math.round(h) === Math.round(cssH.value)) return
@@ -306,7 +333,125 @@ function toLogical(e: PointerEvent) {
   return { x: (e.clientX - rect.left) / scale.value, y: (e.clientY - rect.top) / scale.value }
 }
 
+/**
+ * Moving the board, rather than drawing on it.
+ *
+ * The canvas is `touch-action: none` — it has to be, or the browser claims every finger drag
+ * as a scroll and the pen never draws a line. The cost is that it also swallows the wrapper's
+ * own scrolling, which on a phone left the board completely stuck: wider than the screen, and
+ * unpannable. So panning is done here by hand instead of by the browser, on two gestures:
+ *
+ *   - the Pan tool, one finger (or the mouse) dragging the board about; and
+ *   - two fingers, from *any* tool, which pan and pinch-zoom together. That one matters
+ *     because it means you never have to put the pen down to go and look somewhere else.
+ *
+ * Every live pointer is tracked, because "is this a second finger" is the whole question.
+ */
+const pointers = new Map<number, { x: number, y: number }>()
+let pan: { x: number, y: number, left: number, top: number } | null = null
+let pinch: { distance: number, zoom: number, x: number, y: number, left: number, top: number } | null = null
+
+function twoFingerState() {
+  const [a, b] = [...pointers.values()]
+  if (!a || !b) return null
+  return {
+    distance: Math.max(1, Math.hypot(b.x - a.x, b.y - a.y)),
+    x: (a.x + b.x) / 2,
+    y: (a.y + b.y) / 2,
+  }
+}
+
+/** Abandon whatever mark or drag was in flight — a second finger means you meant to navigate. */
+function abandonGesture() {
+  drawing = false
+  drag = null
+  if (draft.value) {
+    draft.value = null
+    whisperLive(null, true)
+  }
+}
+
+function beginPan(e: PointerEvent) {
+  const box = wrap.value
+  if (!box) return
+  canvas.value?.setPointerCapture(e.pointerId)
+  pan = { x: e.clientX, y: e.clientY, left: box.scrollLeft, top: box.scrollTop }
+}
+
+function movePan(e: PointerEvent) {
+  const box = wrap.value
+  if (!box || !pan) return
+  box.scrollLeft = pan.left - (e.clientX - pan.x)
+  box.scrollTop = pan.top - (e.clientY - pan.y)
+}
+
+function beginPinch() {
+  const box = wrap.value
+  const state = twoFingerState()
+  if (!box || !state) return
+  abandonGesture()
+  pinch = { distance: state.distance, zoom: zoom.value, x: state.x, y: state.y, left: box.scrollLeft, top: box.scrollTop }
+}
+
+function movePinch() {
+  const box = wrap.value
+  const state = twoFingerState()
+  if (!box || !pinch || !state) return
+
+  // Pan on the midpoint's travel, then zoom on how far apart the fingers have moved. The zoom
+  // watcher re-anchors the panel's centre afterwards, so the two don't fight each other.
+  box.scrollLeft = pinch.left - (state.x - pinch.x)
+  box.scrollTop = pinch.top - (state.y - pinch.y)
+  setZoom(pinch.zoom * (state.distance / pinch.distance))
+}
+
+/**
+ * Ctrl/⌘ + wheel zooms, the way every canvas app does; a plain wheel keeps scrolling the board,
+ * which is what the wrapper would have done anyway.
+ */
+function onWheel(e: WheelEvent) {
+  if (!e.ctrlKey && !e.metaKey) return
+  e.preventDefault()
+  setZoom(zoom.value * (e.deltaY < 0 ? 1.1 : 1 / 1.1))
+}
+
+/** Back to 1:1 with the panel, from wherever the pinching left it. */
+function resetZoom() {
+  setZoom(1)
+}
+
+/**
+ * Pull the whole shared width into the panel.
+ *
+ * Distinct from 100%, and the more useful of the two on a phone: at 100% the board is still
+ * MIN_BOARD_CSS wide however narrow the screen is, so this is the button that actually says
+ * "show me all of it".
+ */
+function fitWidth() {
+  const box = wrap.value
+  if (!box) return
+  setZoom(box.clientWidth / Math.max(box.clientWidth, MIN_BOARD_CSS))
+}
+
 function onPointerDown(e: PointerEvent) {
+  pointers.set(e.pointerId, { x: e.clientX, y: e.clientY })
+  touchHint.value = false
+
+  // A second finger takes over from whatever the first was doing.
+  if (pointers.size === 2) {
+    pan = null
+    beginPinch()
+    return
+  }
+  if (pointers.size > 2) return
+
+  // Panning is navigation, not authorship — it works on a read-only board too.
+  if (tool.value === 'pan') {
+    e.preventDefault()
+    beginPan(e)
+    return
+  }
+
   if (!props.canDraw || textEntry.value) return
   const p = toLogical(e)
 
@@ -378,6 +523,11 @@ function onPointerDown(e: PointerEvent) {
 }
 
 function onPointerMove(e: PointerEvent) {
+  if (pointers.has(e.pointerId)) pointers.set(e.pointerId, { x: e.clientX, y: e.clientY })
+
+  if (pinch) return movePinch()
+  if (pan) return movePan(e)
+
   const p = toLogical(e)
 
   // Dragging a selected text/note: move its anchor, or resize from the bottom-right corner.
@@ -416,6 +566,18 @@ function onPointerMove(e: PointerEvent) {
 
 async function onPointerUp(e: PointerEvent) {
   canvas.value?.releasePointerCapture(e.pointerId)
+  pointers.delete(e.pointerId)
+
+  // Lifting one of two fingers ends the pinch rather than handing the gesture back to the
+  // remaining finger — carrying on as a one-finger pan would jump the board.
+  if (pinch) {
+    if (pointers.size < 2) pinch = null
+    return
+  }
+  if (pan) {
+    pan = null
+    return
+  }
 
   // Finished a move/resize — persist it (the broadcast then corrects every other board).
   if (drag) {
@@ -544,7 +706,31 @@ watch(tool, () => { selectedId.value = null; drag = null })
 // someone else's — may extend it downwards.
 watch(strokes, () => resize(), { deep: true })
 
+/**
+ * Re-lay the surface at the new zoom, keeping whatever was in the middle of the panel there.
+ *
+ * Scroll offsets are css pixels and so scale with the zoom; dividing by the old factor gives a
+ * zoom-independent point on the board, which is then put back under the same place on screen.
+ * Without it, zooming out on a phone threw you to the top-left corner of an empty board.
+ */
+watch(zoom, (next, previous) => {
+  const box = wrap.value
+  if (!box) return resize()
+
+  const cx = (box.scrollLeft + box.clientWidth / 2) / previous
+  const cy = (box.scrollTop + box.clientHeight / 2) / previous
+  resize()
+  nextTick(() => {
+    box.scrollLeft = cx * next - box.clientWidth / 2
+    box.scrollTop = cy * next - box.clientHeight / 2
+  })
+})
+
 onMounted(async () => {
+  if (coarse.value) {
+    touchHint.value = true
+    hintTimer = setTimeout(() => (touchHint.value = false), 6000)
+  }
   resize()
   ro = new ResizeObserver(resize)
   if (wrap.value) ro.observe(wrap.value)
@@ -555,6 +741,7 @@ onMounted(async () => {
 onBeforeUnmount(() => {
   cancelAnimationFrame(raf)
   ro?.disconnect()
+  clearTimeout(hintTimer)
   unsubscribe()
 })
 </script>
@@ -570,7 +757,7 @@ onBeforeUnmount(() => {
         class="grid h-7 w-7 place-items-center rounded transition-colors"
         :class="tool === t.tool ? 'bg-primary text-primary-foreground' : 'text-muted-foreground hover:bg-muted'"
         :title="t.label"
-        :disabled="!canDraw"
+        :disabled="!canDraw && t.tool !== 'pan'"
         @click="tool = t.tool"
       >
         <component :is="t.icon" class="h-4 w-4" />
@@ -673,6 +860,47 @@ onBeforeUnmount(() => {
         <span class="rounded-full bg-current" :style="{ width: `${w + 2}px`, height: `${w + 2}px` }" />
       </button>
 
+      <span class="mx-1 h-5 w-px bg-border" />
+
+      <!-- Zoom. Buttons rather than pinch-only, because a mouse has no pinch and a read-only
+           board on a phone still has to be readable. -->
+      <span class="flex items-center gap-1">
+        <button
+          type="button"
+          class="grid h-7 w-7 place-items-center rounded text-muted-foreground transition-colors hover:bg-muted disabled:opacity-40"
+          title="Zoom out"
+          :disabled="zoom <= MIN_ZOOM"
+          @click="setZoom(zoom / 1.25)"
+        >
+          <ZoomOut class="h-4 w-4" />
+        </button>
+        <button
+          type="button"
+          class="grid h-7 min-w-11 place-items-center rounded px-1 text-[11px] tabular-nums text-muted-foreground transition-colors hover:bg-muted"
+          title="Fit the board to the panel"
+          @click="resetZoom"
+        >
+          {{ Math.round(zoom * 100) }}%
+        </button>
+        <button
+          type="button"
+          class="grid h-7 w-7 place-items-center rounded text-muted-foreground transition-colors hover:bg-muted disabled:opacity-40"
+          title="Zoom in"
+          :disabled="zoom >= MAX_ZOOM"
+          @click="setZoom(zoom * 1.25)"
+        >
+          <ZoomIn class="h-4 w-4" />
+        </button>
+        <button
+          type="button"
+          class="grid h-7 w-7 place-items-center rounded text-muted-foreground transition-colors hover:bg-muted"
+          title="Fit the whole board width"
+          @click="fitWidth"
+        >
+          <Maximize class="h-4 w-4" />
+        </button>
+      </span>
+
       <span class="ml-auto flex items-center gap-1">
         <button
           type="button"
@@ -704,11 +932,12 @@ onBeforeUnmount(() => {
           <canvas
             ref="canvas"
             class="absolute inset-0 touch-none"
-            :class="!canDraw ? 'cursor-default' : tool === 'select' ? 'cursor-move' : tool === 'eraser' ? 'cursor-cell' : tool === 'bucket' ? 'cursor-copy' : 'cursor-crosshair'"
+            :class="tool === 'pan' ? 'cursor-grab active:cursor-grabbing' : !canDraw ? 'cursor-default' : tool === 'select' ? 'cursor-move' : tool === 'eraser' ? 'cursor-cell' : tool === 'bucket' ? 'cursor-copy' : 'cursor-crosshair'"
             @pointerdown="onPointerDown"
             @pointermove="onPointerMove"
             @pointerup="onPointerUp"
             @pointercancel="onPointerUp"
+            @wheel="onWheel"
           />
 
           <!-- Inline text / sticky-note entry -->
@@ -724,6 +953,15 @@ onBeforeUnmount(() => {
             @blur="commitText"
           >
         </div>
+      </div>
+
+      <!-- Two-finger pan/zoom is invisible until someone tries it, and the board being stuck
+           is exactly the confusion this is here to prevent. Said once, then gone. -->
+      <div
+        v-if="touchHint && !(!canDraw && readonlyHint)"
+        class="pointer-events-none absolute inset-x-0 bottom-2 mx-auto w-fit rounded-full bg-background/90 px-3 py-1 text-xs text-muted-foreground shadow"
+      >
+        Two fingers to pan and zoom · or pick <Hand class="inline h-3 w-3 align-text-bottom" />
       </div>
 
       <!-- Rides above the scroller, so it stays put as the board moves under it. -->

@@ -182,7 +182,7 @@ onBeforeUnmount(unsubscribe)
           <!-- A chat file came in on a message, so it can point back at it. -->
           <button
             v-if="doc.source === 'chat' && doc.message_id"
-            class="shrink-0 rounded p-1 text-muted-foreground opacity-0 hover:text-foreground group-hover:opacity-100"
+            class="shrink-0 rounded p-1 text-muted-foreground opacity-0 reveal-touch hover:text-foreground group-hover:opacity-100"
             title="Jump to message"
             @click.stop="doc.message_id && emit('jump', doc.message_id)"
           >
@@ -192,7 +192,7 @@ onBeforeUnmount(unsubscribe)
           <!-- Shelf files can be pushed into the chat timeline (channel surfaces only). -->
           <button
             v-if="canEdit && isChannel && doc.source === 'shelf'"
-            class="shrink-0 rounded p-1 text-muted-foreground opacity-0 hover:text-foreground group-hover:opacity-100"
+            class="shrink-0 rounded p-1 text-muted-foreground opacity-0 reveal-touch hover:text-foreground group-hover:opacity-100"
             :title="sentKey === keyOf(doc) ? 'Sent to chat' : 'Send to chat'"
             @click.stop="onSend(doc)"
           >
@@ -201,7 +201,7 @@ onBeforeUnmount(unsubscribe)
           </button>
           <button
             v-if="canEdit && doc.source === 'shelf'"
-            class="shrink-0 rounded p-1 text-muted-foreground opacity-0 hover:text-destructive group-hover:opacity-100"
+            class="shrink-0 rounded p-1 text-muted-foreground opacity-0 reveal-touch hover:text-destructive group-hover:opacity-100"
             title="Delete"
             @click.stop="onRemove(doc)"
           >

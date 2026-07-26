@@ -753,7 +753,7 @@ onBeforeUnmount(() => {
               </span>
             </button>
             <span class="flex-none text-[10px] tabular-nums text-muted-foreground">{{ fmt(s.duration) }}</span>
-            <span class="flex flex-none items-center opacity-0 transition group-hover:opacity-100">
+            <span class="flex flex-none items-center opacity-0 reveal-touch transition group-hover:opacity-100">
               <button class="rounded p-0.5 hover:text-foreground" title="Move up" :disabled="i === 0" @click="moveSource(i + 1, -1)"><ArrowUp class="h-3 w-3" /></button>
               <button class="rounded p-0.5 hover:text-foreground" title="Move down" :disabled="i === upcoming.length - 1" @click="moveSource(i + 1, 1)"><ArrowDown class="h-3 w-3" /></button>
               <button class="rounded p-0.5 hover:text-destructive" title="Remove" @click="removeSource(s)"><Trash2 class="h-3 w-3" /></button>

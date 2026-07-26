@@ -32,6 +32,7 @@ import {
   drawTrainer,
   spriteHue,
   toScreen,
+  toWorld,
   zoneAt,
 } from '~/lib/spaceMapEngine'
 import { decorInFront, decorKind } from '~/lib/spaceDecor'
@@ -117,6 +118,8 @@ const {
   warp,
   seed,
   tick,
+  walkTo,
+  stopWalking,
   isWalking,
   subscribe: subscribeMoves,
   unsubscribe: unsubscribeMoves,
@@ -528,6 +531,7 @@ function reattach() {
 
 async function leave() {
   unsubscribeMoves()
+  stopWalking()
   stopProximity()
   facingObject.value = null
   await disconnect()
@@ -655,6 +659,76 @@ async function useFurniture() {
   finally {
     using.value = false
   }
+}
+
+// --- walking with a pointer ---
+
+/**
+ * Point at the floor to walk there. The room's other set of controls, and on a phone browser its
+ * only one.
+ *
+ * There are no arrow keys on a touchscreen and no on-screen pad in the web build, which made a
+ * Side Space in a mobile browser a room you could look at and not move in. So the canvas takes
+ * pointers as well, in one gesture that reads as two:
+ *
+ *   - **Tap** somewhere and you walk to it, then stop. Nothing to hold.
+ *   - **Press and drag** and you steer continuously, thumbstick-fashion, because the target is
+ *     rewritten under your finger; letting go of a drag stops you where you are.
+ *
+ * Which of the two it was is decided on release by how far the pointer travelled ({@link DRAG_TILES}),
+ * so neither gesture has to be declared up front. Deliberately *not* a click handler: a pointer
+ * gives us the drag for free, works for mouse, pen and finger alike, and `setPointerCapture` keeps
+ * a drag that wanders off the canvas (over the dock, out of the window) attached to the room.
+ *
+ * The keyboard still wins whenever a key is down — see moveSelf.
+ */
+const DRAG_TILES = 0.9
+/** The pointer currently steering, where it went down, and how far it has been since. */
+let steering: { id: number, from: { x: number, y: number }, moved: number } | null = null
+
+/** Where in the room a pointer is, in tiles. */
+function pointerWorld(e: PointerEvent) {
+  const el = canvas.value
+  if (!el) return null
+
+  const box = el.getBoundingClientRect()
+
+  return toWorld(camera, e.clientX - box.left, e.clientY - box.top)
+}
+
+function onPointerDown(e: PointerEvent) {
+  // Not standing in the room, or a sheet is over it: walking isn't ours to do. (A right-click or
+  // a middle-click isn't a walk either.)
+  if (!inThisRoom.value || editing.value || dressing.value || gameMeeting.value) return
+  if (e.button !== 0 && e.pointerType === 'mouse') return
+
+  const at = pointerWorld(e)
+  if (!at) return
+
+  steering = { id: e.pointerId, from: at, moved: 0 }
+  canvas.value?.setPointerCapture(e.pointerId)
+  walkTo(at.x, at.y)
+}
+
+function onPointerMove(e: PointerEvent) {
+  if (!steering || e.pointerId !== steering.id) return
+
+  const at = pointerWorld(e)
+  if (!at) return
+
+  steering.moved = Math.max(steering.moved, Math.hypot(at.x - steering.from.x, at.y - steering.from.y))
+  walkTo(at.x, at.y)
+}
+
+function onPointerUp(e: PointerEvent) {
+  if (!steering || e.pointerId !== steering.id) return
+
+  const dragged = steering.moved > DRAG_TILES
+  steering = null
+
+  // A drag was steering, so releasing means stop. A tap was an instruction, so it stands and we
+  // carry on walking to it — which is the whole point of being able to tap the far side of a room.
+  if (dragged) stopWalking()
 }
 
 /**
@@ -1313,7 +1387,17 @@ watch(inThisRoom, (now) => {
     <div class="flex min-h-0 flex-1">
       <!-- The room. -->
       <div ref="wrap" class="relative min-w-0 flex-1 overflow-hidden">
-        <canvas ref="canvas" class="block h-full w-full" />
+        <!-- `touch-none` is load-bearing: without it a drag across the room is a scroll gesture
+             and the browser takes the pointer stream away mid-walk. -->
+        <canvas
+          ref="canvas"
+          class="block h-full w-full touch-none"
+          :class="inThisRoom ? 'cursor-pointer' : undefined"
+          @pointerdown="onPointerDown"
+          @pointermove="onPointerMove"
+          @pointerup="onPointerUp"
+          @pointercancel="onPointerUp"
+        />
 
         <p v-if="loading" class="absolute inset-0 grid place-items-center text-sm text-muted-foreground">
           Loading the room…
@@ -1330,7 +1414,8 @@ watch(inThisRoom, (now) => {
           <div class="max-w-xs space-y-1">
             <p class="text-sm font-medium">Walk around and talk to whoever's near you</p>
             <p class="text-xs text-muted-foreground">
-              Move with the arrow keys or WASD. You'll hear people within about {{ FAR_TILES }} tiles,
+              Move with the arrow keys or WASD — or tap where you want to go, and drag to steer.
+              You'll hear people within about {{ FAR_TILES }} tiles,
               louder the closer you get — and everyone inside a room hears each other, and nobody outside it.
             </p>
             <p class="text-xs text-muted-foreground">

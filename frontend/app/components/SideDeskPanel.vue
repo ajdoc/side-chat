@@ -16,8 +16,10 @@ const props = defineProps<{ channelId: number }>()
 const emit = defineEmits<{ jump: [messageId: number] }>()
 const route = useRoute()
 
-// Draggable, remembered width (its left border carries the handle).
+// Draggable, remembered width (its left border carries the handle) — beside the timeline on a
+// wide window, and irrelevant on a narrow one, where the desk covers the window instead.
 const { width: panelWidth, startResize } = useResizable('side-desk', 420, { min: 320, max: 760 })
+const { narrow } = useNavDrawer()
 
 const activeApp = computed<SideDeskAppId>(() => {
   const s = route.query.desk
@@ -39,8 +41,15 @@ function close() {
 </script>
 
 <template>
-  <aside class="relative flex shrink-0 flex-col border-l" :style="{ width: `${panelWidth}px` }">
-    <ResizeHandle edge="left" @resize="startResize" />
+  <!-- On a phone the desk takes the window, exactly as the thread, side-chat and info panels
+       already do. It's a full-column surface, and 420px of it beside a 390px timeline meant the
+       board arrived as a sliver — which is most of why it read as broken on mobile. -->
+  <aside
+    class="flex flex-col border-l bg-background"
+    :class="narrow ? 'safe-inset fixed inset-0 z-50 w-full' : 'relative shrink-0'"
+    :style="narrow ? undefined : { width: `${panelWidth}px` }"
+  >
+    <ResizeHandle v-if="!narrow" edge="left" @resize="startResize" />
     <header class="flex h-12 shrink-0 items-center justify-between border-b px-4">
       <div class="flex items-center gap-2 font-semibold">
         <LayoutPanelLeft class="h-4 w-4 text-muted-foreground" /> Side Desk

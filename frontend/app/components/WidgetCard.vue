@@ -40,7 +40,7 @@ function popOut() {
     <button
       v-if="canFloat"
       type="button"
-      class="absolute right-1.5 top-1.5 z-20 flex items-center gap-1 rounded-md border bg-background/85 px-1.5 py-1 text-[11px] text-muted-foreground opacity-0 shadow-sm backdrop-blur transition hover:text-foreground group-hover/widget:opacity-100"
+      class="absolute right-1.5 top-1.5 z-20 flex items-center gap-1 rounded-md border bg-background/85 px-1.5 py-1 text-[11px] text-muted-foreground opacity-0 reveal-touch shadow-sm backdrop-blur transition hover:text-foreground group-hover/widget:opacity-100"
       :title="isWidgetFloating(widget.id) ? 'Already popped out — brings it to the front' : 'Pop out into a floating window'"
       @click="popOut"
     >

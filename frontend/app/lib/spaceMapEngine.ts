@@ -261,6 +261,22 @@ export function toScreen(cam: Camera, x: number, y: number): { x: number, y: num
   }
 }
 
+/**
+ * Canvas pixels → a fractional position in the room. The true inverse of {@link toScreen}.
+ *
+ * {@link toTile} is this rounded to the tile you clicked, which is what a brush wants. Walking
+ * wants the unrounded answer: a tap half a tile to your left should turn you left rather than
+ * resolve to the tile you're already standing on and do nothing.
+ */
+export function toWorld(cam: Camera, px: number, py: number): { x: number, y: number } {
+  const size = TILE * cam.zoom
+
+  return {
+    x: (px - cam.width / 2) / size + cam.x,
+    y: (py - cam.height / 2) / size + cam.y,
+  }
+}
+
 /** Canvas pixels → tile coordinates. The inverse of {@link toScreen}, for the editor's brush. */
 export function toTile(cam: Camera, px: number, py: number): { x: number, y: number } {
   const size = TILE * cam.zoom

@@ -24,6 +24,15 @@
 
         </activity>
 
+        <!-- Screen sharing. A MediaProjection may only run while a foreground service of this
+             exact type is up — Android will kill the capture otherwise — and since Android 14
+             the service may only be started after the user has granted the projection, which is
+             why ScreenCapturePlugin starts it from the consent result rather than up front. -->
+        <service
+            android:name="chat.side.app.screencapture.ScreenCaptureService"
+            android:exported="false"
+            android:foregroundServiceType="mediaProjection" />
+
         <provider
             android:name="androidx.core.content.FileProvider"
             android:authorities="${applicationId}.fileprovider"
@@ -50,6 +59,13 @@
     <!-- A call has to survive the screen going off. -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
+
+    <!-- Screen sharing. The typed foreground-service permission is required from Android 14;
+         POST_NOTIFICATIONS because the service's notification is the user's guaranteed way to
+         see that their screen is being read, and to stop it. There is no separate permission
+         for the capture itself — that consent is the system sheet, every time. -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
     <uses-feature android:name="android.hardware.camera" android:required="false" />
     <uses-feature android:name="android.hardware.microphone" android:required="false" />

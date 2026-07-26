@@ -128,7 +128,7 @@ function formatTime(iso: string) {
           </div>
           <button
             v-if="c.user.id === user?.id"
-            class="rounded p-1 text-muted-foreground opacity-0 transition hover:text-destructive group-hover:opacity-100"
+            class="rounded p-1 text-muted-foreground opacity-0 reveal-touch transition hover:text-destructive group-hover:opacity-100"
             title="Delete comment"
             @click="onRemove(c.id)"
           >

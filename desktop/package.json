@@ -19,7 +19,7 @@
     "appId": "chat.side.desktop",
     "productName": "Side Chat",
     "files": ["main.js", "preload.js", "web/**/*"],
-    "directories": { "output": "dist" },
+    "directories": { "output": "dist", "buildResources": "build" },
     "linux": { "target": ["AppImage"], "category": "Network" },
     "win": { "target": ["nsis"] },
     "mac": { "target": ["dmg"], "category": "public.app-category.social-networking" }

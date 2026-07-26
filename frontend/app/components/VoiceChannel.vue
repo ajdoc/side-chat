@@ -89,13 +89,18 @@ const {
   setWatchedScreen,
   toggleScreenShare,
   toggleAudioShare,
+  canShareScreen,
+  screenShareUnavailableReason,
+  probeDisplayCapture,
   toggleCamera,
   disconnectUser,
   disconnectAll,
   muteUser,
 } = useVoice()
 
-const { isMobile } = usePlatform()
+// Whether this device can capture a screen at all — an OS-and-build question, not a platform
+// one, so it's asked rather than assumed. See useDisplayCapture.
+onMounted(probeDisplayCapture)
 
 /**
  * Whether you own the place this call is in — the one permission the call itself doesn't
@@ -396,7 +401,7 @@ const deafenedCount = computed(() => waiting.value.filter(p => p.deafened).lengt
                  sharer's tile below. -->
             <button
               type="button"
-              class="absolute left-2 top-2 grid h-8 w-8 place-items-center rounded-md bg-black/50 text-white opacity-0 transition hover:bg-black/70 focus:opacity-100 group-hover:opacity-100"
+              class="absolute left-2 top-2 grid h-8 w-8 place-items-center rounded-md bg-black/50 text-white opacity-0 reveal-touch transition hover:bg-black/70 focus:opacity-100 group-hover:opacity-100"
               title="Stop watching this screen"
               @click="watching = null"
             >
@@ -408,7 +413,7 @@ const deafenedCount = computed(() => waiting.value.filter(p => p.deafened).lengt
             <button
               v-if="stage.key !== 'self'"
               type="button"
-              class="absolute right-2 top-2 grid h-8 w-8 place-items-center rounded-md bg-black/50 text-white opacity-0 transition hover:bg-black/70 focus:opacity-100 group-hover:opacity-100"
+              class="absolute right-2 top-2 grid h-8 w-8 place-items-center rounded-md bg-black/50 text-white opacity-0 reveal-touch transition hover:bg-black/70 focus:opacity-100 group-hover:opacity-100"
               :title="isFullscreen ? 'Exit fullscreen' : 'Fullscreen'"
               @click="toggleFullscreen"
             >
@@ -537,10 +542,16 @@ const deafenedCount = computed(() => waiting.value.filter(p => p.deafened).lengt
           <Video v-else class="h-4 w-4" />
         </Button>
 
-        <!-- No mobile WebView implements getDisplayMedia, so the phone build offers no
-             button rather than one that throws. Watching someone else's share still works. -->
+        <!--
+          Offered wherever the device can actually capture a screen, which since the native
+          capture plugin includes the phone. Not a platform check: no mobile WebView implements
+          getDisplayMedia, so on Android it's MediaProjection and on iOS the broadcast
+          extension, and either can be missing on an older OS. `canShareScreen` is the answer
+          to "can *this* device", asked once when the call bar mounts. Watching someone else's
+          share has always worked everywhere and is unaffected either way.
+        -->
         <Button
-          v-if="!isMobile"
+          v-if="canShareScreen"
           :variant="isSharing ? 'default' : 'secondary'"
           size="sm"
           class="gap-2"
@@ -555,7 +566,11 @@ const deafenedCount = computed(() => waiting.value.filter(p => p.deafened).lengt
         <!-- Sound with nothing to look at: a track, or a video everyone is listening to.
              Its own button rather than a mode of the one above, because from the room's
              side it is a different thing to be offered — there is no screen to watch. -->
+        <!-- Same capability gate: an audio share is a screen capture with the picture thrown
+             away, so a device that can't capture can't do this either. It used to be offered
+             unconditionally and simply did nothing when pressed on a phone. -->
         <Button
+          v-if="canShareScreen"
           :variant="isAudioSharing ? 'default' : 'secondary'"
           size="sm"
           class="gap-2"

@@ -115,11 +115,45 @@ platform-specific, so a Linux install is the wrong artefact for a Windows app an
 onto the Windows disk, and installs and builds it entirely there. `make app-desktop` refuses
 to run when npm is the Windows one, rather than failing the confusing way.
 
-It needs one thing from Windows itself: **Developer Mode on** (Settings → System → For
-developers). electron-builder's signing toolchain unpacks an archive containing macOS
-symlinks, and creating a symlink needs a privilege ordinary accounts lack — without it the
-build dies on `Cannot create symbolic link: A required privilege is not held by the client`.
-Running the build from an Administrator shell works too.
+#### The symlink privilege, and why it used to eat the app icon
+
+Before electron-builder touches the `.exe` it fetches a bundle called `winCodeSign`. That
+bundle is not only about signing — it also carries **`rcedit`**, the tool that stamps the app
+icon and version info into the executable. Its archive contains two macOS symlinks, and
+creating a symlink on Windows needs a privilege ordinary accounts don't have, so unpacking it
+died with:
+
+```
+Cannot create symbolic link : A required privilege is not held by the client
+```
+
+That took the whole build with it — but *after* `dist/win-unpacked/` had been written and
+*before* the icon was applied. The result was a runnable app wearing the default Electron
+atom, which reads as "my icon didn't work" rather than "my build failed". If you ever see the
+wrong icon again, **check the exit code first**; it is far more likely to be a failed build
+than an icon problem.
+
+`make app-desktop-win` now handles this itself. The two symlinks live in `darwin/`, which a
+Windows build never touches, so [`make win-codesign-cache`](Makefile) unpacks the archive once
+*excluding that directory*, straight into the path electron-builder looks for. It then finds
+the cache populated and skips the unpack entirely. The target is idempotent and runs as part
+of the build, so there is normally nothing to do by hand.
+
+**Developer Mode is therefore no longer required**, and neither is an Administrator shell.
+Turning Developer Mode on (Settings → System → For developers) remains a valid alternative if
+you'd rather let electron-builder unpack the archive the usual way.
+
+To check what icon an executable actually carries:
+
+```bash
+powershell.exe -NoProfile -Command "Add-Type -AssemblyName System.Drawing; \
+  \$i=[System.Drawing.Icon]::ExtractAssociatedIcon('C:\path\to\Side Chat.exe'); \
+  \$i.ToBitmap().Save('C:\Users\<you>\exe-icon.png')"
+```
+
+One more thing worth knowing: each failed attempt abandons its own ~5.6 MB copy of that
+archive under `AppData\Local\electron-builder\Cache\winCodeSign\`. A run of broken builds
+can leave a gigabyte of them; the directory is a pure download cache and is safe to empty.
 
 ### Desktop development loop
 
@@ -132,6 +166,63 @@ cd desktop
 npm install
 npm run dev
 ```
+
+## The app icon
+
+One artwork drives every platform: **`frontend/brand/icon-source.png`**, a square 1024×1024
+PNG. Everything else in the table below is a derivative and should never be edited by hand —
+replace the source and run `make icons`.
+
+The source sits outside `public/` on purpose. Nuxt copies that directory wholesale into the
+bundle, so a 1.3 MB build-time input parked there would be served to every web visitor and
+packaged into both native shells for nothing.
+
+| Derivative                                              | Used by                                         |
+| ------------------------------------------------------- | ----------------------------------------------- |
+| `frontend/public/favicon.ico` (16/32/48)                 | Browser tab                                      |
+| `frontend/public/icon-192.png`, `icon-512.png`           | Web, declared in `nuxt.config.ts`                |
+| `frontend/public/apple-touch-icon.png` (180)             | "Add to Home Screen" on iOS                      |
+| `frontend/public/brand/logo.png` (256)                   | The mark in the sidebar header (`layouts/app.vue`) |
+| `desktop/build/icon.png` (1024)                          | Electron — electron-builder derives `.ico`/`.icns` |
+| `mobile/ios/App/App/Assets.xcassets/AppIcon.appiconset/AppIcon-512@2x.png` | iOS home screen        |
+| `mobile/android/.../mipmap-*/ic_launcher{,_round,_foreground}.png`         | Android launcher       |
+
+Android's adaptive icon crops the outer ~22% and masks the rest to whatever shape the
+launcher wants, so `ic_launcher_foreground` is the artwork inset to 82% on a transparent
+canvas, with `values/ic_launcher_background.xml` holding the cream the artwork fades to.
+
+Two things about the desktop icon are easy to get wrong, and both fail *silently* — the build
+succeeds and ships Electron's default logo:
+
+- electron-builder finds the icon **by convention**, at `buildResources/icon.png`. There is
+  deliberately no `icon` key in `desktop/package.json`: an explicit `icon` is resolved
+  relative to `buildResources`, so the natural-looking `"build/icon.png"` sends it looking
+  for `build/build/icon.png`. (It also rejects unknown keys outright, so the `build` object
+  can't carry a comment — hence this paragraph.)
+- `make app-desktop-win` builds from a staging directory on the Windows disk, so
+  `desktop/build/` has to be copied there along with the shell. Forget it and electron-builder
+  simply finds no icon to use.
+
+The icon on the *running* window, as opposed to the executable, is a separate setting:
+`BrowserWindow`'s `icon` in [desktop/main.js](desktop/main.js). Windows and macOS take it from
+the packaged executable and ignore that, but Linux and `npm run dev` do not. It points into
+the web bundle (`web/icon-512.png`) because `build/` is a build resource and isn't packaged.
+
+To regenerate, drop the new artwork in as `icon-source.png` and run:
+
+```bash
+make icons
+```
+
+That runs [the generator](frontend/scripts/gen-icons.mjs) in the frontend container — which
+is where `sharp` can be had — into a staging directory, then copies each derivative to its
+final home. The staging step exists because the container only has `frontend/` mounted and
+so cannot write to `desktop/` or `mobile/` itself.
+
+`sharp` is installed on the fly rather than added to `package.json`: nothing at runtime needs
+it, and it drags in a platform-specific native binary that would otherwise have to be right
+for every machine that builds the frontend. The derivatives are committed, so this runs once
+per artwork change, not per build.
 
 ## How each shell works
 

@@ -58,7 +58,7 @@ function removeEntry(id: string) {
           <Square v-else class="h-4 w-4" />
         </button>
         <span class="min-w-0 flex-1 break-words" :class="e.done ? 'text-muted-foreground line-through' : ''">{{ e.text }}</span>
-        <button v-if="canEdit" class="shrink-0 text-muted-foreground opacity-0 hover:text-destructive group-hover:opacity-100" title="Remove" @click="removeEntry(e.id)">
+        <button v-if="canEdit" class="shrink-0 text-muted-foreground opacity-0 reveal-touch hover:text-destructive group-hover:opacity-100" title="Remove" @click="removeEntry(e.id)">
           <X class="h-3.5 w-3.5" />
         </button>
       </li>

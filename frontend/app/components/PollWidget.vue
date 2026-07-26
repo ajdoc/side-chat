@@ -137,7 +137,7 @@ const toggleClose = () => action(props.widget.id, state.value.closed ? 'open' : 
 
           <button
             v-if="editingId !== option.id"
-            class="flex-none text-muted-foreground opacity-0 focus:opacity-100 group-hover:opacity-100 hover:text-foreground"
+            class="flex-none text-muted-foreground opacity-0 reveal-touch focus:opacity-100 group-hover:opacity-100 hover:text-foreground"
             title="Edit option"
             @click.stop="beginEdit(option)"
           >
@@ -145,7 +145,7 @@ const toggleClose = () => action(props.widget.id, state.value.closed ? 'open' : 
           </button>
 
           <button
-            class="flex-none text-muted-foreground opacity-0 focus:opacity-100 group-hover:opacity-100 hover:text-destructive"
+            class="flex-none text-muted-foreground opacity-0 reveal-touch focus:opacity-100 group-hover:opacity-100 hover:text-destructive"
             title="Remove option"
             @click.stop="remove(option)"
           >

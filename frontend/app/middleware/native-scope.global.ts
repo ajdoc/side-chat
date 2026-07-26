@@ -1,16 +1,16 @@
 /**
  * What the first native release is allowed to show.
  *
- * The app builds are chat and voice only. Everything else Side Chat has grown — Side Spaces,
- * the Side Desk, server administration — still ships in the same bundle (there is one bundle),
- * so the boundary has to be drawn at navigation time rather than at build time.
+ * The app builds are chat, voice, the Side Desk, and the server administration that goes with
+ * them. What's still withheld is the Side Space — a walkable room needs a keyboard and a window
+ * — and it ships in the same bundle as everything else (there is one bundle), so the boundary
+ * has to be drawn at navigation time rather than at build time.
  *
- * Two kinds of thing get turned away here: whole routes, and the query flags that open a
- * full-column panel over a route that is otherwise fine. A blocked route goes home; a blocked
- * panel is quietly stripped, because the user reached it from a button that shouldn't have
- * been there and a redirect would feel like a crash.
+ * The Side Desk used to be turned away here too, by stripping its `?desk=` flag. That's gone:
+ * its board now pans and zooms under a finger (see Whiteboard), which was the thing that made
+ * it unusable on a phone, so there is nothing left to withhold.
  *
- * Remove this file and the `isNative` guards it names to lift the gate.
+ * Remove this file and the `isNative` guards it names to lift the rest of the gate.
  */
 
 /** Route paths the native shells may reach, as patterns against `to.path`. */
@@ -25,10 +25,13 @@ const ALLOWED = [
   /^\/chats\/\d+$/,
   /^\/servers\/\d+$/,
   /^\/servers\/\d+\/channels\/\d+$/,
+  // Running a server is allowed on the phone. It has to be, in a set: "Add a server" leads
+  // straight into creating its first channel, and an invite link is useless if nobody on a
+  // phone can approve the request it produces. Withholding any one of these left the other
+  // two as doors onto a redirect.
+  /^\/servers\/\d+\/channels\/new$/,
+  /^\/servers\/\d+\/requests$/,
 ]
-
-/** Query flags that open a desktop-only panel. Dropped rather than redirected. */
-const BLOCKED_QUERY = ['desk']
 
 export default defineNuxtRouteMiddleware((to) => {
   const { isNative } = usePlatform()
@@ -36,12 +39,5 @@ export default defineNuxtRouteMiddleware((to) => {
 
   if (!ALLOWED.some(pattern => pattern.test(to.path))) {
     return navigateTo('/')
-  }
-
-  const stripped = BLOCKED_QUERY.filter(key => key in to.query)
-  if (stripped.length) {
-    const query = { ...to.query }
-    for (const key of stripped) delete query[key]
-    return navigateTo({ path: to.path, query })
   }
 })

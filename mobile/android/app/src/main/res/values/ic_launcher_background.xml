@@ -1,4 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <color name="ic_launcher_background">#FFFFFF</color>
+    <!-- The cream the logo artwork fades out to, so the adaptive icon's foreground layer
+         (which is that artwork on transparency) sits on a continuous field at any mask shape. -->
+    <color name="ic_launcher_background">#FFFFFB</color>
 </resources>

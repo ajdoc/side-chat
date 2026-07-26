@@ -111,7 +111,7 @@ const remove = (card: KanbanCard) => action(props.widget.id, 'remove', { id: car
 
               <button
                 v-if="editingId !== card.id"
-                class="flex-none text-muted-foreground opacity-0 focus:opacity-100 group-hover:opacity-100 hover:text-foreground"
+                class="flex-none text-muted-foreground opacity-0 reveal-touch focus:opacity-100 group-hover:opacity-100 hover:text-foreground"
                 title="Edit card"
                 @click.stop="beginEdit(card)"
               >
@@ -119,7 +119,7 @@ const remove = (card: KanbanCard) => action(props.widget.id, 'remove', { id: car
               </button>
 
               <button
-                class="flex-none text-muted-foreground opacity-0 focus:opacity-100 group-hover:opacity-100 hover:text-destructive"
+                class="flex-none text-muted-foreground opacity-0 reveal-touch focus:opacity-100 group-hover:opacity-100 hover:text-destructive"
                 title="Delete card"
                 @click.stop="remove(card)"
               >

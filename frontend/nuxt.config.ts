@@ -20,6 +20,15 @@ export default defineNuxtConfig({
       // without this line those paddings would silently collapse and the header would sit
       // under the notification tray.
       viewport: 'width=device-width, initial-scale=1, viewport-fit=cover',
+
+      // Every one of these is generated from public/brand/icon-source.png — see the icon
+      // section in APPS.md before replacing any of them by hand.
+      link: [
+        { rel: 'icon', href: '/favicon.ico', sizes: '48x48' },
+        { rel: 'icon', type: 'image/png', href: '/icon-192.png', sizes: '192x192' },
+        { rel: 'icon', type: 'image/png', href: '/icon-512.png', sizes: '512x512' },
+        { rel: 'apple-touch-icon', href: '/apple-touch-icon.png', sizes: '180x180' },
+      ],
     },
   },
 

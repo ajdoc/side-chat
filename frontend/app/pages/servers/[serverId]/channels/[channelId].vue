@@ -86,7 +86,7 @@ function openDesk() {
       <Button variant="ghost" size="sm" class="gap-2 text-muted-foreground" :class="narrow && 'px-2'" title="Threads" @click="openThreadsList">
         <MessagesSquare class="h-4 w-4" /> <span v-if="!narrow">Threads</span>
       </Button>
-      <Button v-if="!isNative" variant="ghost" size="sm" class="gap-2 text-muted-foreground" :class="narrow && 'px-2'" title="Side Desk" @click="openDesk">
+      <Button variant="ghost" size="sm" class="gap-2 text-muted-foreground" :class="narrow && 'px-2'" title="Side Desk" @click="openDesk">
         <LayoutPanelLeft class="h-4 w-4" /> <span v-if="!narrow">Side Desk</span>
       </Button>
       <Button variant="ghost" size="sm" class="gap-2 text-muted-foreground" :class="narrow && 'px-2'" title="Info" @click="openInfo">

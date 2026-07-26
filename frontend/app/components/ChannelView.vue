@@ -293,8 +293,17 @@ onBeforeUnmount(() => {
 <template>
   <div class="flex min-h-0 flex-1">
     <div class="flex min-w-0 flex-1 flex-col">
-      <header class="flex h-12 shrink-0 items-center justify-between border-b px-4">
-        <div class="flex min-w-0 items-center gap-2">
+      <!--
+        Two groups that both want the whole bar.
+
+        On a phone the actions (Call, Side chats, Threads, Side Desk, Info, the group menu)
+        are wider than the screen on their own. Held at their natural width they pushed the
+        title and the drawer button off the left edge and sat on top of them, so instead the
+        actions get a bounded slice of the header and scroll sideways inside it, and the title
+        keeps the rest. On a wide screen everything fits and nothing scrolls.
+      -->
+      <header class="flex h-12 shrink-0 items-center justify-between gap-1 border-b px-2 sm:px-4">
+        <div class="flex min-w-0 flex-1 items-center gap-2">
           <!-- On a narrow screen the sidebar is a drawer, and this is the only way back to it. -->
           <button
             v-if="narrow"
@@ -313,7 +322,9 @@ onBeforeUnmount(() => {
             </p>
           </div>
         </div>
-        <div class="flex shrink-0 items-center gap-1">
+        <!-- `[&>*]:shrink-0` is what makes it scroll rather than squash: without it the
+             buttons would just compress to fit and never overflow the strip. -->
+        <div class="scroll-strip flex max-w-[65%] shrink items-center gap-1 [&>*]:shrink-0 md:max-w-none md:shrink-0 md:overflow-visible">
           <slot name="actions" />
           <button
             v-if="!isMobile"

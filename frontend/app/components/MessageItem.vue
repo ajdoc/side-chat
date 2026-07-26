@@ -104,6 +104,39 @@ const reactOpen = ref(false)
 const replyMenuOpen = ref(false)
 const overflowOpen = ref(false)
 const menuOpen = computed(() => reactOpen.value || replyMenuOpen.value || overflowOpen.value)
+
+/**
+ * The same bar, for fingers.
+ *
+ * There is no hover on a phone, so on a coarse pointer the bar is opened by pressing and
+ * holding the message instead — the gesture every other chat app uses for exactly this. It
+ * then *stays* open (hover would have kept it up while the mouse rested there; a finger has
+ * nowhere to rest), until you pick something, press another message, or tap away.
+ */
+const coarse = useCoarsePointer()
+const row = ref<HTMLElement | null>(null)
+const pinned = ref(false)
+const longPress = useLongPress(() => { pinned.value = true })
+
+// Shown on hover for a mouse, on long-press for a finger, and pinned open for either while one
+// of the bar's own menus is up — moving into a menu un-hovers the message, and on touch the
+// menu is the only thing keeping the bar relevant.
+const actionsVisible = computed(() => menuOpen.value || (coarse.value && pinned.value))
+
+/** Picking anything is the end of the gesture — the bar has done its job. */
+function dismiss() {
+  pinned.value = false
+}
+
+function onDocumentPointerDown(event: PointerEvent) {
+  if (!pinned.value) return
+  // A press inside the row (including the bar itself) is either the gesture that opened it or
+  // a button about to be tapped; anywhere else means "never mind".
+  if (!row.value?.contains(event.target as Node)) pinned.value = false
+}
+
+onMounted(() => document.addEventListener('pointerdown', onDocumentPointerDown, true))
+onBeforeUnmount(() => document.removeEventListener('pointerdown', onDocumentPointerDown, true))
 // Flips to a tick for a beat after a successful copy, then falls back to the copy icon.
 const copied = ref(false)
 let copiedTimer: ReturnType<typeof setTimeout> | undefined
@@ -185,8 +218,17 @@ onBeforeUnmount(() => clearTimeout(copiedTimer))
 
   <div
     v-else
+    ref="row"
     class="group relative flex gap-3 rounded px-2 py-1.5 transition-colors duration-500 hover:bg-muted/50"
-    :class="highlighted ? 'bg-amber-200/50 dark:bg-amber-400/10' : ''"
+    :class="[
+      highlighted ? 'bg-amber-200/50 dark:bg-amber-400/10' : '',
+      // A long press would otherwise start a text selection — and, on iOS, the system's own
+      // copy/share callout — under the bar it just opened. The pinned message also needs to
+      // read as picked-up rather than merely hovered.
+      coarse ? 'long-pressable' : '',
+      coarse && pinned ? 'bg-muted' : '',
+    ]"
+    v-on="coarse ? longPress : {}"
   >
     <div class="relative h-9 w-9 shrink-0">
       <div class="grid h-full w-full place-items-center rounded-full bg-primary text-xs font-semibold text-primary-foreground">
@@ -330,8 +372,14 @@ onBeforeUnmount(() => clearTimeout(copiedTimer))
          click away; everything else lives under the ⋯ so the bar stays uncluttered. -->
     <div
       v-if="!editing"
-      class="absolute right-2 top-1 items-center gap-1 rounded border bg-background p-0.5 shadow-sm"
-      :class="menuOpen ? 'flex' : 'hidden group-hover:flex'"
+      class="absolute right-2 top-1 z-10 items-center gap-1 rounded border bg-background p-0.5 shadow-sm"
+      :class="[
+        actionsVisible ? 'flex' : coarse ? 'hidden' : 'hidden group-hover:flex',
+        // Fingers need targets, and a phone-width row has no room for the bar to sit beside
+        // the text — so on touch it grows and floats over the message rather than beside it.
+        coarse ? 'max-w-[calc(100%-1rem)] flex-wrap gap-1.5 p-1 [&_button]:p-2' : '',
+      ]"
+      @click="dismiss"
     >
       <!-- Start a side chat off this message — the app's signature move, so it leads the
            action bar as a labeled, primary-tinted affordance rather than hiding in an

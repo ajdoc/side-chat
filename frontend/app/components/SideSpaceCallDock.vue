@@ -6,12 +6,19 @@ import type { Peer } from '~/types'
  * The people half of a Side Space: everyone in earshot, their cameras, whatever screen is
  * being shared, and the volume of each.
  *
- * The set it renders needs no filtering, and that's the neat part. In a Side Space `peers` is
- * *already* "people near you" — the room only opens a connection to somebody within
- * CONNECT_TILES and drops them when they walk off (see useVoice's range gating). So the tiles
- * appear and disappear as people come and go from earshot without this component knowing that
- * proximity is a thing. It also means the media follows: you can only receive a camera or a
- * screen from somebody you're connected to, which is to say from somebody standing near you.
+ * ## Why it filters, when `peers` looks like it already has
+ *
+ * A Side Space only connects you to people within `CONNECT_TILES`, so `peers` is roughly "people
+ * near you" — and this component used to render it whole on the strength of that. Roughly isn't
+ * near enough. The connect radius is deliberately *wider* than earshot (it pre-dials, so the first
+ * word out of someone walking towards you isn't lost) and a sealed zone silences people at any
+ * distance at all. Both leave you holding a live connection to somebody you cannot hear, and what
+ * you got was their tile in the list, their camera playing and their screen taking the stage from
+ * across the room — proximity that governed volume and nothing else.
+ *
+ * So the list is everyone {@link useVoice.outOfEarshot} says you can actually hear. The connection
+ * carries on underneath, which is the point of having opened it early; what changes is that a
+ * person you can't hear isn't shown either. Walk over and they turn up, whole.
  *
  * Every control here is {@link VoiceTile}'s or {@link useVoice}'s — per-peer mute, per-peer
  * volume, the separate volume for what they're sharing, the watch/stop-watching stage. None of
@@ -37,7 +44,16 @@ const {
   setWatchedScreen,
   disconnectUser,
   muteUser,
+  outOfEarshot,
 } = useVoice()
+
+/**
+ * Everyone in earshot — the only people this panel shows anything about.
+ *
+ * One computed, used everywhere below in place of `peers`, so there's a single place where "near
+ * enough to be in the room with you" is decided and no surface can quietly forget to ask.
+ */
+const nearby = computed(() => peers.value.filter(p => !outOfEarshot(p)))
 
 const collapsed = ref(false)
 const stageEl = ref<HTMLElement | null>(null)
@@ -71,7 +87,7 @@ const sharers = computed(() => {
   const list: { key: number | 'self', name: string, stream: MediaStream | null }[] = []
 
   if (isSharing.value) list.push({ key: 'self', name: 'Your screen', stream: screenStream.value })
-  for (const peer of peers.value) {
+  for (const peer of nearby.value) {
     if (peer.screenSharing && peer.screen) list.push({ key: peer.id, name: peer.name, stream: peer.screen })
   }
 
@@ -79,10 +95,10 @@ const sharers = computed(() => {
 })
 
 const stage = computed(() => sharers.value.find(s => s.key === watching.value) ?? null)
-const stagePeer = computed(() => peers.value.find(p => p.id === watching.value) ?? null)
+const stagePeer = computed(() => nearby.value.find(p => p.id === watching.value) ?? null)
 
 /** Anybody sharing sound with no picture — there's nothing to watch, so they get a mention. */
-const audioSharers = computed(() => peers.value.filter(p => p.audioSharing && !p.screenSharing))
+const audioSharers = computed(() => nearby.value.filter(p => p.audioSharing && !p.screenSharing))
 
 /**
  * Start watching a screen as soon as one appears, and stop when the last one goes.
@@ -129,7 +145,7 @@ onBeforeUnmount(() => document.removeEventListener('fullscreenchange', onFullscr
       <span class="flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
         <Users class="h-3.5 w-3.5" />
         In earshot
-        <span class="tabular-nums">{{ peers.length }}</span>
+        <span class="tabular-nums">{{ nearby.length }}</span>
       </span>
       <button
         type="button"
@@ -161,7 +177,7 @@ onBeforeUnmount(() => document.removeEventListener('fullscreenchange', onFullscr
 
           <button
             type="button"
-            class="absolute left-1.5 top-1.5 grid h-7 w-7 place-items-center rounded-md bg-black/50 text-white opacity-0 transition hover:bg-black/70 focus:opacity-100 group-hover:opacity-100"
+            class="absolute left-1.5 top-1.5 grid h-7 w-7 place-items-center rounded-md bg-black/50 text-white opacity-0 reveal-touch transition hover:bg-black/70 focus:opacity-100 group-hover:opacity-100"
             title="Stop watching this screen"
             @click="watching = null"
           >
@@ -171,7 +187,7 @@ onBeforeUnmount(() => document.removeEventListener('fullscreenchange', onFullscr
           <button
             v-if="stage.key !== 'self'"
             type="button"
-            class="absolute right-1.5 top-1.5 grid h-7 w-7 place-items-center rounded-md bg-black/50 text-white opacity-0 transition hover:bg-black/70 focus:opacity-100 group-hover:opacity-100"
+            class="absolute right-1.5 top-1.5 grid h-7 w-7 place-items-center rounded-md bg-black/50 text-white opacity-0 reveal-touch transition hover:bg-black/70 focus:opacity-100 group-hover:opacity-100"
             :title="isFullscreen ? 'Exit fullscreen' : 'Fullscreen'"
             @click="toggleFullscreen"
           >
@@ -247,7 +263,7 @@ onBeforeUnmount(() => document.removeEventListener('fullscreenchange', onFullscr
           @watch="watching = watching === 'self' ? null : 'self'"
         />
         <VoiceTile
-          v-for="peer in peers"
+          v-for="peer in nearby"
           :key="peer.id"
           :peer="peer"
           :speaking="peer.speaking"
@@ -265,7 +281,7 @@ onBeforeUnmount(() => document.removeEventListener('fullscreenchange', onFullscr
         />
       </div>
 
-      <p v-if="!peers.length" class="px-1 py-2 text-center text-[11px] leading-snug text-muted-foreground">
+      <p v-if="!nearby.length" class="px-1 py-2 text-center text-[11px] leading-snug text-muted-foreground">
         Nobody's near you yet. Walk over to somebody and their camera, screen and volume
         controls turn up here.
       </p>

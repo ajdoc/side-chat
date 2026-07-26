@@ -26,6 +26,8 @@ const { conversation, openConversation, closeConversation, clearUnread } = useCo
 const { participantsIn } = useVoiceRoster()
 const { channelId: callChannelId } = useVoice()
 const { start } = useCall()
+// Narrow headers show icons without labels rather than a row that doesn't fit.
+const { narrow } = useNavDrawer()
 
 const conversationId = computed(() => Number(route.params.conversationId))
 
@@ -153,22 +155,26 @@ useHead({ title: computed(() => title.value) })
         size="sm"
         :variant="callBusy ? 'default' : 'ghost'"
         class="gap-2"
-        :class="callBusy ? '' : 'text-muted-foreground'"
+        :class="[callBusy ? '' : 'text-muted-foreground', narrow && !callBusy ? 'px-2' : '']"
         :title="callBusy ? 'Join the call' : `Call ${title}`"
         @click="onCall"
       >
-        <Phone class="h-4 w-4" /> {{ callBusy ? 'Join call' : 'Call' }}
+        <Phone class="h-4 w-4" />
+        <span v-if="!narrow || callBusy">{{ callBusy ? 'Join call' : 'Call' }}</span>
       </Button>
 
+      <!-- Same collapse the server-channel header does: on a phone these are icons, because
+           four labels plus a title don't fit across 390px and the labels are the part you can
+           do without. What still overflows scrolls sideways — see ChannelView's header. -->
       <SideChatsButton v-if="channel" :channel-id="channel.id" />
-      <Button variant="ghost" size="sm" class="gap-2 text-muted-foreground" @click="openThreadsList">
-        <MessagesSquare class="h-4 w-4" /> Threads
+      <Button variant="ghost" size="sm" class="gap-2 text-muted-foreground" :class="narrow && 'px-2'" title="Threads" @click="openThreadsList">
+        <MessagesSquare class="h-4 w-4" /> <span v-if="!narrow">Threads</span>
       </Button>
-      <Button variant="ghost" size="sm" class="gap-2 text-muted-foreground" @click="openDesk">
-        <LayoutPanelLeft class="h-4 w-4" /> Side Desk
+      <Button variant="ghost" size="sm" class="gap-2 text-muted-foreground" :class="narrow && 'px-2'" title="Side Desk" @click="openDesk">
+        <LayoutPanelLeft class="h-4 w-4" /> <span v-if="!narrow">Side Desk</span>
       </Button>
-      <Button variant="ghost" size="sm" class="gap-2 text-muted-foreground" @click="openInfo">
-        <Info class="h-4 w-4" /> Info
+      <Button variant="ghost" size="sm" class="gap-2 text-muted-foreground" :class="narrow && 'px-2'" title="Info" @click="openInfo">
+        <Info class="h-4 w-4" /> <span v-if="!narrow">Info</span>
       </Button>
 
       <DropdownMenu v-if="isGroup">

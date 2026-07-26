@@ -227,7 +227,7 @@ watch([tab, () => props.channelId], ([current, id]) => {
                 <span class="truncate text-sm font-medium">{{ nameFor(message.user) }}</span>
                 <span class="shrink-0 text-xs text-muted-foreground">{{ formatSharedAt(message.created_at) }}</span>
                 <button
-                  class="ml-auto shrink-0 rounded p-1 text-muted-foreground opacity-0 transition hover:text-destructive group-hover/pin:opacity-100"
+                  class="ml-auto shrink-0 rounded p-1 text-muted-foreground opacity-0 reveal-touch transition hover:text-destructive group-hover/pin:opacity-100"
                   title="Unpin"
                   @click="togglePin(message.id)"
                 >
@@ -247,7 +247,7 @@ watch([tab, () => props.channelId], ([current, id]) => {
                 -->
                 <button
                   v-if="!message.thread_id"
-                  class="ml-auto flex shrink-0 items-center gap-1 rounded px-1 py-0.5 opacity-0 transition hover:bg-muted hover:text-foreground group-hover/pin:opacity-100"
+                  class="ml-auto flex shrink-0 items-center gap-1 rounded px-1 py-0.5 opacity-0 reveal-touch transition hover:bg-muted hover:text-foreground group-hover/pin:opacity-100"
                   title="Jump to message"
                   @click="emit('jump', message.id)"
                 >
@@ -388,7 +388,7 @@ watch([tab, () => props.channelId], ([current, id]) => {
                 -->
                 <button
                   v-if="!link.thread_id"
-                  class="ml-auto flex shrink-0 items-center gap-1 rounded px-1 py-0.5 opacity-0 transition hover:bg-muted hover:text-foreground group-hover/link:opacity-100"
+                  class="ml-auto flex shrink-0 items-center gap-1 rounded px-1 py-0.5 opacity-0 reveal-touch transition hover:bg-muted hover:text-foreground group-hover/link:opacity-100"
                   title="Jump to message"
                   @click="emit('jump', link.message_id)"
                 >
