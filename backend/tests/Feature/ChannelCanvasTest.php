@@ -25,6 +25,27 @@ it('creates a note card and persists its free-form content', function () {
         ->toBe(['text' => 'hello board']);
 });
 
+/**
+ * A Side Desk app placed as a card — the mirror image of a widget promoted to a tab.
+ *
+ * These three carry no content of their own (the card is a window onto the surface's one board /
+ * note / calendar), so they post `content: {}`. That is the regression: `required` treats an
+ * empty array as missing, and all three were refused with "the content field is required" the
+ * moment anyone clicked them. Same trap as the note card above, one rule further along.
+ */
+it('creates a board, notes or calendar card with no content of its own', function (string $kind) {
+    [$owner, , $channel] = ownerWithChannel();
+    Passport::actingAs($owner);
+
+    $this->postJson("/api/channels/{$channel->id}/canvas", [
+        'kind' => $kind,
+        'content' => [],
+        'x' => 40, 'y' => 40,
+    ])->assertCreated()->assertJsonPath('data.kind', $kind);
+
+    expect(CanvasItem::where('channel_id', $channel->id)->value('kind'))->toBe($kind);
+})->with(['board', 'notes', 'calendar']);
+
 it('creates a checklist card with an empty items list', function () {
     [$owner, , $channel] = ownerWithChannel();
     Passport::actingAs($owner);

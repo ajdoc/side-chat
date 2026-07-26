@@ -1,6 +1,7 @@
 <script setup lang="ts">
-import { Columns3, Film, Flag, Gamepad2, GripVertical, ListChecks, Music, Palette, StickyNote, Trash2, Vote } from 'lucide-vue-next'
-import type { CanvasItem } from '~/types'
+import { Gamepad2, GripVertical, ListChecks, StickyNote, Trash2 } from 'lucide-vue-next'
+import type { CanvasItem, CanvasItemKind } from '~/types'
+import type { DeskApp } from '~/composables/useDeskApps'
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -83,37 +84,40 @@ function onChange(item: CanvasItem, content: Record<string, any>) {
 }
 
 /**
- * The interactive widgets that can be dropped on the canvas.
+ * What can be dropped on the canvas, from the one app registry (see {@link useDeskApps}).
  *
- * `group` splits the toolbar in two. The tools are one-click icons — they're what a canvas is
- * usually for. The games are three of seven widgets and growing, and a row of unlabelled
- * icons stops being readable at that point (a flag and a gamepad don't say "racing" and
- * "Galaga" on sight), so they live behind one labelled Games menu instead.
+ * This list used to be local and widget-only. Now it's the registry's `canvasable` apps, which
+ * is what lets the board, notes and calendar be placed here as cards — the mirror image of a
+ * widget being promoted to a tab. A placed app card is a *window* onto the surface's one board
+ * / one note / one calendar, not a copy: it reads and writes the same endpoints the tab does.
+ *
+ * `group` still splits the toolbar. Workspace apps and tools are one-click icons — they're what
+ * a canvas is usually for. The games are three of seven widgets and growing, and a row of
+ * unlabelled icons stops being readable at that point (a flag and a gamepad don't say "racing"
+ * and "Galaga" on sight), so they live behind one labelled Games menu instead.
  */
-const WIDGET_TYPES = [
-  { type: 'music', label: 'Music', icon: Music, group: 'tool', w: 300, h: 190 },
-  // Taller than the rest: the card leads with a 16:9 screen, so a short one would clip it.
-  { type: 'video', label: 'Video', icon: Film, group: 'tool', w: 400, h: 520 },
-  { type: 'kanban', label: 'Kanban', icon: Columns3, group: 'tool', w: 340, h: 320 },
-  { type: 'poll', label: 'Poll', icon: Vote, group: 'tool', w: 280, h: 260 },
-  { type: 'shooter', label: 'Galaga', icon: Gamepad2, group: 'game', w: 320, h: 420 },
-  { type: 'racing', label: 'Racing', icon: Flag, group: 'game', w: 340, h: 380 },
-  { type: 'skribbl', label: 'Skribbl', icon: Palette, group: 'game', w: 360, h: 520 },
-] as const
-
-const TOOL_WIDGETS = WIDGET_TYPES.filter(w => w.group === 'tool')
-const GAME_WIDGETS = WIDGET_TYPES.filter(w => w.group === 'game')
+const PLACEABLE = CANVASABLE_APPS
+const TOOL_APPS = PLACEABLE.filter(a => a.group !== 'game')
+const GAME_APPS = PLACEABLE.filter(a => a.group === 'game')
 
 const gamesOpen = ref(false)
 
-// One widget per (channel, type), so a type already on the canvas can't be added again.
-const placedWidgetTypes = computed(
-  () => new Set(items.value.filter(i => i.kind === 'widget' && i.widget).map(i => i.widget!.type)),
-)
+/**
+ * Every app already on the board, by id.
+ *
+ * One of each: a widget is one-per-(channel, type) so a second card would be the same widget
+ * twice, and a second Calendar card would be two windows onto one calendar — visually confusing
+ * and useful to nobody. Widget cards are identified by their widget's type, app cards by their
+ * `kind`, because only the former carry a widget.
+ */
+const placed = computed(() => new Set<string>(
+  items.value.flatMap(i =>
+    i.kind === 'widget' ? (i.widget ? [i.widget.type] : []) : [i.kind]),
+))
 
 // Every game already on the board: the menu would open on nothing but disabled rows, so the
 // trigger itself goes dead — the same rule each individual button follows.
-const allGamesPlaced = computed(() => GAME_WIDGETS.every(w => placedWidgetTypes.value.has(w.type)))
+const allGamesPlaced = computed(() => GAME_APPS.every(a => placed.value.has(a.id)))
 
 // Fresh cards cascade down-right from the current scroll corner so they don't stack exactly.
 let cascade = 0
@@ -134,16 +138,27 @@ function addCard(kind: 'note' | 'todo') {
   void add(kind, content, geo)
 }
 
-function addWidget(spec: (typeof WIDGET_TYPES)[number]) {
-  if (!props.canEdit || placedWidgetTypes.value.has(spec.type)) return
+/**
+ * Place an app on the canvas.
+ *
+ * The two families land differently, and this is the only place that has to care: a widget app
+ * becomes a `widget` card naming its type (the server resolves it to the channel's widget), and
+ * a surface app becomes a card whose `kind` *is* the app id, carrying no content of its own —
+ * the card knows which surface it's on from the canvas's own base path.
+ */
+function addApp(app: DeskApp) {
+  if (!props.canEdit || placed.value.has(app.id)) return
   const { x, y } = nextCorner()
-  void add('widget', { type: spec.type }, { x, y, w: spec.w, h: spec.h })
+  const geo = { x, y, w: app.card?.w ?? 300, h: app.card?.h ?? 260 }
+
+  if (app.family === 'widget') void add('widget', { type: app.id }, geo)
+  else void add(app.id as CanvasItemKind, {}, geo)
 }
 
 /** A friendly label for a card's header. */
 function labelFor(item: CanvasItem) {
-  if (item.kind !== 'widget') return item.kind
-  return WIDGET_TYPES.find(w => w.type === item.widget?.type)?.label ?? 'widget'
+  if (item.kind === 'widget') return deskApp(item.widget?.type as any)?.label ?? 'widget'
+  return deskApp(item.kind as any)?.label ?? item.kind
 }
 
 onMounted(async () => {
@@ -180,17 +195,18 @@ onBeforeUnmount(() => {
 
       <span class="mx-0.5 h-5 w-px bg-border" />
 
-      <!-- Drop one of the interactive widgets onto the board (one of each per channel). -->
+      <!-- Drop an app onto the board — a widget, or one of the workspace surfaces (board, notes,
+           calendar) as a live window onto the same thing its tab shows. One of each. -->
       <button
-        v-for="w in TOOL_WIDGETS"
-        :key="w.type"
+        v-for="a in TOOL_APPS"
+        :key="a.id"
         type="button"
         class="grid h-7 w-7 place-items-center rounded border text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:opacity-40"
-        :title="placedWidgetTypes.has(w.type) ? `${w.label} (already on canvas)` : `Add ${w.label}`"
-        :disabled="!canEdit || placedWidgetTypes.has(w.type)"
-        @click="addWidget(w)"
+        :title="placed.has(a.id) ? `${a.label} (already on canvas)` : `Add ${a.label}`"
+        :disabled="!canEdit || placed.has(a.id)"
+        @click="addApp(a)"
       >
-        <component :is="w.icon" class="h-4 w-4" />
+        <component :is="a.icon" class="h-4 w-4" />
       </button>
 
       <!-- The games, together and labelled. Three unlabelled icons in the row above read as
@@ -208,14 +224,14 @@ onBeforeUnmount(() => {
         </DropdownMenuTrigger>
         <DropdownMenuContent align="start" class="w-44">
           <DropdownMenuItem
-            v-for="g in GAME_WIDGETS"
-            :key="g.type"
-            :disabled="placedWidgetTypes.has(g.type)"
-            @select="addWidget(g)"
+            v-for="g in GAME_APPS"
+            :key="g.id"
+            :disabled="placed.has(g.id)"
+            @select="addApp(g)"
           >
             <component :is="g.icon" class="h-4 w-4" />
             {{ g.label }}
-            <span v-if="placedWidgetTypes.has(g.type)" class="ml-auto text-[10px] text-muted-foreground">on canvas</span>
+            <span v-if="placed.has(g.id)" class="ml-auto text-[10px] text-muted-foreground">on canvas</span>
           </DropdownMenuItem>
         </DropdownMenuContent>
       </DropdownMenu>
@@ -252,14 +268,50 @@ onBeforeUnmount(() => {
             </button>
           </div>
 
-          <!-- Body -->
-          <div class="min-h-0 flex-1 overflow-auto">
+          <!-- Body. A flex column so an app card (board, notes, calendar) can fill the card the
+               same way it fills a tab; note and todo cards keep their natural height either way. -->
+          <div class="flex min-h-0 flex-1 flex-col overflow-auto">
             <CanvasNoteCard v-if="item.kind === 'note'" :item="item" :can-edit="canEdit" @change="onChange(item, $event)" />
             <CanvasTodoCard v-else-if="item.kind === 'todo'" :item="item" :can-edit="canEdit" @change="onChange(item, $event)" />
             <!-- A widget card renders the existing interactive widget live over the channel stream. -->
             <div v-else-if="item.kind === 'widget' && item.widget" class="p-1.5">
               <WidgetCard :widget="item.widget" />
             </div>
+
+            <!--
+              A workspace app, placed as a card. These are the same components the tabs render,
+              pointed at the same base path — so a stroke drawn here is on the Board tab, and an
+              event added here is on the Calendar tab. Not a copy of the app: the app.
+
+              They're mounted in a flex column so they fill the card, exactly as they fill a tab.
+            -->
+            <Whiteboard
+              v-else-if="item.kind === 'board'"
+              class="flex min-h-0 flex-1 flex-col"
+              :base-path="`${basePath}/whiteboard`"
+              :stream-name="streamName"
+              :can-draw="canEdit"
+              :readonly-hint="readonlyHint"
+            />
+            <SideDeskNotes
+              v-else-if="item.kind === 'notes'"
+              class="flex min-h-0 flex-1 flex-col"
+              :base-path="basePath"
+              :stream-name="streamName"
+              :can-edit="canEdit"
+              :readonly-hint="readonlyHint"
+            />
+            <!-- `compact` drops the month grid: a full month in a 300px card is six rows of
+                 unreadable numbers, so the card shows the agenda instead. -->
+            <SideDeskCalendar
+              v-else-if="item.kind === 'calendar'"
+              class="flex min-h-0 flex-1 flex-col"
+              compact
+              :base-path="basePath"
+              :stream-name="streamName"
+              :can-edit="canEdit"
+              :readonly-hint="readonlyHint"
+            />
           </div>
 
           <!-- Resize handle -->

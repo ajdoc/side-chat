@@ -2,9 +2,11 @@
 
 namespace App\Http\Controllers;
 
+use App\Http\Requests\Widget\EnsureWidgetRequest;
 use App\Http\Requests\Widget\WidgetActionRequest;
 use App\Http\Requests\Widget\WidgetShowRequest;
 use App\Http\Resources\WidgetResource;
+use App\Models\Channel;
 use App\Models\Widget;
 use App\Services\Widgets\WidgetService;
 use Illuminate\Http\JsonResponse;
@@ -26,6 +28,25 @@ class WidgetController extends Controller
      */
     public function show(WidgetShowRequest $request, Widget $widget): WidgetResource
     {
+        return new WidgetResource($widget);
+    }
+
+    /**
+     * The channel's widget of a given type, created on first use.
+     *
+     * What a "widget app" tab opens onto. Widgets have always been one-per-(channel, type) —
+     * the timeline card, the canvas card and now the Side Desk tab are three placements of one
+     * row, which is precisely why they stay in sync without anything syncing them. This endpoint
+     * is just the existing get-or-create ({@see WidgetService::ensure()}) made reachable
+     * directly, instead of only as a side effect of typing a command or dropping a canvas card.
+     *
+     * A side chat's tab resolves against its parent channel, the same scoping its canvas uses.
+     */
+    public function ensure(EnsureWidgetRequest $request, Channel $channel): WidgetResource
+    {
+        $widget = $this->widgets->ensure($channel, $request->user(), $request->string('type'));
+        abort_if($widget === null, 422, 'Unknown widget type.');
+
         return new WidgetResource($widget);
     }
 

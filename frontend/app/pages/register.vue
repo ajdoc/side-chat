@@ -1,14 +1,8 @@
 <script setup lang="ts">
+import { AlertCircle, Eye, EyeOff, LoaderCircle } from 'lucide-vue-next'
 import { Button } from '~/components/ui/button'
 import { Input } from '~/components/ui/input'
 import { Label } from '~/components/ui/label'
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from '~/components/ui/card'
 
 definePageMeta({ middleware: 'guest' })
 
@@ -23,6 +17,7 @@ const form = reactive({
 })
 const error = ref('')
 const loading = ref(false)
+const showPassword = ref(false)
 
 async function onSubmit() {
   error.value = ''
@@ -39,58 +34,88 @@ async function onSubmit() {
 </script>
 
 <template>
-  <div class="grid min-h-screen place-items-center p-6">
-    <Card class="w-full max-w-sm">
-      <CardHeader class="text-center">
-        <CardTitle class="text-2xl">Create your account</CardTitle>
-        <CardDescription>Join side-chat</CardDescription>
-      </CardHeader>
+  <AuthShell title="Create your account" subtitle="Takes about thirty seconds. Bring your friends.">
+    <div class="space-y-5">
+      <SocialButtons />
 
-      <CardContent class="space-y-4">
-        <SocialButtons />
+      <div class="relative">
+        <span class="absolute inset-0 flex items-center"><span class="w-full border-t" /></span>
+        <span class="relative flex justify-center">
+          <span class="bg-background px-3 text-[11px] uppercase tracking-widest text-muted-foreground">or</span>
+        </span>
+      </div>
 
-        <div class="relative py-1">
-          <div class="absolute inset-0 flex items-center">
-            <span class="w-full border-t" />
-          </div>
-          <div class="relative flex justify-center text-xs uppercase">
-            <span class="bg-card px-2 text-muted-foreground">or</span>
+      <form class="space-y-4" @submit.prevent="onSubmit">
+        <div class="space-y-2">
+          <Label for="name">Display name</Label>
+          <Input id="name" v-model="form.name" type="text" class="h-11" placeholder="What should we call you?" required autocomplete="name" />
+        </div>
+
+        <div class="space-y-2">
+          <Label for="email">Email</Label>
+          <Input id="email" v-model="form.email" type="email" class="h-11" placeholder="you@example.com" required autocomplete="email" />
+        </div>
+
+        <div class="space-y-2">
+          <Label for="password">Password</Label>
+          <!-- One toggle drives both password fields — they're always typed together. -->
+          <div class="relative">
+            <Input
+              id="password"
+              v-model="form.password"
+              :type="showPassword ? 'text' : 'password'"
+              class="h-11 pr-11"
+              placeholder="••••••••"
+              required
+              autocomplete="new-password"
+            />
+            <button
+              type="button"
+              class="absolute inset-y-0 right-0 grid w-11 place-items-center text-muted-foreground transition-colors hover:text-foreground"
+              :aria-label="showPassword ? 'Hide password' : 'Show password'"
+              tabindex="-1"
+              @click="showPassword = !showPassword"
+            >
+              <component :is="showPassword ? EyeOff : Eye" class="h-4 w-4" />
+            </button>
           </div>
         </div>
 
-        <form class="space-y-4" @submit.prevent="onSubmit">
-          <div class="space-y-2">
-            <Label for="name">Name</Label>
-            <Input id="name" v-model="form.name" type="text" required autocomplete="name" />
-          </div>
+        <div class="space-y-2">
+          <Label for="password_confirmation">Confirm password</Label>
+          <Input
+            id="password_confirmation"
+            v-model="form.password_confirmation"
+            :type="showPassword ? 'text' : 'password'"
+            class="h-11"
+            placeholder="••••••••"
+            required
+            autocomplete="new-password"
+          />
+        </div>
 
-          <div class="space-y-2">
-            <Label for="email">Email</Label>
-            <Input id="email" v-model="form.email" type="email" placeholder="you@example.com" required autocomplete="email" />
-          </div>
-
-          <div class="space-y-2">
-            <Label for="password">Password</Label>
-            <Input id="password" v-model="form.password" type="password" required autocomplete="new-password" />
-          </div>
-
-          <div class="space-y-2">
-            <Label for="password_confirmation">Confirm password</Label>
-            <Input id="password_confirmation" v-model="form.password_confirmation" type="password" required autocomplete="new-password" />
-          </div>
-
-          <p v-if="error" class="text-sm text-destructive">{{ error }}</p>
-
-          <Button type="submit" class="w-full" :disabled="loading">
-            {{ loading ? 'Creating account…' : 'Create account' }}
-          </Button>
-        </form>
-
-        <p class="text-center text-sm text-muted-foreground">
-          Already have an account?
-          <NuxtLink :to="{ path: '/login', query: route.query }" class="font-medium text-foreground underline underline-offset-4">Sign in</NuxtLink>
+        <p
+          v-if="error"
+          class="flex items-start gap-2 rounded-lg border border-destructive/30 bg-destructive/10 px-3 py-2.5 text-sm text-destructive"
+          role="alert"
+        >
+          <AlertCircle class="mt-px h-4 w-4 flex-none" />
+          <span>{{ error }}</span>
         </p>
-      </CardContent>
-    </Card>
-  </div>
+
+        <Button type="submit" class="h-11 w-full text-[0.95rem] font-medium" :disabled="loading">
+          <LoaderCircle v-if="loading" class="mr-2 h-4 w-4 animate-spin" />
+          {{ loading ? 'Creating account…' : 'Create account' }}
+        </Button>
+      </form>
+
+      <p class="text-center text-sm text-muted-foreground">
+        Already have an account?
+        <NuxtLink
+          :to="{ path: '/login', query: route.query }"
+          class="font-medium text-primary underline-offset-4 hover:underline"
+        >Sign in</NuxtLink>
+      </p>
+    </div>
+  </AuthShell>
 </template>

@@ -14,7 +14,15 @@ class SideChat extends Model
     /** @use HasFactory<\Database\Factories\SideChatFactory> */
     use HasFactory;
 
-    protected $fillable = ['channel_id', 'user_id', 'message_id', 'name', 'origin_author', 'origin_excerpt'];
+    protected $fillable = ['channel_id', 'user_id', 'message_id', 'name', 'origin_author', 'origin_excerpt', 'desk_apps'];
+
+    /** @return array<string, string> */
+    protected function casts(): array
+    {
+        // The Side Desk's tab strip, as an ordered array of app ids. Null until customised —
+        // see the migration for why that isn't the same as storing the defaults.
+        return ['desk_apps' => 'array'];
+    }
 
     public function channel(): BelongsTo
     {
@@ -60,6 +68,12 @@ class SideChat extends Model
     public function canvasItems(): HasMany
     {
         return $this->hasMany(CanvasItem::class)->orderBy('z');
+    }
+
+    /** The Side Desk Calendar app's entries for this side chat. */
+    public function calendarEvents(): HasMany
+    {
+        return $this->hasMany(CalendarEvent::class);
     }
 
     /** The Docs app files for this side chat. */

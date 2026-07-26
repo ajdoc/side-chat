@@ -18,7 +18,22 @@ const props = defineProps<{
   fit?: 'contain' | 'cover'
 }>()
 
+/**
+ * The stream's intrinsic size, whenever it's known or changes.
+ *
+ * Remote control needs it and cannot get it any other way: with `object-contain` the picture is
+ * letterboxed inside the element, so turning a click at some point in the box into a point on
+ * the sharer's screen means knowing the *picture's* aspect, not the box's. Emitted on `resize`
+ * as well as `loadedmetadata` because a shared screen genuinely changes shape mid-stream — the
+ * sharer rotates a display, or switches which one they're sharing.
+ */
+const emit = defineEmits<{ dimensions: [width: number, height: number] }>()
+
 const el = ref<HTMLVideoElement | null>(null)
+
+function report() {
+  if (el.value?.videoWidth) emit('dimensions', el.value.videoWidth, el.value.videoHeight)
+}
 
 /**
  * Bind the stream to the element by hand — and do it on a schedule we control.
@@ -39,6 +54,7 @@ function bind() {
   // Autoplay is only permitted for muted video, and the audio is coming through its own
   // element anyway — playing it here as well would double every voice.
   el.value.play().catch(() => {})
+  report()
 }
 
 onMounted(bind)
@@ -53,5 +69,7 @@ watch(() => props.stream, bind)
     muted
     class="h-full w-full bg-black"
     :class="props.fit === 'cover' ? 'object-cover' : 'object-contain'"
+    @loadedmetadata="report"
+    @resize="report"
   />
 </template>

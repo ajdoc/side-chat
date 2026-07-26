@@ -189,6 +189,40 @@ interface PeerHandle {
    * that's done either side may offer freely (a camera toggle, say).
    */
   negotiated: boolean
+  /**
+   * The input pipe for remote control (see useRemoteControl), or null before it opens.
+   *
+   * A data channel rather than a whisper, and that's the whole reason it exists: a pointer being
+   * dragged across a shared screen is 60 events a second, which is fine peer-to-peer and is a
+   * flood through Reverb. The *handshake* — asking, approving, revoking — still goes over
+   * whispers, because it's rare, it has to work before any control exists, and it must not
+   * depend on a data channel having come up.
+   *
+   * Created `negotiated` with a fixed id on both ends, so it needs no renegotiation of its own
+   * and sidesteps the polite/impolite dance the video transceivers have to do — see createPeer.
+   */
+  control: RTCDataChannel | null
+}
+
+/** One input event from a controller. Terse keys: this goes out ~60×/second while dragging. */
+export interface ControlInput {
+  t: 'move' | 'down' | 'up' | 'wheel' | 'key-down' | 'key-up'
+  /** Pointer position as a fraction (0..1) of the shared surface — never pixels. See below. */
+  x?: number
+  y?: number
+  /** Mouse button, as `MouseEvent.button`. */
+  b?: number
+  dx?: number
+  dy?: number
+  /** `KeyboardEvent.code` — the physical key, so the sharer's own layout decides the character. */
+  code?: string
+}
+
+/** The control handshake, over whispers. `to` is omitted on a broadcast (an ended session). */
+export interface ControlSignal {
+  from: number
+  to: number
+  kind: 'request' | 'approve' | 'deny' | 'end'
 }
 
 interface SignalPayload {
@@ -239,6 +273,16 @@ interface LocalPrefs {
 // concerned (assigning one to `srcObject` throws).
 const handles = new Map<number, PeerHandle>()
 let localStream: MediaStream | null = null
+/**
+ * Where remote control's two streams get delivered, once useRemoteControl registers for them.
+ *
+ * Single handlers rather than listener sets: there is exactly one remote-control state machine
+ * in the app (it's a `useState` singleton), and letting several register would mean a hot reload
+ * quietly stacking up duplicate injectors. Registering again replaces.
+ */
+let controlInputHandler: ((from: number, input: ControlInput) => void) | null = null
+let controlSignalHandler: ((signal: ControlSignal) => void) | null = null
+
 let screenTrack: MediaStreamTrack | null = null
 let screenAudioTrack: MediaStreamTrack | null = null
 let cameraTrack: MediaStreamTrack | null = null
@@ -858,6 +902,48 @@ export function useVoice() {
     presence.whisper('signal', body)
   }
 
+  // --- remote control transport (the protocol itself lives in useRemoteControl) ---
+
+  /**
+   * Push one input event to the person whose screen we're driving.
+   *
+   * Drops the event rather than buffering when the channel isn't open yet or its send buffer is
+   * backing up. That's deliberate: these are pointer positions, and a stale one is worse than
+   * none — replaying a queue after a stall would drag the sharer's cursor through where the
+   * controller used to be. The next `move` is along in ~16ms anyway.
+   */
+  function sendControlInput(to: number, input: ControlInput) {
+    const channel = handles.get(to)?.control
+    if (channel?.readyState !== 'open') return
+    if (channel.bufferedAmount > 64 * 1024) return
+
+    try {
+      channel.send(JSON.stringify(input))
+    } catch {
+      // Channel closed under us; the session's own teardown will notice.
+    }
+  }
+
+  /** Ask for / grant / refuse / end control. Whispered — see the listener in connect(). */
+  function sendControlSignal(to: number, kind: ControlSignal['kind']) {
+    if (!presence || !user.value) return
+    presence.whisper('control', { from: user.value.id, to, kind } satisfies ControlSignal)
+  }
+
+  /** Register the remote-control state machine's two inboxes. Registering again replaces. */
+  function onControl(handlers: {
+    input?: (from: number, input: ControlInput) => void
+    signal?: (signal: ControlSignal) => void
+  }) {
+    controlInputHandler = handlers.input ?? null
+    controlSignalHandler = handlers.signal ?? null
+  }
+
+  /** Whether a peer's input pipe is actually up — "Request control" shouldn't offer otherwise. */
+  function controlChannelReady(id: number) {
+    return handles.get(id)?.control?.readyState === 'open'
+  }
+
   /** Tell the people in the call what my mic, camera and screen are doing, right now. */
   function whisperState() {
     if (!presence || !user.value) return
@@ -1001,6 +1087,34 @@ export function useVoice() {
       screenAudioTransceiver: null,
       cameraTransceiver: null,
       screenTransceiver: null,
+      control: null,
+    }
+
+    /**
+     * The remote-control input pipe.
+     *
+     * `negotiated: true` with a fixed id is doing real work here. An ordinary data channel is
+     * negotiated in-band: one side creates it, which fires `onnegotiationneeded`, and the other
+     * side learns about it via `ondatachannel`. That would add an offer to the exact moment
+     * both ends are already racing to set up video — the glare the comment below spends thirty
+     * lines avoiding. Created out-of-band on both ends instead, it simply binds to the SCTP
+     * m-line whenever it appears and never triggers an offer of its own.
+     *
+     * Made for every peer, not just when someone asks for control: bringing a channel up costs
+     * nothing while idle, and building it on demand would put a renegotiation between "approve"
+     * and the first pointer move.
+     */
+    try {
+      handle.control = pc.createDataChannel('control', { negotiated: true, id: 0, ordered: true })
+      handle.control.onmessage = event => {
+        try {
+          controlInputHandler?.(id, JSON.parse(event.data as string) as ControlInput)
+        } catch {
+          // A malformed frame is not worth tearing the session down over.
+        }
+      }
+    } catch {
+      // Data channels unavailable — remote control simply won't be offered for this peer.
     }
 
     for (const track of localStream.getAudioTracks()) {
@@ -1235,6 +1349,10 @@ export function useVoice() {
     handle.pc.onicecandidate = null
     handle.pc.ontrack = null
     handle.pc.onconnectionstatechange = null
+    // Detach before closing: a control channel still holding its handler would keep feeding
+    // input events into a session whose peer has just gone. `pc.close()` takes the channel
+    // with it, so there's nothing further to close here.
+    if (handle.control) handle.control.onmessage = null
     handle.pc.close()
 
     handle.audio.srcObject = null
@@ -1559,6 +1677,13 @@ export function useVoice() {
           cameraOn: state.camera_on,
           audioSharing: state.audio_sharing,
         })
+      })
+      // The remote-control handshake. Whispered rather than sent down the data channel because
+      // it has to work *before* control exists, and because a request that quietly failed to
+      // arrive would look identical to one that was ignored. See ControlSignal.
+      .listenForWhisper('control', (signal: ControlSignal) => {
+        if (!user.value || signal.to !== user.value.id) return
+        controlSignalHandler?.(signal)
       })
 
     watchSpeaking()
@@ -2073,6 +2198,10 @@ export function useVoice() {
     // recording that outlives them, notification and all, until it's told to stop.
     await releaseDisplayCapture()
 
+    // Tell the desktop shell the capture is over, so it forgets which display it was aiming
+    // remote-control input at and lifts anything still held. No-op everywhere else.
+    ;(window as any).sideChatDesktop?.screenShare?.stopped?.()
+
     await publishState()
   }
 
@@ -2521,6 +2650,11 @@ export function useVoice() {
     // withhold the button (or explain it) instead of offering one that throws.
     canShareScreen,
     screenShareUnavailableReason,
+    // Remote control's plumbing. The consent protocol on top of it is useRemoteControl's.
+    sendControlInput,
+    sendControlSignal,
+    onControl,
+    controlChannelReady,
     probeDisplayCapture,
     toggleCamera,
     disconnectUser,

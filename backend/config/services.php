@@ -41,12 +41,6 @@ return [
         'redirect' => env('GOOGLE_REDIRECT_URI'),
     ],
 
-    'facebook' => [
-        'client_id' => env('FACEBOOK_CLIENT_ID'),
-        'client_secret' => env('FACEBOOK_CLIENT_SECRET'),
-        'redirect' => env('FACEBOOK_REDIRECT_URI'),
-    ],
-
     // YouTube Data API key — powers the music widget's playlist expansion and search
     // (`m!p <playlist>` / `m!p <spotify track>` / `m!p <words>`). Optional: without it,
     // plain YouTube *video* links still queue fine; anything needing a lookup replies

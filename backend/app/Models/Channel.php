@@ -38,7 +38,16 @@ class Channel extends Model
         'position',
         'join_effect',
         'leave_effect',
+        'desk_apps',
     ];
+
+    /** @return array<string, string> */
+    protected function casts(): array
+    {
+        // The Side Desk's tab strip, as an ordered array of app ids. Null until customised —
+        // see the migration for why that isn't the same as storing the defaults.
+        return ['desk_apps' => 'array'];
+    }
 
     public function server(): BelongsTo
     {
@@ -103,6 +112,12 @@ class Channel extends Model
     public function canvasItems(): HasMany
     {
         return $this->hasMany(CanvasItem::class)->orderBy('z');
+    }
+
+    /** The Side Desk Calendar app's entries for this channel. */
+    public function calendarEvents(): HasMany
+    {
+        return $this->hasMany(CalendarEvent::class);
     }
 
     /** The channel's Docs app files. */

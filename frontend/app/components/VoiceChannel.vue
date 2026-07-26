@@ -246,6 +246,22 @@ watch(sharerKeys, (keys, prev) => {
   watching.value = sharers.value[0]?.key ?? null
 }, { immediate: true })
 
+// Whether this machine could hand over the mouse at all — shown on your own share, so the
+// answer arrives before someone asks rather than after. See useRemoteControl.
+const { canGrantControl, grantBlockedReason } = useRemoteControl()
+
+/**
+ * The stage stream's intrinsic size, reported by VoiceVideo.
+ *
+ * Only remote control needs it — mapping a click in a letterboxed video onto a point on the
+ * sharer's actual screen is impossible without the picture's true aspect. See
+ * RemoteControlSurface.toFraction.
+ */
+const stageDimensions = ref({ width: 0, height: 0 })
+function onStageDimensions(width: number, height: number) {
+  stageDimensions.value = { width, height }
+}
+
 // --- fullscreen ---
 
 const stageEl = ref<HTMLElement | null>(null)
@@ -393,9 +409,24 @@ const deafenedCount = computed(() => waiting.value.filter(p => p.deafened).lengt
                 <ScreenShare class="h-8 w-8" />
                 <p class="text-sm font-medium text-white">You're sharing your screen</p>
                 <p class="text-xs text-white/60">Everyone else in the call can see it.</p>
+                <!-- Say now whether anyone could take the wheel, rather than at the moment
+                     someone asks and the Allow button turns out to be dead. -->
+                <p class="max-w-xs text-xs" :class="canGrantControl ? 'text-white/60' : 'text-amber-300/80'">
+                  {{ canGrantControl ? 'You can hand someone control if they ask.' : grantBlockedReason }}
+                </p>
               </div>
             </div>
-            <VoiceVideo v-else :stream="stage.stream" />
+            <VoiceVideo v-else :stream="stage.stream" @dimensions="onStageDimensions" />
+
+            <!-- The remote-control input layer. Renders only while you actually hold control of
+                 *this* peer's screen, and sits above the hover controls so a click meant for
+                 their desktop can't land on our own fullscreen button. -->
+            <RemoteControlSurface
+              v-if="stagePeer"
+              :peer-id="stagePeer.id"
+              :video-width="stageDimensions.width"
+              :video-height="stageDimensions.height"
+            />
 
             <!-- Stop watching: hide just the screen and keep the call. Re-watch from any
                  sharer's tile below. -->
@@ -423,6 +454,9 @@ const deafenedCount = computed(() => waiting.value.filter(p => p.deafened).lengt
           </div>
           <div class="flex items-center gap-2">
             <span class="shrink-0 text-xs text-muted-foreground">{{ stage.name }}</span>
+
+            <!-- Ask to drive it. Only ever a peer's screen — controlling your own is nothing. -->
+            <RemoteControlButton v-if="stagePeer" :peer-id="stagePeer.id" />
 
             <!-- How loud their shared screen plays, for you alone — separate from their voice,
                  and with its own switch for turning the sound off while you keep watching. -->

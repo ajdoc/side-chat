@@ -105,9 +105,17 @@ WIN_USER ?= $(shell cmd.exe /c 'echo %USERNAME%' 2>/dev/null | tr -d '\r')
 WIN_STAGE ?= /mnt/c/Users/$(WIN_USER)/side-chat-desktop
 
 app-desktop-win: app-bundle ## Build the Windows desktop app via a staging dir on C:
-	rm -rf "$(WIN_STAGE)"
+	# Clear the staged *inputs* only. Wiping the whole directory would take node_modules with
+	# it (a full npm install every build) and would trip over dist/: if the previously built
+	# app is still running, Windows holds its exe and DLLs open and rm fails with EIO/EPERM
+	# before the build even starts. electron-builder overwrites dist/ itself, and gives a
+	# comprehensible error if the running app really is in the way.
+	rm -rf "$(WIN_STAGE)/main.js" "$(WIN_STAGE)/preload.js" "$(WIN_STAGE)/remote-control.js" \
+		"$(WIN_STAGE)/package.json" "$(WIN_STAGE)/build" "$(WIN_STAGE)/web"
 	mkdir -p "$(WIN_STAGE)"
-	cp desktop/main.js desktop/preload.js desktop/package.json "$(WIN_STAGE)/"
+	# Keep in step with the `files` allowlist in desktop/package.json — anything main.js
+	# requires has to be staged here too, or the packaged app dies on a missing module.
+	cp desktop/main.js desktop/preload.js desktop/remote-control.js desktop/package.json "$(WIN_STAGE)/"
 	# build/ holds the app icon. electron-builder finds it by convention (buildResources), so
 	# leaving it behind doesn't fail the build — it silently ships Electron's default icon.
 	cp -r desktop/build "$(WIN_STAGE)/build"

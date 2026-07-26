@@ -11,6 +11,10 @@
     "dist": "npm run web && electron-builder",
     "dist:dir": "npm run web && electron-builder --dir"
   },
+  "//optionalDependencies": "Native input injection for remote control. Optional on purpose: if it fails to build, the shell still runs and the app simply reports remote control as unavailable. See remote-control.js.",
+  "optionalDependencies": {
+    "@nut-tree-fork/nut-js": "^4.2.0"
+  },
   "devDependencies": {
     "electron": "^33.0.0",
     "electron-builder": "^25.0.0"
@@ -18,7 +22,7 @@
   "build": {
     "appId": "chat.side.desktop",
     "productName": "Side Chat",
-    "files": ["main.js", "preload.js", "web/**/*"],
+    "files": ["main.js", "preload.js", "remote-control.js", "web/**/*"],
     "directories": { "output": "dist", "buildResources": "build" },
     "linux": { "target": ["AppImage"], "category": "Network" },
     "win": { "target": ["nsis"] },

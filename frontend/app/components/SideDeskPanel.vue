@@ -21,9 +21,17 @@ const route = useRoute()
 const { width: panelWidth, startResize } = useResizable('side-desk', 420, { min: 320, max: 760 })
 const { narrow } = useNavDrawer()
 
+/**
+ * The active app, from `?desk=`.
+ *
+ * Any registry id is accepted now that the strip is open-ended — validating against the four
+ * old names here would silently bounce every widget app back to the canvas. An id this surface
+ * doesn't actually have on its strip is handled one level down, in SideDesk, which is where the
+ * strip is known.
+ */
 const activeApp = computed<SideDeskAppId>(() => {
   const s = route.query.desk
-  return s === 'notes' || s === 'docs' || s === 'board' ? s : 'canvas'
+  return typeof s === 'string' && deskApp(s as SideDeskAppId) ? (s as SideDeskAppId) : 'canvas'
 })
 
 function setApp(app: SideDeskAppId) {
@@ -63,6 +71,7 @@ function close() {
       :key="channelId"
       :base-path="`/api/channels/${channelId}`"
       :stream-name="`channel.${channelId}`"
+      :channel-id="channelId"
       :can-edit="true"
       :active-app="activeApp"
       @update:active-app="setApp"

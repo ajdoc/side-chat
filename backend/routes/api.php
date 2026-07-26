@@ -3,7 +3,9 @@
 use App\Http\Controllers\AttachmentController;
 use App\Http\Controllers\Auth\AuthController;
 use App\Http\Controllers\Auth\SocialAuthController;
+use App\Http\Controllers\CalendarController;
 use App\Http\Controllers\CanvasController;
+use App\Http\Controllers\ChannelCalendarController;
 use App\Http\Controllers\ChannelCanvasController;
 use App\Http\Controllers\ChannelController;
 use App\Http\Controllers\ChannelDocumentController;
@@ -15,6 +17,7 @@ use App\Http\Controllers\ChunkedUploadController;
 use App\Http\Controllers\CommentController;
 use App\Http\Controllers\ConversationController;
 use App\Http\Controllers\DecisionController;
+use App\Http\Controllers\DeskAppsController;
 use App\Http\Controllers\DocumentController;
 use App\Http\Controllers\GifController;
 use App\Http\Controllers\InviteController;
@@ -56,11 +59,12 @@ Route::prefix('auth')->group(function () {
     Route::post('register', [AuthController::class, 'register']);
     Route::post('login', [AuthController::class, 'login']);
 
-    // Social login (Google, Facebook).
+    // Social login. Still provider-shaped so a second provider is one entry in this list,
+    // but Google is the only one we ship.
     Route::get('{provider}/redirect', [SocialAuthController::class, 'redirect'])
-        ->whereIn('provider', ['google', 'facebook']);
+        ->whereIn('provider', ['google']);
     Route::get('{provider}/callback', [SocialAuthController::class, 'callback'])
-        ->whereIn('provider', ['google', 'facebook']);
+        ->whereIn('provider', ['google']);
 
     // Authenticated.
     Route::middleware('auth:api')->group(function () {
@@ -289,6 +293,22 @@ Route::middleware('auth:api')->group(function () {
     Route::patch('channels/{channel}/canvas/{item}', [ChannelCanvasController::class, 'update']);
     Route::delete('channels/{channel}/canvas/{item}', [ChannelCanvasController::class, 'destroy']);
 
+    // The channel's Calendar app — a shared schedule, gated on membership like the board. The
+    // Calendar *tab* and the Calendar *canvas card* are two views of exactly these rows.
+    Route::get('channels/{channel}/calendar', [ChannelCalendarController::class, 'index']);
+    Route::post('channels/{channel}/calendar', [ChannelCalendarController::class, 'store']);
+    Route::patch('channels/{channel}/calendar/{event}', [ChannelCalendarController::class, 'update']);
+    Route::delete('channels/{channel}/calendar/{event}', [ChannelCalendarController::class, 'destroy']);
+
+    // Which apps the channel's Side Desk shows. Shared by everyone in the channel, so this is
+    // the whole surface's tab strip, not one person's — see the migration.
+    Route::get('channels/{channel}/desk-apps', [DeskAppsController::class, 'showChannel']);
+    Route::put('channels/{channel}/desk-apps', [DeskAppsController::class, 'updateChannel']);
+
+    // Open the channel's widget of a type, creating it on first use — what a widget app tab
+    // resolves through, and the same row the timeline and canvas cards render.
+    Route::post('channels/{channel}/widgets/ensure', [WidgetController::class, 'ensure']);
+
     // The channel's Docs app — view-only file shelf, gated on membership like the board.
     Route::get('channels/{channel}/documents', [ChannelDocumentController::class, 'index']);
     Route::post('channels/{channel}/documents', [ChannelDocumentController::class, 'store']);
@@ -334,6 +354,14 @@ Route::middleware('auth:api')->group(function () {
     Route::post('side-chats/{sideChat}/canvas', [CanvasController::class, 'store']);
     Route::patch('side-chats/{sideChat}/canvas/{item}', [CanvasController::class, 'update']);
     Route::delete('side-chats/{sideChat}/canvas/{item}', [CanvasController::class, 'destroy']);
+    // The side chat's Calendar app. Reading needs channel membership; authoring needs the roster.
+    Route::get('side-chats/{sideChat}/calendar', [CalendarController::class, 'index']);
+    Route::post('side-chats/{sideChat}/calendar', [CalendarController::class, 'store']);
+    Route::patch('side-chats/{sideChat}/calendar/{event}', [CalendarController::class, 'update']);
+    Route::delete('side-chats/{sideChat}/calendar/{event}', [CalendarController::class, 'destroy']);
+    // Which apps the side chat's Side Desk shows — shared by its roster, like everything else on it.
+    Route::get('side-chats/{sideChat}/desk-apps', [DeskAppsController::class, 'showSideChat']);
+    Route::put('side-chats/{sideChat}/desk-apps', [DeskAppsController::class, 'updateSideChat']);
     // The side chat's Docs app. Listing needs channel membership; uploading needs the roster.
     Route::get('side-chats/{sideChat}/documents', [DocumentController::class, 'index']);
     Route::post('side-chats/{sideChat}/documents', [DocumentController::class, 'store']);

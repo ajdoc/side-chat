@@ -1,6 +1,9 @@
 <script setup lang="ts">
 import { CheckCircle2, Info, LayoutPanelLeft, Loader2, MessageSquare, MessagesSquare, Pin, Plus, Rocket, UserPlus, Users, X } from 'lucide-vue-next'
 import type { GifResult, Message, SideDeskAppId } from '~/types'
+// Aliased on import: this file already has a `deskApp` of its own (the active tab), and the
+// auto-imported registry lookup of the same name would be shadowed by it.
+import { deskApp as deskApp_ } from '~/composables/useDeskApps'
 import { Button } from '~/components/ui/button'
 import { Input } from '~/components/ui/input'
 
@@ -67,9 +70,12 @@ const sctab = computed<'chat' | 'info' | 'desk'>(() => {
 })
 
 // The Side Desk's active app rides in `desktab`; canvas is the default (kept out of the URL).
+// Any registry id is accepted — the strip is open-ended now, so validating against the four old
+// names would bounce every widget app back to the canvas. SideDesk handles an id this surface
+// doesn't have on its strip, which is where the strip is actually known.
 const deskApp = computed<SideDeskAppId>(() => {
   const s = route.query.desktab
-  return s === 'notes' || s === 'docs' || s === 'board' ? s : 'canvas'
+  return typeof s === 'string' && deskApp_(s as SideDeskAppId) ? (s as SideDeskAppId) : 'canvas'
 })
 function setDeskApp(app: SideDeskAppId) {
   setQuery({ desktab: app === 'canvas' ? null : app })
@@ -494,6 +500,7 @@ function relTime(iso: string) {
         :key="activeId"
         :base-path="`/api/side-chats/${activeId}`"
         :stream-name="`sidechat.${activeId}`"
+        :channel-id="props.channelId"
         :can-edit="joined"
         :active-app="deskApp"
         readonly-hint="Join this side chat to edit"

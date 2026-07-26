@@ -144,6 +144,12 @@ watch(sharers, (now, before) => {
 // to make a sound, so closing it silences it too.
 watch(watching, key => setWatchedScreen(key), { immediate: true })
 
+/** The stage stream's true size — remote control maps clicks through it. See VoiceChannel. */
+const stageDimensions = ref({ width: 0, height: 0 })
+function onStageDimensions(width: number, height: number) {
+  stageDimensions.value = { width, height }
+}
+
 /**
  * Fullscreen, where there is one.
  *
@@ -228,7 +234,15 @@ onBeforeUnmount(() => document.removeEventListener('fullscreenchange', onFullscr
               <p class="text-[11px] text-white/60">Everyone near you can see it.</p>
             </div>
           </div>
-          <VoiceVideo v-else :stream="stage.stream" />
+          <VoiceVideo v-else :stream="stage.stream" @dimensions="onStageDimensions" />
+
+          <!-- Remote control's input layer — inert unless you hold control of this screen. -->
+          <RemoteControlSurface
+            v-if="stagePeer"
+            :peer-id="stagePeer.id"
+            :video-width="stageDimensions.width"
+            :video-height="stageDimensions.height"
+          />
 
           <button
             type="button"
@@ -253,6 +267,9 @@ onBeforeUnmount(() => document.removeEventListener('fullscreenchange', onFullscr
 
         <div class="flex items-center gap-1.5">
           <span class="min-w-0 flex-1 truncate text-[11px] text-muted-foreground">{{ stage.name }}</span>
+
+          <!-- Ask to drive it. Only ever a peer's screen. -->
+          <RemoteControlButton v-if="stagePeer" :peer-id="stagePeer.id" />
 
           <!-- How loud their share plays, for you alone — kept apart from their voice so a loud
                clip can be turned down without quietening the person talking over it. -->

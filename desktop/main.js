@@ -12,6 +12,23 @@
 //    Electron app, so `setDisplayMediaRequestHandler` supplies one.
 
 const { app, BrowserWindow, desktopCapturer, ipcMain, net, protocol, session, shell } = require('electron')
+// Remote control is a bonus, never a reason the app won't open. The module itself already
+// tolerates its optional native dependency being absent, but a packaging slip that leaves the
+// file out entirely would otherwise throw here and take the whole shell down before it draws a
+// window. Fall back to the same shape the module reports when injection isn't available.
+const remoteControl = (() => {
+  try {
+    return require('./remote-control')
+  } catch (error) {
+    console.error('Remote control unavailable:', error)
+    return {
+      capabilities: () => ({ available: false, screenOnly: true }),
+      isAvailable: () => false,
+      inject: async () => {},
+      releaseAll: async () => {},
+    }
+  }
+})()
 const path = require('node:path')
 const { pathToFileURL } = require('node:url')
 
@@ -57,6 +74,7 @@ app.whenReady().then(() => {
   registerAppProtocol()
   grantMediaPermissions(partition)
   provideScreenSources(partition)
+  provideRemoteControl()
   createWindow()
 
   app.on('activate', () => {
@@ -162,6 +180,49 @@ const SUPPORTS_LOOPBACK_AUDIO = process.platform === 'win32'
  * One request is live at a time — `getDisplayMedia` is only ever called from a button the user
  * pressed — so a second request supersedes the first rather than queueing behind it.
  */
+/**
+ * The `desktopCapturer` source currently being shared, or null.
+ *
+ * Lives at module scope because two unrelated features need it: the picker sets it, and remote
+ * control reads it to work out which display the controller's pointer is aiming at.
+ */
+let sharedSourceId = null
+
+/**
+ * Remote control — see remote-control.js for why the injection can only live out here.
+ *
+ * The renderer has already done the asking and approving by the time anything reaches this
+ * point; what crosses the bridge is a stream of input events for a session the sharer said yes
+ * to. There is deliberately no "grant" concept in the main process: consent is the web app's
+ * business, and duplicating it here would just be a second thing to keep in sync.
+ */
+function provideRemoteControl() {
+  ipcMain.handle('remote-control:capabilities', () => ({
+    ...remoteControl.capabilities(),
+    // Control needs a whole display to aim at; a window share has no bounds we can resolve.
+    sharing: sharedSourceId,
+    sharingIsScreen: typeof sharedSourceId === 'string' && sharedSourceId.startsWith('screen:'),
+  }))
+
+  // Fire-and-forget: an input event is worthless by the time a round-trip could confirm it,
+  // and dropping one under load is better than queueing a backlog of stale pointer positions.
+  ipcMain.on('remote-control:input', (_event, payload) => {
+    if (!sharedSourceId) return
+    void remoteControl.inject(payload, sharedSourceId).catch(() => {})
+  })
+
+  // The session ended — however it ended. Lifts anything still held down.
+  ipcMain.on('remote-control:stop', () => {
+    void remoteControl.releaseAll()
+  })
+
+  // A share that stops takes any control session with it: there is nothing left to point at.
+  ipcMain.on('screen-share:stopped', () => {
+    sharedSourceId = null
+    void remoteControl.releaseAll()
+  })
+}
+
 function provideScreenSources(partition) {
   /** The in-flight request: Electron's callback, plus the sources it may be answered with. */
   let pending = null
@@ -178,6 +239,11 @@ function provideScreenSources(partition) {
   ipcMain.on('screen-share:pick', (_event, { sourceId, audio } = {}) => {
     const source = pending?.sources.find(s => s.id === sourceId)
     if (!source) return settle({}) // it went away while the picker was open
+
+    // Remember what's on the wire: remote control has to map the controller's normalised
+    // pointer back onto the display being captured, and this pick is the only place that's
+    // known. Cleared when the share stops — see `remote-control:stop`.
+    sharedSourceId = sourceId
 
     settle({
       video: source,

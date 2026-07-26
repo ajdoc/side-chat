@@ -244,10 +244,19 @@ export interface Message {
  * as a live card in the timeline and kept in sync over the channel's Reverb stream.
  * `state` is discriminated by `type`; the matching card component owns its shape.
  */
+/**
+ * The kinds of interactive widget there are.
+ *
+ * Named as its own type because it's now load-bearing in three places: a widget itself, a
+ * `widget` canvas card, and — since widgets were promoted to full Side Desk apps — a tab. One
+ * union keeps those from drifting apart. Must stay in step with `App\Support\DeskApps`.
+ */
+export type WidgetType = 'music' | 'video' | 'kanban' | 'poll' | 'shooter' | 'racing' | 'skribbl'
+
 export interface Widget {
   id: number
   channel_id: number
-  type: 'music' | 'video' | 'kanban' | 'poll' | 'shooter' | 'racing' | 'skribbl'
+  type: WidgetType
   /**
    * The live state — present on HTTP responses. Absent when the widget arrives as a
    * *reference* over the socket (WidgetUpdated / a MessageSent card): its full state is
@@ -630,8 +639,46 @@ export interface WhiteboardStroke {
   created_at?: string
 }
 
-/** The apps a Side Desk houses, each a tab: whiteboard, notes, documents, widget canvas. */
-export type SideDeskAppId = 'board' | 'notes' | 'docs' | 'canvas'
+/**
+ * The apps a Side Desk can house.
+ *
+ * Two families, and the split is the whole point of the design (see `useDeskApps`):
+ *
+ *   - **surface apps** own storage hanging off the surface — the board's strokes, the one
+ *     shared note, the doc shelf, the calendar's events, the canvas's cards.
+ *   - **widget apps** are the interactive widgets promoted to full tabs. They add no storage:
+ *     a tab renders the channel's existing widget of that type, the very same row the timeline
+ *     card and the canvas card render. That's why an app and its widget stay in step — there
+ *     is only ever one of them.
+ *
+ * `canvas` is in the union but never in a stored list: the Open Canvas can't be removed.
+ */
+export type SideDeskSurfaceAppId = 'board' | 'notes' | 'docs' | 'canvas' | 'calendar'
+export type SideDeskWidgetAppId = WidgetType
+export type SideDeskAppId = SideDeskSurfaceAppId | SideDeskWidgetAppId
+
+/** The named colours a calendar entry may wear; the palette they map to is the client's. */
+export type CalendarEventColor = 'primary' | 'green' | 'amber' | 'rose' | 'violet' | 'teal' | 'slate'
+
+/**
+ * One entry on a Side Desk's shared Calendar.
+ *
+ * Times arrive as ISO-8601 UTC and are rendered in the viewer's own zone — a calendar shared
+ * across zones has to agree on the instant, not the wall clock. `ends_at` is null for an entry
+ * that's a moment rather than a span. An `all_day` entry still carries a real `starts_at` (UTC
+ * midnight of its day) so one ordering serves both kinds.
+ */
+export interface CalendarEvent {
+  id: number
+  title: string
+  description: string | null
+  starts_at: string
+  ends_at: string | null
+  all_day: boolean
+  color: CalendarEventColor
+  user?: User
+  created_at?: string
+}
 
 /**
  * A Side Desk note: one shared markdown document per surface, edited collaboratively with
@@ -646,8 +693,15 @@ export interface SpaceNote {
   updated_at: string | null
 }
 
-/** The kinds of card the Open Canvas holds. `widget` places one of the interactive widgets. */
-export type CanvasItemKind = 'note' | 'todo' | 'widget'
+/**
+ * The kinds of card the Open Canvas holds.
+ *
+ * `widget` places one of the interactive widgets. `board`, `notes` and `calendar` place a Side
+ * Desk *app* — the mirror image of a widget promoted to a tab. Those three carry no content of
+ * their own: the card is a window onto the surface's one board / one note / one calendar, so
+ * editing it from the canvas and editing it from its tab are the same edit.
+ */
+export type CanvasItemKind = 'note' | 'todo' | 'widget' | 'board' | 'notes' | 'calendar'
 
 /** One entry in a `todo` card's checklist. `id` is a client-minted uuid, stable across saves. */
 export interface CanvasTodoEntry {

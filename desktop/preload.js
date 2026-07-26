@@ -30,5 +30,30 @@ contextBridge.exposeInMainWorld('sideChatDesktop', {
     cancel() {
       ipcRenderer.send('screen-share:cancel')
     },
+    /** The share ended. Drops the remembered source, and with it any control session. */
+    stopped() {
+      ipcRenderer.send('screen-share:stopped')
+    },
+  },
+
+  /**
+   * Remote control, sharer side only.
+   *
+   * Note what is *not* here: nothing that reads the screen, nothing that grants anything. This
+   * is a one-way pipe for input events belonging to a session the user already approved in the
+   * app, plus a capability probe so the UI can be honest before they're asked. The consent
+   * itself lives in the web app (useRemoteControl), because that's where the other person is.
+   */
+  remoteControl: {
+    /** `{ available, screenOnly, sharing, sharingIsScreen }` — see main.js. */
+    capabilities: () => ipcRenderer.invoke('remote-control:capabilities'),
+    /** Apply one input event. Fire-and-forget; see main.js for why it isn't awaited. */
+    send(event) {
+      ipcRenderer.send('remote-control:input', event)
+    },
+    /** Session over. Lifts any button or key the controller was still holding. */
+    stop() {
+      ipcRenderer.send('remote-control:stop')
+    },
   },
 })

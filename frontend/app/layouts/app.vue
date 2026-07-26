@@ -848,6 +848,12 @@ onBeforeUnmount(() => { userStream.unsubscribe(); stopPresence() })
          call or a Side Space, and all three go through one getDisplayMedia. Inert elsewhere. -->
     <ScreenSourcePicker />
 
+    <!-- "Can I drive?" — the consent prompt, the banner while someone is, and the asker's own
+         waiting state. Here rather than on the stage because, like a call, a control session
+         outlives the page it started on: you can wander into another channel while someone is
+         still holding your mouse, and the way to take it back has to come with you. -->
+    <RemoteControlPrompt />
+
     <!-- The floating-window shelf — popped-out widgets, conversations, and the pinned music
          player. Mounted here (not inside a page) so a floated window outlives the page it was
          opened from: a video keeps playing, a chat keeps updating, and the pinned song follows

@@ -1,24 +1,38 @@
 <script setup lang="ts">
-import { FileText, LayoutGrid, NotebookPen, PenTool } from 'lucide-vue-next'
+import { Plus } from 'lucide-vue-next'
 import type { SideDeskAppId } from '~/types'
 
 /**
- * The Side Desk — a tabbed workspace that hangs beside a chat and houses the *apps* a
- * place builds things with. It grew out of the whiteboard: the board is now just the first
- * app among several (Notes, Docs, an open widget Canvas), each a tab here.
+ * The Side Desk — a tabbed workspace that hangs beside a chat and houses the *apps* a place
+ * builds things with.
  *
- * Surface-agnostic, the same way {@link Whiteboard} is: the host hands a REST base path and
- * the private stream this space lives on, so one component drives a channel's space, a DM's,
- * and a side chat's alike. Each app hangs its own endpoints off `basePath` (the board uses
- * `${basePath}/whiteboard`). `canEdit` gates authoring; when false apps are read-only and
- * `readonlyHint` says why. The active tab is owned by the host (so it can live in the URL),
- * passed in and emitted back out.
+ * It grew out of the whiteboard: the board became the first app among several, and the tab strip
+ * is now a *catalogue* rather than four fixed tabs. Every interactive widget (Kanban, a poll,
+ * the games) can be a full app here, and the workspace apps (board, notes, calendar) can be
+ * cards on the Open Canvas — the two used to be separate lists of the same idea. See
+ * {@link useDeskApps} for the registry and why an app and its widget can't fall out of sync.
+ *
+ * Which apps a surface shows is stored per surface and shared by everyone on it, so the strip
+ * reads the same for all of them. The Open Canvas is pinned first and can't be removed: it's
+ * where the other apps get placed.
+ *
+ * Surface-agnostic, the same way {@link Whiteboard} is: the host hands a REST base path and the
+ * private stream this space lives on, so one component drives a channel's desk, a DM's and a
+ * side chat's alike. Each app hangs its own endpoints off `basePath`. `canEdit` gates authoring;
+ * when false apps are read-only and `readonlyHint` says why. The active tab is owned by the host
+ * (so it can live in the URL), passed in and emitted back out.
  */
 const props = defineProps<{
   basePath: string
   streamName: string
   canEdit: boolean
   activeApp: SideDeskAppId
+  /**
+   * The channel widgets resolve against. A channel's desk passes its own id; a side chat passes
+   * its *parent* channel's, because widgets are channel-scoped — the same scoping its canvas
+   * cards have always used.
+   */
+  channelId: number
   readonlyHint?: string
 }>()
 
@@ -28,35 +42,86 @@ const emit = defineEmits<{
   'jump': [messageId: number]
 }>()
 
-const APPS = [
-  { id: 'canvas', label: 'Canvas', icon: LayoutGrid },
-  { id: 'board', label: 'Board', icon: PenTool },
-  { id: 'notes', label: 'Notes', icon: NotebookPen },
-  { id: 'docs', label: 'Docs', icon: FileText },
-] as const
+const { apps, toggle, enabled, open } = useDeskAppList(props.basePath, props.streamName)
+
+open()
+
+const managing = ref(false)
+
+const tabs = computed(() => apps.value.map(id => deskApp(id)!).filter(Boolean))
+
+/**
+ * Fall back to the Canvas when the active tab isn't in the strip.
+ *
+ * Happens for real: someone else removes the app you're looking at, or a stale `?desk=` in the
+ * URL names one this surface never had. Without this the desk renders nothing at all, which
+ * reads as broken rather than as "that tab is gone".
+ */
+const resolved = computed<SideDeskAppId>(() =>
+  enabled.value.has(props.activeApp) ? props.activeApp : 'canvas')
+
+watch(resolved, id => {
+  if (id !== props.activeApp) emit('update:activeApp', id)
+})
 </script>
 
 <template>
   <div class="flex min-h-0 flex-1 flex-col">
-    <!-- App tab bar -->
-    <nav class="flex shrink-0 border-b">
+    <!--
+      The tab strip.
+
+      A horizontal scroller, not a wrapping row: the strip is open-ended now (a surface can add
+      a dozen apps), and wrapping would push the workspace down by a line every few additions —
+      worst exactly on the phone, where the desk covers the window and vertical space is the
+      scarce thing. `scroll-strip` hides the scrollbar while keeping the finger-drag, which is
+      the same trick the header action rows use.
+
+      Tabs size to their own label rather than splitting the width evenly, so four apps don't
+      stretch into a sparse row and twelve don't crush into unreadable slivers. The Add button
+      is pinned outside the scroller so it's always reachable, however long the strip gets.
+    -->
+    <nav class="flex shrink-0 items-stretch border-b">
+      <div class="scroll-strip flex min-w-0 flex-1">
+        <button
+          v-for="a in tabs"
+          :key="a.id"
+          type="button"
+          class="flex shrink-0 items-center gap-1.5 border-b-2 px-3 py-2 text-sm transition-colors"
+          :class="resolved === a.id
+            ? 'border-primary font-medium text-foreground'
+            : 'border-transparent text-muted-foreground hover:text-foreground'"
+          @click="emit('update:activeApp', a.id)"
+        >
+          <component :is="a.icon" class="h-4 w-4 shrink-0" /> {{ a.label }}
+        </button>
+      </div>
+
       <button
-        v-for="a in APPS"
-        :key="a.id"
         type="button"
-        class="flex flex-1 items-center justify-center gap-1.5 border-b-2 py-2 text-sm transition-colors"
-        :class="activeApp === a.id
-          ? 'border-primary font-medium text-foreground'
-          : 'border-transparent text-muted-foreground hover:text-foreground'"
-        @click="emit('update:activeApp', a.id)"
+        class="flex shrink-0 items-center gap-1 border-b-2 border-transparent px-2.5 text-muted-foreground transition-colors hover:text-foreground disabled:opacity-40"
+        :disabled="!canEdit"
+        title="Add or remove apps"
+        aria-label="Add or remove apps"
+        @click="managing = true"
       >
-        <component :is="a.icon" class="h-4 w-4" /> {{ a.label }}
+        <Plus class="h-4 w-4" />
       </button>
     </nav>
 
-    <!-- Board — the shared whiteboard, keyed by base path so switching surfaces remounts. -->
+    <!-- Open Canvas — a free 2D board of cards: notes, checklists, widgets, and the workspace
+         apps themselves. Keyed by base path so switching surfaces remounts. -->
+    <SideDeskCanvas
+      v-if="resolved === 'canvas'"
+      :key="`${basePath}-canvas`"
+      :base-path="basePath"
+      :stream-name="streamName"
+      :can-edit="canEdit"
+      :readonly-hint="readonlyHint"
+    />
+
+    <!-- Board — the shared whiteboard. -->
     <Whiteboard
-      v-if="activeApp === 'board'"
+      v-else-if="resolved === 'board'"
       :key="basePath"
       :base-path="`${basePath}/whiteboard`"
       :stream-name="streamName"
@@ -66,7 +131,7 @@ const APPS = [
 
     <!-- Notes — the surface's one shared markdown document. -->
     <SideDeskNotes
-      v-else-if="activeApp === 'notes'"
+      v-else-if="resolved === 'notes'"
       :key="`${basePath}-notes`"
       :base-path="basePath"
       :stream-name="streamName"
@@ -74,10 +139,10 @@ const APPS = [
       :readonly-hint="readonlyHint"
     />
 
-    <!-- Open Canvas — a free 2D board of note and checklist cards. -->
-    <SideDeskCanvas
-      v-else-if="activeApp === 'canvas'"
-      :key="`${basePath}-canvas`"
+    <!-- Calendar — the surface's shared schedule. -->
+    <SideDeskCalendar
+      v-else-if="resolved === 'calendar'"
+      :key="`${basePath}-calendar`"
       :base-path="basePath"
       :stream-name="streamName"
       :can-edit="canEdit"
@@ -86,13 +151,28 @@ const APPS = [
 
     <!-- Docs — a view-only shelf of uploaded PDF / Word / Excel files. -->
     <SideDeskDocs
-      v-else
+      v-else-if="resolved === 'docs'"
       :key="`${basePath}-docs`"
       :base-path="basePath"
       :stream-name="streamName"
       :can-edit="canEdit"
       :readonly-hint="readonlyHint"
       @jump="emit('jump', $event)"
+    />
+
+    <!-- Everything else is a widget promoted to an app: one branch for all seven, because a
+         widget tab is only ever "the channel's widget of this type, full width". -->
+    <SideDeskWidgetApp
+      v-else
+      :key="`${basePath}-${resolved}`"
+      :type="resolved as any"
+      :channel-id="channelId"
+    />
+
+    <DeskAppManager
+      v-model:open="managing"
+      :enabled="enabled"
+      @toggle="toggle"
     />
   </div>
 </template>

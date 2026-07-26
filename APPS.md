@@ -179,6 +179,41 @@ npm install
 npm run dev
 ```
 
+### Remote control of a shared screen
+
+Letting someone else drive your screen needs to move the real mouse and press real keys, and a
+browser tab cannot do that at any price — it's the sandbox working as designed. So the injection
+lives in the Electron shell (`desktop/remote-control.js`) behind a native backend, and the split
+is:
+
+| | Can *ask for* and hold control | Can *grant* control |
+| --- | --- | --- |
+| Web / mobile | yes | no |
+| Desktop, backend missing | yes | no |
+| Desktop, backend installed | yes | yes, for a **whole-screen** share |
+
+Window shares can't be controlled: mapping the controller's pointer needs the captured surface's
+bounds on screen, and Electron only exposes those for displays. The app says so up front rather
+than at the moment someone's Allow button turns out to do nothing.
+
+The backend is an **optional dependency** on purpose — a native module that fails to build must
+not take the desktop app down with it, so the require is guarded and a shell without it simply
+reports the feature unavailable. To enable it:
+
+```bash
+cd desktop
+npm install @nut-tree-fork/nut-js     # already in optionalDependencies; this forces it
+npx electron-rebuild                  # only if the prebuilt binary doesn't match your Electron
+```
+
+Linux also needs X11 (`libxtst`); under Wayland, input injection is blocked by the compositor and
+the backend will load but do nothing. macOS prompts for **Accessibility** permission on first
+use, and denies silently until it's granted in System Settings → Privacy & Security.
+
+Consent itself is *not* here — it lives in `frontend/app/composables/useRemoteControl.ts`,
+next to the person doing the consenting. The main process only ever sees input events for a
+session that was already approved.
+
 ## The app icon
 
 One artwork drives every platform: **`frontend/brand/icon-source.png`**, a square 1024×1024

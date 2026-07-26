@@ -17,10 +17,20 @@ final class CanvasItemRules
         $req = $creating ? 'required' : 'sometimes';
 
         return [
-            'kind' => [$req, 'string', 'in:note,todo,widget'],
-            'content' => [$req, 'array'],
-            // A `widget` card names which widget to place; note/todo cards leave this out.
-            'content.type' => ['required_if:kind,widget', 'string', 'in:music,video,kanban,poll,shooter,racing,skribbl'],
+            // `board`, `notes` and `calendar` are the Side Desk apps placed *as cards* — the
+            // mirror image of a widget being promoted to a tab. They carry no content of their
+            // own: the card is a window onto the surface's one board / one note / one calendar,
+            // reading and writing the same endpoints the tab does, which is what keeps the two
+            // views in step without any syncing between them.
+            'kind' => [$req, 'string', 'in:note,todo,widget,board,notes,calendar'],
+            // `present`, not `required`, on create. A board / notes / calendar card carries no
+            // content at all and posts `{}` — and `required` rejects an empty array, so those
+            // three were refused with "the content field is required" the moment they were
+            // clicked. `present` still guarantees the key is there, which is what the NOT NULL
+            // column needs; it just stops an empty one counting as missing.
+            'content' => [$creating ? 'present' : 'sometimes', 'array'],
+            // A `widget` card names which widget to place; every other kind leaves this out.
+            'content.type' => ['required_if:kind,widget', 'string', 'in:'.implode(',', \App\Support\DeskApps::WIDGET_APPS)],
             'x' => ['sometimes', 'integer', 'min:0', 'max:100000'],
             'y' => ['sometimes', 'integer', 'min:0', 'max:100000'],
             'w' => ['sometimes', 'integer', 'min:120', 'max:4000'],
