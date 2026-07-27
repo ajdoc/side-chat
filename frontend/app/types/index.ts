@@ -236,6 +236,11 @@ export interface Message {
   started_side_chat?: SideChat | null
   /** The interactive widget this message renders — only present on `type: 'widget'` cards. */
   widget?: Widget | null
+  /**
+   * A Side Desk app to pop into a floating window, carried only by the ephemeral answer to an
+   * `a!<app>` command and only to the client that typed it. See useMessages.send.
+   */
+  open_app?: SideDeskAppId
   created_at: string
 }
 
@@ -656,6 +661,18 @@ export interface WhiteboardStroke {
 export type SideDeskSurfaceAppId = 'board' | 'notes' | 'docs' | 'canvas' | 'calendar'
 export type SideDeskWidgetAppId = WidgetType
 export type SideDeskAppId = SideDeskSurfaceAppId | SideDeskWidgetAppId
+
+/**
+ * What pressing E on a piece of Side Space furniture opens.
+ *
+ * The two families of Side Desk app answer differently, and the discriminator says which: a
+ * widget app hands back the channel's widget whole (the same row the timeline card renders), a
+ * surface app hands back only its name, because the board and the notes hang off the channel
+ * rather than off a widget row. Both end up as a floating window — see SideSpaceStage.
+ */
+export type SpaceInteraction =
+  | { type: 'widget', app: SideDeskWidgetAppId, data: Widget }
+  | { type: 'app', app: SideDeskSurfaceAppId }
 
 /** The named colours a calendar entry may wear; the palette they map to is the client's. */
 export type CalendarEventColor = 'primary' | 'green' | 'amber' | 'rose' | 'violet' | 'teal' | 'slate'

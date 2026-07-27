@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { Plus } from 'lucide-vue-next'
+import { ExternalLink, Plus } from 'lucide-vue-next'
 import type { SideDeskAppId } from '~/types'
 
 /**
@@ -63,6 +63,32 @@ const resolved = computed<SideDeskAppId>(() =>
 watch(resolved, id => {
   if (id !== props.activeApp) emit('update:activeApp', id)
 })
+
+/**
+ * Pop the open app out into a floating window that outlives this panel — the same shelf a
+ * widget card pops out onto, and the same affordance, so "float it" means one thing everywhere.
+ *
+ * Offered for the surface apps only: a widget app already has that button on its card, and the
+ * window it opens is the widget's, not the desk's. Both windows render live state shared with
+ * the tab they came from (see useSurfaceStore), so floating one isn't a snapshot — it's a
+ * second view of the thing you were already looking at.
+ */
+const { open: openFloating, isSurfaceFloating } = useFloatingWindows()
+const floatable = computed(() => !isWidgetApp(resolved.value))
+
+function popOut() {
+  const app = resolved.value
+  if (isWidgetApp(app)) return
+
+  openFloating({
+    kind: 'surface',
+    app,
+    basePath: props.basePath,
+    streamName: props.streamName,
+    canEdit: props.canEdit,
+    title: deskApp(app)?.label ?? 'App',
+  })
+}
 </script>
 
 <template>
@@ -95,6 +121,18 @@ watch(resolved, id => {
           <component :is="a.icon" class="h-4 w-4 shrink-0" /> {{ a.label }}
         </button>
       </div>
+
+      <!-- Float the open app: it leaves the panel and follows you around the app. -->
+      <button
+        v-if="floatable"
+        type="button"
+        class="flex shrink-0 items-center border-b-2 border-transparent px-2.5 text-muted-foreground transition-colors hover:text-foreground"
+        :title="isSurfaceFloating(basePath, resolved) ? 'Already floating — brings it to the front' : 'Pop out into a floating window'"
+        aria-label="Pop out into a floating window"
+        @click="popOut"
+      >
+        <ExternalLink class="h-4 w-4" />
+      </button>
 
       <button
         type="button"

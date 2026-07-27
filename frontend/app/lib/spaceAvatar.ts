@@ -46,6 +46,11 @@ export interface AvatarLook {
   hair_color: HairColour
   skin: SkinKind
   outfit: OutfitKind
+  /**
+   * Worn *over* the rest rather than instead of it: the five fields above are kept while a
+   * costume is on, so taking it off puts the same person back. See the costume section.
+   */
+  costume: CostumeKind
 }
 
 export const BODIES: BodyKind[] = ['slim', 'sturdy', 'feminine']
@@ -60,6 +65,7 @@ export const DEFAULT_LOOK: AvatarLook = {
   hair_color: 'brown',
   skin: 'fair',
   outfit: 'auto',
+  costume: 'none',
 }
 
 /** Fill in anything missing or unrecognised, so a sprite is always drawable. */
@@ -73,6 +79,8 @@ export function normaliseLook(look: Partial<AvatarLook> | null | undefined): Ava
     hair_color: pick(look?.hair_color, HAIR_COLOURS, DEFAULT_LOOK.hair_color),
     skin: pick(look?.skin, SKINS, DEFAULT_LOOK.skin),
     outfit: pick(look?.outfit, OUTFITS, DEFAULT_LOOK.outfit),
+    // Absent on every look saved before costumes existed, which is exactly `none`.
+    costume: pick(look?.costume, COSTUMES, DEFAULT_LOOK.costume),
   }
 }
 
@@ -524,9 +532,240 @@ const HAIR_ART: Record<HairKind, Record<SpriteDir, string[]>> = {
   },
 }
 
+// --- costumes ---
+
+/*
+ * A costume is the one thing that *isn't* a layer.
+ *
+ * Everything else here composes: a hairstyle over a body, a shirt colour into a palette, each
+ * ignorant of the others. A costume can't work that way, because it changes the silhouette —
+ * a hood is a different head, a suit of armour is a different set of shoulders — and a layer
+ * painted over the wrong shape reads as a costume drawn on a person rather than a person in a
+ * costume. So a costume replaces the body and its legs outright, and suppresses the hair when
+ * it covers the head.
+ *
+ * What it *doesn't* replace is the rest of the look: your skin, hair and shirt stay stored
+ * underneath, so taking a costume off puts you back rather than a stranger with default hair.
+ *
+ * The designs are ours. A figure in a dark hooded robe and a painted mask, and a suit of white
+ * powered armour with horns, are both older than anything either one might remind you of — the
+ * genre is borrowed in the same way the trainer sprite borrows its chunky outline, and no
+ * character is copied.
+ */
+
+export type CostumeKind = 'none' | 'cantor' | 'sentinel'
+export const COSTUMES: CostumeKind[] = ['none', 'cantor', 'sentinel']
+
+interface Costume {
+  label: string
+  /** One line for the picker — what you'd be putting on. */
+  blurb: string
+  /** A hood or a helmet leaves no hair to draw, so the layer is skipped rather than hidden. */
+  covered: boolean
+  /** Its own palette slots, merged over the body's — see {@link palette}. */
+  paint: Record<string, string>
+  /** Rows 0–13, in place of {@link BODY}. */
+  body: Record<SpriteDir, string[]>
+  /** Rows 14–15 per walk frame, in place of {@link LEGS}. */
+  legs: Record<SpriteDir, [string[], string[]]>
+}
+
+/**
+ * The Cantor: a dark hooded robe, a painted mask, a weight of silver at the throat.
+ *
+ * Slots: `R` robe, `r` its shadow and outline, `m` the mask, `X`/`A` the paint on it, `G` silver.
+ * The mask does the whole job at this size — a hood alone is a monk, and a hood with two red
+ * marks where the eyes should be is somebody you'd stop and look at.
+ */
+const CANTOR: Costume = {
+  label: 'Hooded Cantor',
+  blurb: 'A dark robe, a painted mask, and silver at the throat',
+  covered: true,
+  paint: {
+    R: '#2b2833',
+    r: '#191720',
+    m: '#efe7da',
+    X: '#c33a32',
+    A: '#8c241f',
+    G: '#c3c8d2',
+  },
+  body: {
+    down: [
+      '................',
+      '.....rrrrrr.....',
+      '....rRRRRRRr....',
+      '...rRRmmmmRRr...',
+      '...rRmmmmmmRr...',
+      '...rRmXmmXmRr...',
+      '...rRmXXXXmRr...',
+      '...rRmmXXmmRr...',
+      '....rRmmmmRr....',
+      '.....rRRRRr.....',
+      '...rRRGGGGRRr...',
+      '..rRRRGGGGRRRr..',
+      '..rRRRRRRRRRRr..',
+      '...rRRRRRRRRr...',
+    ],
+    up: [
+      '................',
+      '.....rrrrrr.....',
+      '....rRRRRRRr....',
+      '...rRRRRRRRRr...',
+      '...rRRRRRRRRr...',
+      '...rRRRRRRRRr...',
+      '...rRRRRRRRRr...',
+      '...rRRRRRRRRr...',
+      '....rRRRRRRr....',
+      '.....rRRRRr.....',
+      '...rRRRRRRRRr...',
+      '..rRRRRRRRRRRr..',
+      '..rRRRRRRRRRRr..',
+      '...rRRRRRRRRr...',
+    ],
+    right: [
+      '................',
+      '.....rrrrrr.....',
+      '....rRRRRRRr....',
+      '...rRRmmmmRr....',
+      '...rRmmmmmXr....',
+      '...rRmmXXmmr....',
+      '...rRmmmmmmr....',
+      '...rRRmmmmRr....',
+      '....rRRRRRr.....',
+      '.....rRRRRr.....',
+      '....rRRGGRRr....',
+      '...rRRRGGRRRr...',
+      '...rRRRRRRRRr...',
+      '....rRRRRRRr....',
+    ],
+  },
+  legs: {
+    down: [
+      ['...rRRRooRRRr...', '....oGGooGGo....'],
+      ['...rRRRRRRRRr...', '...oGGo..oGGo...'],
+    ],
+    up: [
+      ['...rRRRooRRRr...', '....oGGooGGo....'],
+      ['...rRRRRRRRRr...', '...oGGo..oGGo...'],
+    ],
+    right: [
+      ['....rRRRRRr.....', '.....oGGGo......'],
+      ['...rRRRRRr......', '...oGGo.oGGo....'],
+    ],
+  },
+}
+
+/**
+ * The Sentinel: white powered armour, a dark inner frame, gold horns and a lit visor.
+ *
+ * Slots: `W` plate, `w` its shading, `D` the frame beneath, `Y` gold, `V` the visor, `X` a red
+ * chest marking. The horns are drawn *above* the head rather than on it, which is what buys the
+ * silhouette at sixteen pixels — armour alone reads as a person in white.
+ */
+const SENTINEL: Costume = {
+  label: 'Iron Sentinel',
+  blurb: 'White plate over a dark frame, gold horns, a lit visor',
+  covered: true,
+  paint: {
+    W: '#e6e8ee',
+    w: '#a7adba',
+    D: '#343947',
+    Y: '#d9a83c',
+    V: '#59d9d0',
+    X: '#b73b3f',
+  },
+  body: {
+    down: [
+      '.....Y....Y.....',
+      '....YY....YY....',
+      '....oWWWWWWo....',
+      '...oWWWWWWWWo...',
+      '...oWDDDDDDWo...',
+      '...oWDVVVVDWo...',
+      '...oWWDDDDWWo...',
+      '....oWWWWWWo....',
+      '.....oDDDDo.....',
+      '...oWWWDDWWWo...',
+      '..oWWWDXXDWWWo..',
+      '..oWWDDDDDDWWo..',
+      '..oWWDDDDDDWWo..',
+      '...oDDDDDDDDo...',
+    ],
+    up: [
+      '.....Y....Y.....',
+      '....YY....YY....',
+      '....oWWWWWWo....',
+      '...oWWWWWWWWo...',
+      '...oWWDDDDWWo...',
+      '...oWWDDDDWWo...',
+      '...oWWWWWWWWo...',
+      '....oWWWWWWo....',
+      '.....oDDDDo.....',
+      '...oWWWDDWWWo...',
+      '..oWWWDDDDWWWo..',
+      '..oWWDDDDDDWWo..',
+      '..oWWDDDDDDWWo..',
+      '...oDDDDDDDDo...',
+    ],
+    right: [
+      '.......Y........',
+      '......YY........',
+      '....oWWWWWWo....',
+      '...oWWWWWWWWo...',
+      '...oWDDDDDVWo...',
+      '...oWDDDDVVWo...',
+      '...oWWDDDDWWo...',
+      '....oWWWWWWo....',
+      '.....oDDDDo.....',
+      '....oWWWDDWo....',
+      '...oWWWDXDWo....',
+      '...oWWDDDDWo....',
+      '...oWWDDDDWo....',
+      '....oDDDDDo.....',
+    ],
+  },
+  legs: {
+    down: [
+      ['....oWWooWWo....', '....oYYooYYo....'],
+      ['....oWWWWWWo....', '...oYYo..oYYo...'],
+    ],
+    up: [
+      ['....oWWooWWo....', '....oYYooYYo....'],
+      ['....oWWWWWWo....', '...oYYo..oYYo...'],
+    ],
+    right: [
+      ['.....oWWWo......', '.....oYYYo......'],
+      ['....oWWWWo......', '...oYYo.oYYo....'],
+    ],
+  },
+}
+
+const COSTUME_ART: Record<Exclude<CostumeKind, 'none'>, Costume> = {
+  cantor: CANTOR,
+  sentinel: SENTINEL,
+}
+
+/** Names and one-liners for the picker, including the one for wearing nothing. */
+export const COSTUME_META: Record<CostumeKind, { label: string, blurb: string }> = {
+  none: { label: 'Just you', blurb: 'Your own face, hair and shirt' },
+  cantor: { label: CANTOR.label, blurb: CANTOR.blurb },
+  sentinel: { label: SENTINEL.label, blurb: SENTINEL.blurb },
+}
+
+/** The costume being worn, or null for none — the one place the `none` string is unpacked. */
+function costumeOf(look: AvatarLook): Costume | null {
+  return look.costume === 'none' ? null : COSTUME_ART[look.costume] ?? null
+}
+
 // --- assembling one ---
 
 function bodyRows(look: AvatarLook, dir: SpriteDir, frame: 0 | 1): string[] {
+  const costume = costumeOf(look)
+
+  // A costume is the whole silhouette, so the body choice doesn't apply: there's no slim or
+  // sturdy version of a suit of armour, and pretending otherwise would need a second suit.
+  if (costume) return [...costume.body[dir], ...costume.legs[dir][frame]]
+
   const base = [...BODY[dir]]
 
   if (look.body === 'sturdy') base.splice(11, 3, ...STURDY_TORSO[dir])
@@ -549,7 +788,7 @@ function palette(look: AvatarLook, hue: number, self: boolean) {
     ? [`hsl(${hue} 62% ${self ? 56 : 48}%)`, `hsl(${hue} 45% ${self ? 38 : 32}%)`]
     : OUTFIT_PAINT[look.outfit]
 
-  return {
+  const base = {
     o: '#1c1a26',
     S: skin,
     E: '#1c1a26',
@@ -562,6 +801,13 @@ function palette(look: AvatarLook, hue: number, self: boolean) {
     // The shaded skin, for the side view's neck.
     N: skinShade,
   }
+
+  // A costume's own slots go over the top rather than beside: it brings letters the body never
+  // uses, and may deliberately repaint one it does (the outline of white armour is not the
+  // outline of a person).
+  const costume = costumeOf(look)
+
+  return costume ? { ...base, ...costume.paint } : base
 }
 
 /**
@@ -593,13 +839,18 @@ export function drawTrainer(
     look.hair_color,
     look.skin,
     look.outfit,
+    look.costume,
     look.outfit === 'auto' ? Math.round(opts.hue) : '',
     opts.self ? 1 : 0,
   ].join('|')
 
+  const costume = costumeOf(look)
+
   const canvas = sprite(key, SPRITE_SIZE, SPRITE_SIZE, [
     { rows: bodyRows(look, dir, frame), palette: paint },
-    { rows: HAIR_ART[look.hair][dir], palette: paint },
+    // Under a hood or a helmet there is no hair to draw — painting it anyway would put a fringe
+    // over the mask.
+    ...(costume?.covered ? [] : [{ rows: HAIR_ART[look.hair][dir], palette: paint }]),
   ])
 
   // A shade over one tile, so a sprite reads as a person in a room rather than as a tile.

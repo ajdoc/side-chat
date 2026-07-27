@@ -613,6 +613,24 @@ it('lets the owner attach an effect to one person, and tells everyone', function
     Event::assertDispatched(VoiceEffectsUpdated::class);
 });
 
+it('lets a Side Space have entrance effects too', function () {
+    // The room fires these when somebody walks into *earshot* rather than into the channel
+    // (see useSpaceProximity), but they're configured exactly as a voice channel's are — which
+    // is why `allowsCalls()` and not `isVoice()` is the gate on both endpoints.
+    [$owner, , $channel] = ownerWithSpaceChannel();
+
+    Passport::actingAs($owner);
+
+    $this->patchJson("/api/channels/{$channel->id}/voice/effects", [
+        'join_effect' => 'sparkles',
+        'leave_effect' => null,
+    ])->assertOk()->assertJsonPath('data.default.join', 'sparkles');
+
+    $this->getJson("/api/channels/{$channel->id}/voice/effects")
+        ->assertOk()
+        ->assertJsonPath('data.default.join', 'sparkles');
+});
+
 it("sets the room's default when no one is named", function () {
     [$owner, , $channel] = ownerWithVoiceChannel();
 

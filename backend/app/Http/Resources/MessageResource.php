@@ -29,6 +29,9 @@ class MessageResource extends JsonResource
             // Only loaded where it's shown (the Pinned tab); absent on the timeline, which
             // renders a pin icon and nothing else.
             'pinned_by' => $this->whenLoaded('pinner', fn () => $this->pinner?->name),
+            // Set only on the ephemeral answer to `a!<app>`: the Side Desk app the sender's
+            // client should pop into a floating window. Absent on every stored message.
+            $this->mergeWhen($this->resource->openApp !== null, fn () => ['open_app' => $this->resource->openApp]),
             'user' => new UserResource($this->whenLoaded('user')),
             'attachments' => AttachmentResource::collection($this->whenLoaded('attachments')),
             // Grouped per emoji, carrying who reacted — the client works out which are its own.

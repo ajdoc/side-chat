@@ -119,8 +119,10 @@ final class MapPresets
                 ['id' => 'meet-b', 'name' => 'Meeting room B', 'kind' => 'private', 'x' => 18, 'y' => 4, 'w' => 6, 'h' => 3],
             ],
             'objects' => self::objects([
-                // Meeting room A: a desk to sit around and a computer on it.
+                // Meeting room A: a desk to sit around, a computer on it, and the whiteboard
+                // you actually stand at — which is the channel's Board, not a second one.
                 ['desk', 7, 5], ['chair', 7, 4], ['chair', 9, 4], ['computer', 10, 5],
+                ['whiteboard', 10, 4],
                 // Meeting room B: the room you go to to watch something together.
                 ['tv', 19, 4], ['couch', 19, 6], ['chair', 22, 5],
                 // The open floor: desks along the middle, a speaker by the wall.
@@ -130,11 +132,13 @@ final class MapPresets
                 ['speaker', 27, 8], ['watercooler', 27, 9],
                 // The lounge corner.
                 ['rug', 22, 15], ['couch', 22, 15], ['arcade', 25, 16], ['plant', 22, 17],
-                // The back office.
+                // The back office: where the room's written-down things live — the shared notes
+                // on the lectern, the doc shelf in the cabinet.
                 ['desk', 8, 13], ['chair', 8, 14], ['easel', 12, 13], ['bookshelf', 16, 13],
+                ['lectern', 14, 13], ['filecabinet', 17, 13],
                 // On the walls.
                 ['painting', 9, 0], ['window', 14, 0], ['painting', 20, 0], ['clock', 2, 0],
-                ['noticeboard', 10, 12], ['shelf', 18, 12],
+                ['noticeboard', 10, 12], ['shelf', 18, 12], ['planner', 14, 12],
                 // Odds and ends.
                 ['plant', 1, 1], ['plant', 28, 1], ['bookshelf', 1, 18], ['crate', 28, 18],
             ]),
@@ -678,13 +682,22 @@ final class MapPresets
      * The ids only have to be unique within one map and stable across a seed, so they're
      * positional — nothing ever refers to a preset's furniture by name.
      *
-     * @param  array<int, array{0: string, 1: int, 2: int}>  $list
-     * @return array<int, array{id: string, kind: string, x: int, y: int}>
+     * A fourth element turns the piece ({@see Decorations::FACINGS}); leaving it off is the
+     * front view, which is what every preset written before pieces could be turned assumed.
+     *
+     * @param  array<int, array{0: string, 1: int, 2: int, 3?: string}>  $list
+     * @return array<int, array{id: string, kind: string, x: int, y: int, facing?: string}>
      */
     private static function objects(array $list): array
     {
         return array_values(array_map(
-            fn (array $item, int $i) => ['id' => "d-$i", 'kind' => $item[0], 'x' => $item[1], 'y' => $item[2]],
+            fn (array $item, int $i) => [
+                'id' => "d-$i",
+                'kind' => $item[0],
+                'x' => $item[1],
+                'y' => $item[2],
+                ...(isset($item[3]) ? ['facing' => $item[3]] : []),
+            ],
             $list,
             array_keys($list),
         ));

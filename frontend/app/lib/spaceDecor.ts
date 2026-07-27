@@ -18,16 +18,35 @@
  *
  * ## Interaction
  *
- * `interact` says which widget pressing E opens, and is here *only* to draw the prompt. The
- * server decides what actually opens, from its own copy of the map — see the interact endpoint.
- * Keeping a copy here means the prompt can say "Put something on" the instant you step up to
- * the speaker rather than a round trip later.
+ * `interact` says which **Side Desk app** pressing E opens, and is here *only* to draw the
+ * prompt. The server decides what actually opens, from its own copy of the map — see the
+ * interact endpoint. Keeping a copy here means the prompt can say "Put something on" the instant
+ * you step up to the speaker rather than a round trip later.
+ *
+ * Both families of app are reachable: a widget app (the speaker, the arcade cabinet) opens the
+ * channel's widget, and a surface app (the whiteboard, the lectern) opens the panel itself. The
+ * room is a set of doors onto the Side Desk, not a second copy of it.
+ *
+ * ## Which way it's turned
+ *
+ * A piece stores a `facing`, and a quarter turn swaps its footprint — a 2×1 desk turned to face
+ * right takes up 1×2 tiles. Every "what does this cover" question goes through {@link decorSize}
+ * so the collision grid, the editor's hit test and the renderer can't disagree about it. How the
+ * *art* follows the turn is a separate question with a less obvious answer — see {@link pose}.
  */
 
-import type { Widget } from '~/types'
+import type { SideDeskAppId } from '~/types'
 import { blit, sprite, tileNoise } from './pixelSprite'
 
 export type DecorMount = 'floor' | 'wall'
+
+/** Which way a piece is turned. `down` is the front view every sprite is authored in. */
+export type DecorFacing = 'down' | 'left' | 'up' | 'right'
+
+export const DECOR_FACINGS: DecorFacing[] = ['down', 'left', 'up', 'right']
+
+/** Quarter turns clockwise from the authored front view. Mirrors the server's table. */
+const TURNS: Record<DecorFacing, 0 | 1 | 2 | 3> = { down: 0, left: 1, up: 2, right: 3 }
 
 export interface DecorKind {
   label: string
@@ -39,18 +58,20 @@ export interface DecorKind {
   mount: DecorMount
   /** Drawn taller than its footprint and anchored at the bottom — see above. */
   lift: boolean
-  /** The widget pressing E opens, if any. */
-  interact: Widget['type'] | null
+  /** The Side Desk app pressing E opens, if any. */
+  interact: SideDeskAppId | null
   /** What the prompt says you'd be doing. */
   verb: string | null
 }
 
-/** A decoration as it's stored: a kind and a place, and nothing else. */
+/** A decoration as it's stored: a kind, a place, and which way it's turned. */
 export interface SpaceObject {
   id: string
   kind: string
   x: number
   y: number
+  /** Absent on everything placed before pieces could be turned, and read as `down`. */
+  facing?: DecorFacing
 }
 
 // --- the palette every piece of furniture shares ---
@@ -665,6 +686,90 @@ const SHELF = [
   '................',
 ]
 
+/*
+ * The Side Desk's own apps, standing in the room.
+ *
+ * Drawn as the furniture you'd expect to find the thing on — a board on castors, a lectern with
+ * the notes open on it, a planner on the wall, a cabinet of files — because the point is that
+ * you recognise what pressing E will open before you press it.
+ */
+
+const WHITEBOARD = [
+  '................................',
+  '..oooooooooooooooooooooooooooo..',
+  '..oMMMMMMMMMMMMMMMMMMMMMMMMMMo..',
+  '..oMppppppppppppppppppppppppMo..',
+  '..oMpprrppppppppbbppppppppppMo..',
+  '..oMprpppppppppbppppppgggpppMo..',
+  '..oMprpppppppppbpppppgpppppcMo..',
+  '..oMpppppppppppppppppgggpppcMo..',
+  '..oMppprrrrppppppppppppppppcMo..',
+  '..oMpppppppppppppppppppppppcMo..',
+  '..oMppppppppppppppppppppppppMo..',
+  '..oMMMMMMMMMMMMMMMMMMMMMMMMMMo..',
+  '..oooooooooooooooooooooooooooo..',
+  '....MM....................MM....',
+  '...MM......................MM...',
+  '..oo........................oo..',
+]
+
+const LECTERN = [
+  '................',
+  '................',
+  '....oooooooo....',
+  '...opppppppppo..',
+  '..oppwwppwwppo..',
+  '..opwppwwppwpo..',
+  '..opwppwwppwpo..',
+  '..oppwwppwwppo..',
+  '..ooooowwooooo..',
+  '......owwo......',
+  '......owwo......',
+  '......owwo......',
+  '.....owwwwo.....',
+  '....owwwwwwo....',
+  '...oWWWWWWWWo...',
+  '...oooooooooo...',
+]
+
+const PLANNER = [
+  '................',
+  '.oooooooooooooo.',
+  '.orrrrrrrrrrrro.',
+  '.oppppppppppppo.',
+  '.opkpkpkpkpkppo.',
+  '.oppppppppppppo.',
+  '.opkpkpkpkpkppo.',
+  '.oppppppppppppo.',
+  '.opkprpkpkpkppo.',
+  '.oppppppppppppo.',
+  '.opkpkpkpbpkppo.',
+  '.oppppppppppppo.',
+  '.oooooooooooooo.',
+  '................',
+  '................',
+  '................',
+]
+
+const FILECABINET = [
+  '................',
+  '................',
+  '..oooooooooooo..',
+  '..oMMMMMMMMMMo..',
+  '..omoooooooomo..',
+  '..omoppppppomo..',
+  '..omooMMMMoomo..',
+  '..omoooooooomo..',
+  '..omoppppppomo..',
+  '..omooMMMMoomo..',
+  '..omoooooooomo..',
+  '..omoppppppomo..',
+  '..omooMMMMoomo..',
+  '..omoooooooomo..',
+  '..oooooooooooo..',
+  '..oo........oo..',
+]
+
 const NOTICEBOARD = [
   '................',
   '.oooooooooooooo.',
@@ -698,6 +803,13 @@ export const DECOR: Record<string, DecorKind & { art: string[] | string[][] | nu
   racer: kind('Racing cabinet', { interact: 'racing', verb: 'Race', art: RACER }),
   easel: kind('Easel', { interact: 'skribbl', verb: 'Draw', art: EASEL }),
   noticeboard: kind('Notice board', { mount: 'wall', interact: 'poll', verb: 'Read the board', art: NOTICEBOARD }),
+
+  // The surface apps: no widget behind them, so pressing E floats the app itself. The board in
+  // the corner is the channel's Board tab, which is the whole point of putting one here.
+  whiteboard: kind('Whiteboard', { w: 2, interact: 'board', verb: 'Draw on it', art: WHITEBOARD }),
+  lectern: kind('Lectern', { interact: 'notes', verb: 'Read the notes', art: LECTERN }),
+  planner: kind('Wall planner', { mount: 'wall', interact: 'calendar', verb: 'Check the schedule', art: PLANNER }),
+  filecabinet: kind('Filing cabinet', { interact: 'docs', verb: 'Look through the files', art: FILECABINET }),
 
   desk: kind('Desk', { w: 2, art: DESK }),
   couch: kind('Couch', { w: 2, art: COUCH }),
@@ -756,9 +868,58 @@ export function decorKind(kindName: string): (DecorKind & { art: string[] | stri
   return DECOR[kindName] ?? null
 }
 
-/** Every tile a piece covers — what the collision check and the editor's eraser both ask. */
+/**
+ * How much floor a piece takes up *as placed* — its catalogue size, turned.
+ *
+ * The single place the quarter turn is applied, mirroring `Decorations::size()` on the server. A
+ * piece turned an odd number of quarters trades its width for its height; a half turn changes
+ * which way it looks and nothing about the space it needs.
+ */
+export function decorSize(object: SpaceObject, kind: DecorKind): { w: number, h: number } {
+  return TURNS[object.facing ?? 'down'] % 2 === 1
+    ? { w: kind.h, h: kind.w }
+    : { w: kind.w, h: kind.h }
+}
+
+/** Every tile a piece covers — what the collision check and the editor's hit test both ask. */
 export function decorCovers(object: SpaceObject, kind: DecorKind, x: number, y: number): boolean {
-  return x >= object.x && x < object.x + kind.w && y >= object.y && y < object.y + kind.h
+  const { w, h } = decorSize(object, kind)
+
+  return x >= object.x && x < object.x + w && y >= object.y && y < object.y + h
+}
+
+/**
+ * How a turn is *drawn*, which is not simply "rotate the picture".
+ *
+ * Every sprite is authored as a front view, so a turn has to be faked from it, and the honest
+ * fake differs by what the piece is:
+ *
+ *   - **Flat pieces** (a rug, a mat) lie on the floor and have no front. Every turn is a true
+ *     rotation, because that is literally what turning a rug does.
+ *   - **A standing piece with a long axis** (a desk, a couch, the whiteboard) turned a quarter is
+ *     showing its side, and rotating the raster reads exactly that way — the piece now runs
+ *     north-south, which is what somebody rotating a couch wanted to see.
+ *   - **A half turn** shows a piece's *back*, and no sprite has one. So it mirrors rather than
+ *     inverts: an upside-down couch is never what anybody meant, and a mirrored one at least
+ *     reads as the same couch turned around.
+ *   - **A square standing piece** (a chair, a lamp) has no long axis to swing, so a quarter turn
+ *     mirrors too. Rotating it would lay a floor lamp on its side to no purpose.
+ *
+ * The *footprint* turns in every one of those cases — see {@link decorSize}. Only the picture
+ * is negotiable, because only the picture is missing information.
+ */
+function pose(kind: DecorKind, facing: DecorFacing): { rotate: number, mirror: boolean } {
+  const turns = TURNS[facing]
+
+  if (!kind.lift) return { rotate: turns, mirror: false }
+  if (turns === 2) return { rotate: 0, mirror: true }
+  if (turns % 2 === 1) {
+    return kind.w === kind.h
+      ? { rotate: 0, mirror: turns === 1 }
+      : { rotate: turns, mirror: false }
+  }
+
+  return { rotate: 0, mirror: false }
 }
 
 /**
@@ -830,10 +991,17 @@ export function drawDecor(
   const kind = DECOR[object.kind]
   if (!kind) return
 
+  // Two rectangles, and the difference between them is the whole of rotation. The *placed*
+  // footprint is what the piece occupies on the floor (turned, so possibly w and h swapped);
+  // the *authored* one is the box the sprite was drawn in. Rotating about the shared centre
+  // takes one to the other.
+  const placed = decorSize(object, kind)
+  const pw = placed.w * size
+  const ph = placed.h * size
   const w = kind.w * size
   const h = kind.h * size
 
-  if (kind.art === null) return flat(ctx, object, kind, px, py, size)
+  if (kind.art === null) return flat(ctx, object, px, py, size, pw, ph)
 
   // A two-frame piece animates on a half-second clock; everything else has one frame.
   const frames = Array.isArray(kind.art[0]) ? (kind.art as string[][]) : [kind.art as string[]]
@@ -846,28 +1014,45 @@ export function drawDecor(
   const drawn = kind.lift ? h * 1.34 : h
 
   // A soft ellipse under anything that stands up, for the same reason a person gets one: a
-  // sprite anchored at its base needs something to stand on or it reads as pasted over the floor.
+  // sprite anchored at its base needs something to stand on or it reads as pasted over the
+  // floor. Drawn in world space, under the *placed* footprint, so a turned piece's shadow turns
+  // with it rather than pointing the way the art was authored.
   if (kind.lift) {
     ctx.beginPath()
-    ctx.ellipse(px + w / 2, py + h - size * 0.12, w * 0.36, size * 0.12, 0, 0, Math.PI * 2)
+    ctx.ellipse(px + pw / 2, py + ph - size * 0.12, pw * 0.36, size * 0.12, 0, 0, Math.PI * 2)
     ctx.fillStyle = 'rgb(0 0 0 / 0.15)'
     ctx.fill()
   }
 
-  blit(ctx, canvas, px + w / 2, py + h, w, drawn)
+  const { rotate, mirror } = pose(kind, object.facing ?? 'down')
+
+  if (rotate === 0) return blit(ctx, canvas, px + pw / 2, py + ph, pw, drawn, mirror)
+
+  // Turn the world about the middle of the footprint, then draw the piece as though nothing had
+  // happened: inside the rotated frame the sprite is upright in its authored box, whose bottom
+  // edge is half its authored height below the centre.
+  ctx.save()
+  ctx.translate(px + pw / 2, py + ph / 2)
+  ctx.rotate((rotate * Math.PI) / 2)
+  blit(ctx, canvas, 0, h / 2, w, drawn, mirror)
+  ctx.restore()
 }
 
-/** Rugs and mats: woven rectangles rather than pictures. */
+/**
+ * Rugs and mats: woven rectangles rather than pictures.
+ *
+ * Takes its size from the *placed* footprint rather than the catalogue, which is all a rug needs
+ * to rotate: a woven rectangle turned ninety degrees is a woven rectangle.
+ */
 function flat(
   ctx: CanvasRenderingContext2D,
   object: SpaceObject,
-  kind: DecorKind,
   px: number,
   py: number,
   size: number,
+  w: number,
+  h: number,
 ): void {
-  const w = kind.w * size
-  const h = kind.h * size
   const border = Math.max(2, size * 0.09)
 
   ctx.fillStyle = object.kind === 'mat' ? '#6f6357' : '#8c5b63'

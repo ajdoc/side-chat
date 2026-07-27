@@ -9,8 +9,10 @@ import {
   MoreHorizontal,
   Mic,
   MicOff,
+  Minus,
   Pencil,
   PhoneOff,
+  Plus,
   ScreenShare,
   ScreenShareOff,
   Gamepad2,
@@ -20,13 +22,19 @@ import {
   Video,
   VideoOff,
 } from 'lucide-vue-next'
-import type { AmongUsState, Channel, VoiceParticipant, Widget } from '~/types'
+import type { AmongUsState, Channel, SpaceInteraction, VoiceParticipant } from '~/types'
 import type { Camera, MapTheme, Occupant } from '~/lib/spaceMapEngine'
 import type { SpaceObject } from '~/lib/spaceDecor'
+import type { RoomEffectInstance } from '~/lib/spaceEffects'
+import type { RoomEvent } from '~/composables/useSpacePresence'
 import {
   FAR_TILES,
+  MAX_ZOOM,
+  MIN_ZOOM,
   TILE,
+  ZOOM_STEP,
   audibility,
+  clampZoom,
   drawEarshot,
   drawMap,
   drawPet,
@@ -36,7 +44,8 @@ import {
   toWorld,
   zoneAt,
 } from '~/lib/spaceMapEngine'
-import { decorInFront, decorKind } from '~/lib/spaceDecor'
+import { decorInFront, decorKind, decorSize } from '~/lib/spaceDecor'
+import { EFFECT_MS, drawRoomEffect, drawRoomEffectLabel } from '~/lib/spaceEffects'
 import { normaliseLook } from '~/lib/spaceAvatar'
 import { Button } from '~/components/ui/button'
 
@@ -124,9 +133,13 @@ const {
   isWalking,
   subscribe: subscribeMoves,
   unsubscribe: unsubscribeMoves,
+  onRoomEvent,
   bindKeys,
   unbindKeys,
 } = useSpacePresence(props.channel.id, map)
+
+/** Undoes the room-event subscription. Held for as long as the room is on screen. */
+let stopRoomEvents: (() => void) | undefined
 
 const {
   game,
@@ -391,6 +404,20 @@ watch(gameMeeting, (on, was) => {
 })
 
 /**
+ * A sheet over the room takes the keys with it.
+ *
+ * The pointer already works this way — a click lands on the editor, not on the floor behind it —
+ * and the keyboard has to agree, now that the editor has keys of its own: an arrow that nudged
+ * the couch you're holding *and* walked you into a wall behind the sheet is one key doing two
+ * jobs for two different people. Given back on close, and only if you're still standing in the
+ * room to use them.
+ */
+watch([editing, dressing], ([sheet, picker]) => {
+  if (sheet || picker) return unbindKeys()
+  if (inThisRoom.value && !gameMeeting.value) bindKeys()
+})
+
+/**
  * How tall the room is when the conversation is showing — dragged by the band's bottom edge
  * and remembered, so how you like to split a room against its chat survives a reload.
  *
@@ -613,6 +640,10 @@ function loop(now: number) {
     checkGame()
   }
 
+  // Outside the `inThisRoom` guard on purpose: an effect that started while you were standing in
+  // the room has to be able to finish (and be cleared) after you've left it.
+  sweepEffects()
+
   draw()
 }
 
@@ -666,11 +697,19 @@ const interactHint = computed(() => {
 /**
  * Use it.
  *
- * The server decides what a given object opens, from its own copy of the map — we send an id
- * and get back a widget. What comes back is the *channel's* widget of that type: the same music
- * player `m!` would have made, the same one everybody else at the speaker is looking at. So
- * this is a doorway to something the app already has rather than a new thing that happens to
- * live in a room, and listening along, the queue and the floating shelf all work already.
+ * The server decides what a given object opens, from its own copy of the map — we send an id and
+ * get back a door to something the channel already has. Which door depends on the app behind the
+ * furniture, and both kinds land on the same floating shelf:
+ *
+ *   - a **widget** app answers with the *channel's* widget of that type: the same music player
+ *     `m!` would have made, the same one everybody else at the speaker is looking at.
+ *   - a **surface** app (the whiteboard, the lectern, the wall planner, the filing cabinet)
+ *     answers with a name, and the room floats the Side Desk panel itself — the very window
+ *     `a!board` opens. Draw on the whiteboard in here and it's on the Board tab out there,
+ *     because they were never two boards.
+ *
+ * So a room gains no state of its own, which is why listening along, the queue, permissions and
+ * every app's own live syncing all work in here without knowing this exists.
  */
 async function useFurniture() {
   const object = facingObject.value
@@ -679,12 +718,27 @@ async function useFurniture() {
   using.value = true
 
   try {
-    const res = await api<{ data: Widget }>(`/api/channels/${props.channel.id}/space/interact`, {
+    const res = await api<SpaceInteraction>(`/api/channels/${props.channel.id}/space/interact`, {
       method: 'POST',
       body: { object_id: object.id },
     })
 
     const kind = decorKind(object.kind)
+
+    if (res.type === 'app') {
+      openWindow({
+        kind: 'surface',
+        app: res.app,
+        basePath: `/api/channels/${props.channel.id}`,
+        streamName: `channel.${props.channel.id}`,
+        // Anybody standing in the room is a member of the channel it belongs to, and a member
+        // may author on its desk — the same reason the desk panel hard-codes this.
+        canEdit: true,
+        title: kind?.label ?? deskApp(res.app)?.label ?? 'App',
+      })
+
+      return
+    }
 
     // Music is the one widget that doesn't go on the shelf directly. It has a dedicated brain
     // (useMusicPin) that owns the pinned widget, the listen-along opt-in and the Spotify
@@ -749,6 +803,16 @@ function pointerWorld(e: PointerEvent) {
 }
 
 function onPointerDown(e: PointerEvent) {
+  // Every pointer on the canvas is tracked, walking or not, because two of them are a pinch and
+  // the second one has to be recognised as such wherever it lands.
+  touches.set(e.pointerId, { x: e.clientX, y: e.clientY })
+  // Captured immediately, and for *every* pointer rather than only the one that's steering: a
+  // finger lifted off the edge of the canvas would otherwise never deliver its pointerup, and
+  // the phantom left behind in `touches` would make the next single tap look like a pinch.
+  canvas.value?.setPointerCapture(e.pointerId)
+
+  if (touches.size > 1) return startPinch()
+
   // Not standing in the room, or a sheet is over it: walking isn't ours to do. (A right-click or
   // a middle-click isn't a walk either.)
   if (!inThisRoom.value || editing.value || dressing.value || gameMeeting.value) return
@@ -758,11 +822,13 @@ function onPointerDown(e: PointerEvent) {
   if (!at) return
 
   steering = { id: e.pointerId, from: at, moved: 0 }
-  canvas.value?.setPointerCapture(e.pointerId)
   walkTo(at.x, at.y)
 }
 
 function onPointerMove(e: PointerEvent) {
+  if (touches.has(e.pointerId)) touches.set(e.pointerId, { x: e.clientX, y: e.clientY })
+
+  if (pinch) return trackPinch()
   if (!steering || e.pointerId !== steering.id) return
 
   const at = pointerWorld(e)
@@ -773,6 +839,20 @@ function onPointerMove(e: PointerEvent) {
 }
 
 function onPointerUp(e: PointerEvent) {
+  touches.delete(e.pointerId)
+  // Guarded: this also runs for `pointercancel`, where the browser has already taken the capture
+  // back and releasing it again throws.
+  if (canvas.value?.hasPointerCapture(e.pointerId)) canvas.value.releasePointerCapture(e.pointerId)
+
+  // Lifting either finger ends the pinch. The other one is not promoted to a walk — a hand
+  // half-way off the glass shouldn't send you marching across the room.
+  if (pinch && touches.size < 2) {
+    pinch = null
+    steering = null
+
+    return
+  }
+
   if (!steering || e.pointerId !== steering.id) return
 
   const dragged = steering.moved > DRAG_TILES
@@ -781,6 +861,64 @@ function onPointerUp(e: PointerEvent) {
   // A drag was steering, so releasing means stop. A tap was an instruction, so it stands and we
   // carry on walking to it — which is the whole point of being able to tap the far side of a room.
   if (dragged) stopWalking()
+}
+
+// --- how close you're standing to it ---
+
+/**
+ * How much of the room to show, as a multiple of the size the room picks for itself.
+ *
+ * The room already scales itself to the panel it's in ({@link draw}), and that stays true — this
+ * only says how much you'd like to overrule it by, which is why it's a multiplier rather than a
+ * zoom. Remembered per person because it's a preference about eyesight and screen size rather
+ * than about this room: whatever you set is what every room opens at next time.
+ */
+const ZOOM_KEY = 'space:zoom'
+const zoomLevel = ref(1)
+
+/** Every pointer currently on the canvas — one is a walk, two are a pinch. */
+const touches = new Map<number, { x: number, y: number }>()
+/** A pinch in progress: the gap between the fingers, and the zoom when they went down. */
+let pinch: { gap: number, from: number } | null = null
+
+function zoomBy(factor: number) {
+  zoomLevel.value = clampZoom(zoomLevel.value * factor)
+  if (import.meta.client) localStorage.setItem(ZOOM_KEY, String(zoomLevel.value))
+}
+
+/**
+ * The wheel zooms rather than scrolls.
+ *
+ * The room is a viewport, not a document — there is nothing under it to scroll to, and a wheel
+ * that scrolled the page out from under a room you were walking in would be the worse of the two
+ * behaviours. `passive: false` (see the listener) is what lets us say so.
+ */
+function onWheel(e: WheelEvent) {
+  e.preventDefault()
+  zoomBy(e.deltaY < 0 ? ZOOM_STEP : 1 / ZOOM_STEP)
+}
+
+/** Two fingers went down: stop walking, and remember the gap to measure the rest against. */
+function startPinch() {
+  const [a, b] = [...touches.values()]
+  if (!a || !b) return
+
+  pinch = { gap: Math.hypot(a.x - b.x, a.y - b.y), from: zoomLevel.value }
+  // A pinch is not a walk, and the finger that started as one has to stop being it — otherwise
+  // you zoom and set off across the room at the same time.
+  steering = null
+  stopWalking()
+}
+
+function trackPinch() {
+  const [a, b] = [...touches.values()]
+  if (!pinch || !a || !b) return
+
+  const gap = Math.hypot(a.x - b.x, a.y - b.y)
+  if (pinch.gap < 20) return
+
+  zoomLevel.value = clampZoom(pinch.from * (gap / pinch.gap))
+  if (import.meta.client) localStorage.setItem(ZOOM_KEY, String(zoomLevel.value))
 }
 
 /**
@@ -915,8 +1053,11 @@ function draw() {
   const lookAt = me.value ?? { x: m.spawn.x, y: m.spawn.y }
   camera.x += (lookAt.x - camera.x) * 0.2
   camera.y += (lookAt.y - camera.y) * 0.2
-  // Zoom out a little on a short stage so a squat panel still shows a useful slice of room.
-  camera.zoom = Math.max(0.6, Math.min(1.4, camera.height / (TILE * 16)))
+  // Zoom out a little on a short stage so a squat panel still shows a useful slice of room, then
+  // apply however much the person watching has overruled that by. Recomputed every frame rather
+  // than watched, because the first half depends on the panel's height and the second on a
+  // pinch that may be in progress.
+  camera.zoom = Math.max(0.6, Math.min(1.4, camera.height / (TILE * 16))) * zoomLevel.value
 
   ctx.clearRect(0, 0, camera.width, camera.height)
   // Everything outside the room, so a map with void round it reads as a place rather than as a
@@ -951,6 +1092,12 @@ function draw() {
     if (self.pet && self.petAt) cast.push({ y: self.petAt.y, paint: () => drawCompanion(ctx, self) })
   }
 
+  // Arrivals and departures are cast members too, sorted by where they happened — an effect at
+  // the top of the room has to go *behind* somebody standing at the bottom of it, exactly as a
+  // person would. (A departure's own sprite is drawn by the effect, since by now they're gone
+  // from the roster above.)
+  for (const effect of effects) cast.push({ y: effect.y, paint: () => paintEffect(ctx, effect) })
+
   cast.sort((a, b) => a.y - b.y)
   for (const item of cast) item.paint()
 
@@ -958,6 +1105,57 @@ function draw() {
   // *tile* — pinning an HTML bubble to a moving world-space position means a transform update
   // every frame, which is the one thing canvas is already doing.
   drawPrompt(ctx)
+}
+
+// --- coming and going ---
+
+/**
+ * The arrivals and departures currently playing.
+ *
+ * A plain array, deliberately not reactive: it's written by a listener and read by the frame
+ * loop, and nothing in the DOM depends on it — making it a `ref` would wake Vue several times a
+ * second to tell it about something only the canvas can see.
+ *
+ * Bounded, because a room can empty all at once (a server restart drops everybody's socket) and
+ * forty simultaneous effects is a dropped frame rate for the one person still standing there.
+ * The oldest go first, which is also the ones nearest finishing.
+ */
+const effects: RoomEffectInstance[] = []
+const MAX_EFFECTS = 8
+
+function addEffect(event: RoomEvent) {
+  // A game owns the room's attention, and a puff of light at the far end is a tell about who's
+  // where — the same reason the proximity chime stands down during one.
+  if (gameRunning.value) return
+
+  effects.push({ ...event, born: performance.now() })
+  if (effects.length > MAX_EFFECTS) effects.splice(0, effects.length - MAX_EFFECTS)
+}
+
+/** Draw one, and retire it when its time is up. Ages are read from one clock, in the frame. */
+function paintEffect(ctx: CanvasRenderingContext2D, effect: RoomEffectInstance) {
+  const size = TILE * camera.zoom
+  const p = toScreen(camera, effect.x, effect.y)
+  const t = Math.min(1, (performance.now() - effect.born) / EFFECT_MS)
+
+  // Dimmed by earshot, exactly as the person it's about would have been: somebody arriving at
+  // the far end of the room is a glimmer, somebody arriving beside you is an event. Your own is
+  // always at full strength — you're the one it happened to.
+  const strength = effect.self || !map.value || !me.value
+    ? 1
+    : 0.35 + audibility(map.value, me.value, effect) * 0.65
+
+  drawRoomEffect(ctx, effect, p.x, p.y, size, t, strength)
+  drawRoomEffectLabel(ctx, effect, p.x, p.y, size, t, strength)
+}
+
+/** Drop the finished ones. Done once a frame rather than on a timer per effect. */
+function sweepEffects() {
+  const now = performance.now()
+
+  for (let i = effects.length - 1; i >= 0; i--) {
+    if (now - effects[i]!.born >= EFFECT_MS) effects.splice(i, 1)
+  }
 }
 
 /**
@@ -990,7 +1188,10 @@ function drawPrompt(ctx: CanvasRenderingContext2D) {
   if (!object || !kind || !inThisRoom.value) return
 
   const size = TILE * camera.zoom
-  const p = toScreen(camera, object.x + (kind.w - 1) / 2, object.y - 0.6)
+  // Centred on the footprint *as placed*: a whiteboard turned on its side is one tile wide and
+  // two deep, and a prompt centred on its catalogue width would float off to one side of it.
+  const across = decorSize(object, kind).w
+  const p = toScreen(camera, object.x + (across - 1) / 2, object.y - 0.6)
   // No key to name on a phone — there, the tag is the verb alone and the button below is how
   // you do it.
   const verb = kind.verb ?? 'Use'
@@ -1190,6 +1391,12 @@ async function onMapSaved() {
 
 onMounted(async () => {
   openedAt = performance.now()
+
+  // First, before anything that can put somebody in the room: `reattach` below places *you* if
+  // the position state didn't survive a reload, and your own arrival is emitted the moment you're
+  // placed. Subscribing after that would miss the one effect you're guaranteed to be looking at.
+  stopRoomEvents = onRoomEvent(addEffect)
+
   await loadMap()
   subscribeMap()
 
@@ -1207,6 +1414,15 @@ onMounted(async () => {
   reattach()
 
   window.addEventListener('keydown', onInteractKey)
+  // Not `@wheel` in the template: Vue attaches listeners passively where it can, and a passive
+  // listener is one that has already promised not to call preventDefault — so the page would
+  // scroll behind the room however loudly we objected afterwards.
+  canvas.value?.addEventListener('wheel', onWheel, { passive: false })
+
+  // Whatever you were last comfortable with. Read here rather than in the ref's initialiser
+  // because the component is rendered on the server too, where there is no localStorage.
+  const saved = Number(localStorage.getItem(ZOOM_KEY))
+  if (saved) zoomLevel.value = clampZoom(saved)
 
   frame = requestAnimationFrame(loop)
 })
@@ -1214,6 +1430,10 @@ onMounted(async () => {
 onBeforeUnmount(() => {
   if (frame) cancelAnimationFrame(frame)
   window.removeEventListener('keydown', onInteractKey)
+  canvas.value?.removeEventListener('wheel', onWheel)
+  stopRoomEvents?.()
+  stopRoomEvents = undefined
+  effects.length = 0
   ro?.disconnect()
   probe?.remove()
   probe = null
@@ -1408,6 +1628,20 @@ watch(inThisRoom, (now) => {
             <span v-if="narrow">Change how you look</span>
           </button>
 
+          <!--
+            What the room does when somebody comes into earshot. The very same settings a voice
+            channel has — and until now the room was the one place they could be *fired* but not
+            *chosen*, because the dialog only ever existed on the voice channel's header. The
+            room always draws its own small arrival at the tile it happened on; this is the
+            louder, rarer fanfare on top of that, and "None" is a perfectly good answer.
+
+            Owner-only, like rebuilding the room: an entrance is set for everybody who walks in.
+            The wrapper closes the ⋯ menu, since the component owns its own trigger.
+          -->
+          <div v-if="canModerate" :class="narrow ? 'w-full' : undefined" @click="showMore = false">
+            <VoiceEffectSettings :channel="channel" />
+          </div>
+
           <!-- Start a game. Only when you're in the room and none is already on the table; a game
                in progress is driven by the panel over the map, not from up here. -->
           <button
@@ -1578,6 +1812,50 @@ watch(inThisRoom, (now) => {
           <span v-else-if="!narrow" class="rounded border border-background/40 px-1 text-[10px] leading-4">E</span>
           {{ interactHint }}
         </button>
+
+        <!--
+          How close you're standing. The wheel and a two-finger pinch do the same thing; these are
+          for the touchscreen that has no wheel and the person who'd rather press a button than
+          discover a gesture.
+
+          Up the right-hand edge, clear of the earshot line at bottom-left and the "press E" pill
+          in the middle, and 32px square so a thumb can hit it. Hidden while a game owns the room.
+        -->
+        <div
+          v-if="!gameRunning && !gameMeeting"
+          class="absolute right-2 top-2 flex flex-col overflow-hidden rounded-lg border bg-background/90 shadow-sm backdrop-blur"
+        >
+          <button
+            type="button"
+            class="flex h-8 w-8 items-center justify-center text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:opacity-40"
+            title="Closer"
+            aria-label="Zoom in"
+            :disabled="zoomLevel >= MAX_ZOOM - 0.001"
+            @click="zoomBy(ZOOM_STEP)"
+          >
+            <Plus class="h-4 w-4" />
+          </button>
+          <button
+            type="button"
+            class="flex h-8 w-8 items-center justify-center border-t text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:opacity-40"
+            title="Further out"
+            aria-label="Zoom out"
+            :disabled="zoomLevel <= MIN_ZOOM + 0.001"
+            @click="zoomBy(1 / ZOOM_STEP)"
+          >
+            <Minus class="h-4 w-4" />
+          </button>
+          <!-- Only once you've moved it, and it says what it'll go back to rather than "reset". -->
+          <button
+            v-if="Math.abs(zoomLevel - 1) > 0.01"
+            type="button"
+            class="flex h-8 w-8 items-center justify-center border-t text-[10px] font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+            title="Back to the size this room picks for itself"
+            @click="zoomBy(1 / zoomLevel)"
+          >
+            1×
+          </button>
+        </div>
 
         <!-- Who can hear you right now. The rule is invisible otherwise. Stood down during a
              game, where the HUD owns the bottom of the screen and earshot is a tell. -->

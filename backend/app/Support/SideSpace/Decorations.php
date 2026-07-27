@@ -21,11 +21,27 @@ use App\Http\Controllers\SideSpaceController;
  *
  * ## Interactive furniture
  *
- * `interact` names an existing widget type, and that is the entire mechanism: walk up to the
- * speaker, press E, and the room asks the server for this channel's music widget — the same
- * one `m!` would have made, shared by everybody — and floats it. The furniture is a *doorway*
- * to a thing the app already has, not a new thing. Which is why a room can't invent a
- * behaviour: it can only point at a widget type this server already knows how to build.
+ * `interact` names an existing **Side Desk app** ({@see DeskApps}), and that is the entire
+ * mechanism: walk up to the speaker, press E, and the room asks the server for this channel's
+ * music widget — the same one `m!` would have made, shared by everybody — and floats it. The
+ * furniture is a *doorway* to a thing the app already has, not a new thing. Which is why a room
+ * can't invent a behaviour: it can only point at an app this server already knows how to open.
+ *
+ * Both families of app are reachable, and the difference is only in what comes back:
+ *
+ *   - a **widget app** (music, kanban, a game) resolves the channel's widget and floats that.
+ *   - a **surface app** (the board, the notes, the calendar, the doc shelf) has no widget row;
+ *     the room floats the app itself, which is the window the `a!board` command opens. So the
+ *     whiteboard standing in the corner of a room and the Board tab on the Side Desk are one
+ *     board, and always were — see {@see SideSpaceController::interact}.
+ *
+ * ## Which way it's turned
+ *
+ * A piece also stores a `facing`, and a quarter turn swaps its footprint: a 2×1 desk turned to
+ * face right occupies 1×2 tiles. Everything that asks "what does this cover" — collision,
+ * placement, the overlap check — goes through {@see self::size()} for that reason, because a
+ * rotated desk that still blocked its old squares would be furniture you could walk through on
+ * one side and bump into thin air on the other.
  */
 final class Decorations
 {
@@ -37,6 +53,16 @@ final class Decorations
 
     /** How many of one room's worth of furniture is enough. Past this it's a rendering cost. */
     public const MAX_PER_MAP = 120;
+
+    /**
+     * The four ways a piece can be turned, in quarter turns clockwise from the front view the
+     * sprite is drawn in. `down` is what every piece placed before rotation existed stores
+     * implicitly — the default is the old behaviour exactly.
+     */
+    public const FACINGS = ['down', 'left', 'up', 'right'];
+
+    /** Quarter turns per facing. Odd turns swap a piece's footprint; see {@see self::size()}. */
+    private const TURNS = ['down' => 0, 'left' => 1, 'up' => 2, 'right' => 3];
 
     /**
      * Every kind, keyed by the value a saved map may use.
@@ -54,6 +80,14 @@ final class Decorations
             'racer' => self::kind('Racing cabinet', interact: 'racing', verb: 'Race'),
             'easel' => self::kind('Easel', interact: 'skribbl', verb: 'Draw'),
             'noticeboard' => self::kind('Notice board', mount: self::MOUNT_WALL, interact: 'poll', verb: 'Read the board'),
+
+            // --- interactive: the Side Desk's own apps, standing in the room ---
+            // A surface app has no widget behind it, so pressing E floats the app itself. The
+            // whiteboard in the corner *is* the Board tab; there was only ever one of them.
+            'whiteboard' => self::kind('Whiteboard', w: 2, interact: 'board', verb: 'Draw on it'),
+            'lectern' => self::kind('Lectern', interact: 'notes', verb: 'Read the notes'),
+            'planner' => self::kind('Wall planner', mount: self::MOUNT_WALL, interact: 'calendar', verb: 'Check the schedule'),
+            'filecabinet' => self::kind('Filing cabinet', interact: 'docs', verb: 'Look through the files'),
 
             // --- furniture ---
             'desk' => self::kind('Desk', w: 2),
@@ -91,10 +125,14 @@ final class Decorations
     }
 
     /**
-     * One entry, with the defaults spelled out once instead of twenty-six times.
+     * One entry, with the defaults spelled out once instead of thirty times.
      *
      * Wall-mounted things are never solid — the wall they hang on already is, and a painting
      * that blocked the tile in front of it would fence off the room it decorates.
+     *
+     * `interact` is a {@see DeskApps} id; nothing validates that here, because this list *is*
+     * the definition. What it must stay true to is that the app exists — an id no client can
+     * render is furniture that answers E with a window that never opens.
      *
      * @return array{label: string, w: int, h: int, solid: bool, mount: string, interact: string|null, verb: string|null}
      */
@@ -176,8 +214,11 @@ final class Decorations
 
             $ox = (int) ($object['x'] ?? 0);
             $oy = (int) ($object['y'] ?? 0);
+            // As placed, not as catalogued: a turned desk is 1×2 where an unturned one is 2×1,
+            // and it's the turned one that has to fit.
+            [$w, $h] = self::size($object, $kind);
 
-            if ($ox + $kind['w'] > $width || $oy + $kind['h'] > $height) {
+            if ($ox + $w > $width || $oy + $h > $height) {
                 $errors[$i] = "The {$kind['label']} runs off the map.";
 
                 continue;
@@ -243,6 +284,24 @@ final class Decorations
     }
 
     /**
+     * How much floor a piece takes up *as placed* — its catalogue size, turned.
+     *
+     * The one place the quarter turn is applied. A piece facing left or right has been turned
+     * an odd number of quarters, so its width and height trade places; facing up is a half turn,
+     * which changes which way it looks and nothing about the space it needs.
+     *
+     * @param  array<string, mixed>  $object
+     * @param  array{w: int, h: int}  $kind
+     * @return array{0: int, 1: int}
+     */
+    public static function size(array $object, array $kind): array
+    {
+        $turns = self::TURNS[(string) ($object['facing'] ?? 'down')] ?? 0;
+
+        return $turns % 2 === 1 ? [$kind['h'], $kind['w']] : [$kind['w'], $kind['h']];
+    }
+
+    /**
      * Every tile a decoration sits on, solid or not — what the "two things in the same place"
      * check compares.
      *
@@ -254,10 +313,11 @@ final class Decorations
     {
         $ox = (int) ($object['x'] ?? 0);
         $oy = (int) ($object['y'] ?? 0);
+        [$w, $h] = self::size($object, $kind);
         $tiles = [];
 
-        for ($y = $oy; $y < $oy + $kind['h']; $y++) {
-            for ($x = $ox; $x < $ox + $kind['w']; $x++) {
+        for ($y = $oy; $y < $oy + $h; $y++) {
+            for ($x = $ox; $x < $ox + $w; $x++) {
                 $tiles[] = [$x, $y];
             }
         }
@@ -273,7 +333,8 @@ final class Decorations
     {
         $ox = (int) ($object['x'] ?? 0);
         $oy = (int) ($object['y'] ?? 0);
+        [$w, $h] = self::size($object, $kind);
 
-        return $x >= $ox && $x < $ox + $kind['w'] && $y >= $oy && $y < $oy + $kind['h'];
+        return $x >= $ox && $x < $ox + $w && $y >= $oy && $y < $oy + $h;
     }
 }

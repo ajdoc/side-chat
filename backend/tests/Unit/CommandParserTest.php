@@ -45,12 +45,21 @@ it('trims surrounding whitespace', function () {
         ->and($c->args)->toBe('buy milk');
 });
 
+it('parses the app launcher, whose verb is an app id rather than an action', function () {
+    $c = $this->parser->parse('a!board');
+
+    expect($c->namespace)->toBe(CommandParser::APP_NAMESPACE)
+        ->and($c->verb)->toBe('board')
+        ->and($c->args)->toBe('');
+});
+
 it('returns null for ordinary chat and unknown namespaces', function (?string $body) {
     expect($this->parser->parse($body))->toBeNull();
 })->with([
     'plain text' => ['hello there'],
     'trailing bang' => ['hey!'],
-    'unknown namespace' => ['a!b test'],
+    // `a` is the app launcher now, so an unknown namespace has to be some other letter.
+    'unknown namespace' => ['z!b test'],
     'mention mid-sentence' => ['run k!add later'],
     'numeric verb' => ['m!123'],
     'null body' => [null],

@@ -14,6 +14,7 @@ use App\Models\Channel;
 use App\Models\SideSpaceMap;
 use App\Models\VoiceParticipant;
 use App\Services\Widgets\WidgetService;
+use App\Support\DeskApps;
 use App\Support\SideSpace\Decorations;
 use App\Support\SideSpace\MapPresets;
 use Illuminate\Http\JsonResponse;
@@ -160,19 +161,27 @@ class SideSpaceController extends Controller
     }
 
     /**
-     * Use a piece of furniture: the speaker, the TV, the arcade cabinet in the corner.
+     * Use a piece of furniture: the speaker, the TV, the whiteboard in the corner.
      *
-     * What comes back is a **widget** — the channel's one music player, its one video player,
-     * the same shared object `m!` or `v!` would have reached, created on first use with the
-     * handler's own initial state. That's the entire trick behind interactive furniture: the
-     * room doesn't gain a music player, it gains a *door* to the one the channel already has.
-     * So listening along, the queue, permissions and the floating window all work already, and
-     * two people pressing E on the same speaker are unmistakably in the same session.
+     * What comes back is a **door to something the channel already has**, and which kind of
+     * door depends on the app the furniture points at:
+     *
+     *   - a widget app answers with the channel's one music player, its one video player — the
+     *     same shared object `m!` or `v!` would have reached, created on first use with the
+     *     handler's own initial state.
+     *   - a surface app answers with the app's *name*, because the board, the notes and the
+     *     calendar have no widget row: they hang off the channel's Side Desk, and the client
+     *     floats the very panel `a!board` would have opened.
+     *
+     * Either way the room gains no state of its own. That's the entire trick behind interactive
+     * furniture, and it's why two people pressing E on the same speaker are unmistakably in the
+     * same session, and why drawing on the whiteboard in the room shows up on the Board tab of
+     * everyone who never walked in.
      *
      * The map decides what a given object opens, not the caller. See
      * {@see InteractWithSpaceObjectRequest}.
      */
-    public function interact(InteractWithSpaceObjectRequest $request, Channel $channel): WidgetResource
+    public function interact(InteractWithSpaceObjectRequest $request, Channel $channel): JsonResponse
     {
         $map = $this->mapFor($channel);
         $id = $request->validated('object_id');
@@ -185,11 +194,26 @@ class SideSpaceController extends Controller
         // pressed, which is a 404 rather than anybody's mistake.
         abort_if($kind === null || $kind['interact'] === null, 404);
 
-        $widget = $this->widgets->ensure($channel, $request->user(), $kind['interact']);
+        $app = $kind['interact'];
+
+        // A surface app is opened by name. Nothing is created here, because there is nothing to
+        // create: the board exists as soon as somebody draws on it, and the client already
+        // knows how to float one from the channel it's standing in.
+        if (! in_array($app, DeskApps::WIDGET_APPS, true)) {
+            abort_unless(in_array($app, DeskApps::all(), true), 404);
+
+            return response()->json(['type' => 'app', 'app' => $app]);
+        }
+
+        $widget = $this->widgets->ensure($channel, $request->user(), $app);
 
         abort_if($widget === null, 404);
 
-        return new WidgetResource($widget);
+        return response()->json([
+            'type' => 'widget',
+            'app' => $app,
+            'data' => (new WidgetResource($widget))->resolve(),
+        ]);
     }
 
     /**

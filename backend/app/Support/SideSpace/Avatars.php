@@ -38,6 +38,18 @@ final class Avatars
     public const OUTFITS = ['auto', 'red', 'orange', 'yellow', 'green', 'teal', 'blue', 'indigo', 'violet', 'pink', 'slate'];
 
     /**
+     * A costume replaces the *whole* sprite — silhouette, head and all — rather than layering
+     * over it, which is why it's one field and not five. `none` is the person underneath, and
+     * everything else about a look is kept while a costume is worn so that taking it off puts
+     * the same person back rather than a stranger with default hair.
+     *
+     * The designs are original, in the same spirit as the trainer sprite and the starters: a
+     * hooded figure in a painted mask, and a suit of powered armour. The genre is borrowed; the
+     * characters are ours.
+     */
+    public const COSTUMES = ['none', 'cantor', 'sentinel'];
+
+    /**
      * The starters, keyed by what a saved pet stores.
      *
      * @return array<string, array{label: string, element: string, region: string}>
@@ -68,7 +80,7 @@ final class Avatars
      * `auto` for the shirt keeps every existing room exactly as it was: the colour still comes
      * from the user id, so nobody's sprite changes colour the day this ships.
      *
-     * @return array{body: string, hair: string, hair_color: string, skin: string, outfit: string}
+     * @return array{body: string, hair: string, hair_color: string, skin: string, outfit: string, costume: string}
      */
     public static function defaultLook(): array
     {
@@ -78,6 +90,7 @@ final class Avatars
             'hair_color' => 'brown',
             'skin' => 'fair',
             'outfit' => 'auto',
+            'costume' => 'none',
         ];
     }
 
@@ -89,7 +102,7 @@ final class Avatars
      * renders as a hole because one key of five was a value nobody has artwork for.
      *
      * @param  array<string, mixed>|null  $look
-     * @return array{body: string, hair: string, hair_color: string, skin: string, outfit: string}
+     * @return array{body: string, hair: string, hair_color: string, skin: string, outfit: string, costume: string}
      */
     public static function normaliseLook(?array $look): array
     {
@@ -105,6 +118,9 @@ final class Avatars
             'hair_color' => $pick('hair_color', self::HAIR_COLORS),
             'skin' => $pick('skin', self::SKINS),
             'outfit' => $pick('outfit', self::OUTFITS),
+            // Every row written before costumes existed comes out of here as `none`, which is
+            // the person they already were.
+            'costume' => $pick('costume', self::COSTUMES),
         ];
     }
 }

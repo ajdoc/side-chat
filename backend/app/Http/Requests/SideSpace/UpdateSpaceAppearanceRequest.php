@@ -33,6 +33,9 @@ class UpdateSpaceAppearanceRequest extends FormRequest
             'avatar.hair_color' => ['required_with:avatar', 'string', Rule::in(Avatars::HAIR_COLORS)],
             'avatar.skin' => ['required_with:avatar', 'string', Rule::in(Avatars::SKINS)],
             'avatar.outfit' => ['required_with:avatar', 'string', Rule::in(Avatars::OUTFITS)],
+            // Optional, unlike the rest: a look saved by a client that predates costumes is a
+            // person in their own clothes, which is exactly what `none` means.
+            'avatar.costume' => ['sometimes', 'string', Rule::in(Avatars::COSTUMES)],
 
             // Null is a real choice — it's how you send the pet home.
             'pet' => ['sometimes', 'nullable', 'string', Rule::in(Avatars::petKeys())],

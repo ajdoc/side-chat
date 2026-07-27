@@ -4,6 +4,8 @@ import type { AvatarLook, BodyKind, HairColour, HairKind, OutfitKind, SkinKind }
 import type { PetKind } from '~/lib/spacePets'
 import {
   BODIES,
+  COSTUMES,
+  COSTUME_META,
   DEFAULT_LOOK,
   HAIRS,
   HAIR_COLOURS,
@@ -104,6 +106,7 @@ const petGroups = computed(() => [
 const big = ref<HTMLCanvasElement | null>(null)
 const hairCanvases = ref<Record<string, HTMLCanvasElement | null>>({})
 const petCanvases = ref<Record<string, HTMLCanvasElement | null>>({})
+const costumeCanvases = ref<Record<string, HTMLCanvasElement | null>>({})
 
 /**
  * Draw a sprite into a small canvas at device resolution.
@@ -131,10 +134,17 @@ function repaint() {
   paint(big.value, 96, ctx => drawPortrait(ctx, look, 48, 74, 44, hue.value))
 
   // One per hairstyle, each wearing the rest of *your* look, so the choice is between hair
-  // rather than between eight different people.
+  // rather than between eight different people. Drawn bare-headed while a costume is on: the
+  // room would show a hood, and a row of eight identical hoods is a row of no information.
   for (const style of HAIRS) {
     paint(hairCanvases.value[style] ?? null, 44, ctx =>
-      drawPortrait(ctx, { ...look, hair: style }, 22, 36, 22, hue.value))
+      drawPortrait(ctx, { ...look, hair: style, costume: 'none' }, 22, 36, 22, hue.value))
+  }
+
+  // Costumes, each over the rest of your look — same reason.
+  for (const c of COSTUMES) {
+    paint(costumeCanvases.value[c] ?? null, 44, ctx =>
+      drawPortrait(ctx, { ...look, costume: c }, 22, 36, 22, hue.value))
   }
 
   for (const key of PET_KEYS) {
@@ -198,6 +208,38 @@ function reset() {
         </div>
 
         <div class="min-w-0 flex-1 space-y-4">
+          <!--
+            Costumes, first — a costume replaces the whole sprite, so choosing one changes what
+            every control below it is even for. They stay on screen rather than being hidden
+            while one is worn: what's underneath is kept, and it's what you get back when you
+            take the costume off, so it should still be editable.
+          -->
+          <section class="space-y-1.5">
+            <p class="text-xs font-medium text-muted-foreground">Costume</p>
+            <div class="flex flex-wrap gap-2">
+              <button
+                v-for="c in COSTUMES"
+                :key="c"
+                type="button"
+                class="flex w-[6.5rem] flex-col items-center gap-0.5 rounded-md border p-1 transition-colors"
+                :class="look.costume === c ? 'border-primary bg-muted' : 'hover:bg-muted/50'"
+                :title="COSTUME_META[c].blurb"
+                @click="look.costume = c"
+              >
+                <canvas
+                  :ref="el => (costumeCanvases[c] = el as HTMLCanvasElement)"
+                  class="h-11 w-11"
+                  style="image-rendering: pixelated"
+                />
+                <span class="text-[10px] leading-tight">{{ COSTUME_META[c].label }}</span>
+              </button>
+            </div>
+            <p v-if="look.costume !== 'none'" class="text-[11px] leading-snug text-muted-foreground">
+              {{ COSTUME_META[look.costume].blurb }} — it covers your build and hair, which are kept
+              for when you take it off.
+            </p>
+          </section>
+
           <!-- Build -->
           <section class="space-y-1.5">
             <p class="text-xs font-medium text-muted-foreground">Build</p>

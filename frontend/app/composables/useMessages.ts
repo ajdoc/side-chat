@@ -1,4 +1,4 @@
-import type { CommentSummary, GifResult, LinkPreview, Message, Reaction, SideChat, StartedThread, Thread, Widget } from '~/types'
+import type { CommentSummary, GifResult, LinkPreview, Message, Reaction, SideChat, SideDeskAppId, StartedThread, Thread, Widget } from '~/types'
 
 // Messages for one text channel, plus the real-time Reverb subscription.
 export function useMessages() {
@@ -18,6 +18,8 @@ export function useMessages() {
   // The docked music player listens on this same channel and outlives the timeline — see
   // unsubscribe() for why it has to be handed its subscription back.
   const { rejoin: rejoinPinnedMusic } = useMusicPin()
+  // `a!<app>` opens a Side Desk app on the app-level shelf — see openDeskApp below.
+  const { open: openFloating } = useFloatingWindows()
 
   function pushUnique(m: Message) {
     if (!messages.value.some(x => x.id === m.id)) {
@@ -132,7 +134,32 @@ export function useMessages() {
         headers: { 'X-Socket-ID': echo?.socketId() ?? '' },
       })
       pushUnique(res.data)
+      // `a!board`, `a!notes`, … answer with an ephemeral note carrying the app to open. The
+      // launch is deliberately client-side and sender-only: the note says what happened, and
+      // the window it opens is one of *yours*, on the shelf that follows you around the app.
+      if (res.data.open_app) openDeskApp(res.data.open_app)
     }
+  }
+
+  /** Pop a Side Desk app of *this* channel into a floating window. See FloatingSurfaceContent. */
+  function openDeskApp(app: SideDeskAppId) {
+    const id = channelId.value
+    if (id == null) return
+
+    // A widget app has a card of its own to open; only the surface apps need the window. The
+    // server only ever sends surface ids, but the guard keeps this honest if that changes.
+    if (isWidgetApp(app)) return
+
+    openFloating({
+      kind: 'surface',
+      app,
+      basePath: `/api/channels/${id}`,
+      streamName: `channel.${id}`,
+      // The timeline is only reachable by members of the channel, and every member may author
+      // on its desk — the same reason SideDeskPanel hard-codes `can-edit`.
+      canEdit: true,
+      title: deskApp(app)?.label ?? 'App',
+    })
   }
 
   async function edit(id: number, body: string | null, files: File[] = [], removeAttachmentIds: number[] = []) {

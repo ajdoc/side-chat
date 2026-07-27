@@ -11,6 +11,7 @@ use App\Models\User;
 use App\Models\Widget;
 use App\Support\Commands\CommandParser;
 use App\Support\Commands\ParsedCommand;
+use App\Support\DeskApps;
 
 /**
  * The one place widgets meet the database, the broadcaster and the timeline.
@@ -24,6 +25,19 @@ use App\Support\Commands\ParsedCommand;
  */
 final class WidgetService
 {
+    /**
+     * Surface apps `a!` can pop into a floating window, and the ids the client knows how to
+     * render there. The Open Canvas is included — it's a placement surface like the rest, and
+     * a floating one is a perfectly good scratch area beside the timeline.
+     */
+    private const OPENABLE_SURFACE_APPS = ['board', 'notes', 'calendar', 'docs', 'canvas'];
+
+    /** Names for the reply text. The client has its own labels; this is just what we say. */
+    private const APP_LABELS = [
+        'board' => 'The board', 'notes' => 'Notes', 'calendar' => 'The calendar',
+        'docs' => 'Docs', 'canvas' => 'The Open Canvas',
+    ];
+
     /** @var array<string, WidgetHandler> type => handler */
     private array $handlers;
 
@@ -63,6 +77,10 @@ final class WidgetService
      */
     public function handleCommand(Channel $channel, User $user, ParsedCommand $command): Message
     {
+        if ($command->namespace === CommandParser::APP_NAMESPACE) {
+            return $this->handleAppCommand($channel, $user, $command);
+        }
+
         $type = CommandParser::NAMESPACES[$command->namespace] ?? null;
         $handler = $type !== null ? $this->handlerForType($type) : null;
         if ($handler === null) {
@@ -73,6 +91,63 @@ final class WidgetService
         $outcome = $handler->command($widget, $user, $command);
 
         return $this->apply($widget, $user, $outcome);
+    }
+
+    /**
+     * `a!<app>` — the one command that reaches the whole Side Desk catalogue.
+     *
+     * Every widget already has a prefix of its own (`m!`, `k!`, …), but the workspace apps —
+     * the board, the notes, the calendar, the doc shelf — have no widget row behind them and
+     * so never had a way in from chat at all. This is that way in, and it covers the widgets
+     * too, so there is one command to remember rather than eight.
+     *
+     * The two families answer differently, because they *are* different:
+     *
+     *   - a **widget** app resolves the channel's widget (creating it on first use, exactly as
+     *     `m!p` or a canvas card does) and drops its card in the timeline, where everyone can
+     *     see and use it. That's what a widget is for.
+     *   - a **surface** app has no card to post: its content is the surface's own board/note/
+     *     calendar, which lives in the Side Desk. So the answer is an ephemeral note carrying
+     *     `openApp`, and the sender's client pops the app into a floating window — see
+     *     FloatingSurfaceContent. Nobody else's screen changes, which is the honest outcome:
+     *     opening a panel is a thing that happens to you, not to the channel.
+     */
+    private function handleAppCommand(Channel $channel, User $user, ParsedCommand $command): Message
+    {
+        $app = $command->verb;
+
+        if ($app === 'list' || $app === 'help') {
+            return $this->ephemeral($channel, $user, $this->appList());
+        }
+
+        if (in_array($app, DeskApps::WIDGET_APPS, true)) {
+            $handler = $this->handlerForType($app);
+            if ($handler === null) {
+                return $this->ephemeral($channel, $user, $this->appList());
+            }
+
+            return $this->apply($this->widgetFor($channel, $user, $handler), $user, WidgetOutcome::show());
+        }
+
+        if (in_array($app, self::OPENABLE_SURFACE_APPS, true)) {
+            $message = $this->ephemeral($channel, $user, self::APP_LABELS[$app].' is now floating — drag it anywhere, or close it to put it away.');
+            $message->openApp = $app;
+
+            return $message;
+        }
+
+        return $this->ephemeral($channel, $user, "There's no app called \"{$app}\".\n\n".$this->appList());
+    }
+
+    /** Help text for `a!list` — every id the command accepts, grouped the way they behave. */
+    private function appList(): string
+    {
+        $widgets = implode(', ', array_map(fn ($a) => 'a!'.$a, DeskApps::WIDGET_APPS));
+        $surfaces = implode(', ', array_map(fn ($a) => 'a!'.$a, self::OPENABLE_SURFACE_APPS));
+
+        return "Open an app from chat with `a!<app>`.\n\n"
+            ."Posts a card here: {$widgets}\n"
+            ."Opens in a floating window, just for you: {$surfaces}";
     }
 
     /**

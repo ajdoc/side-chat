@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { AtSign, Columns3, Film, Flag, Gamepad2, Hash, ListMusic, Palette, Users, Vote } from 'lucide-vue-next'
+import { AtSign, Columns3, Film, Flag, Gamepad2, Hash, LayoutGrid, ListMusic, Palette, Users, Vote } from 'lucide-vue-next'
 import type { FloatingWindow } from '~/composables/useFloatingWindows'
 
 /**
@@ -20,6 +20,16 @@ function widgetIcon(w: Extract<FloatingWindow, { kind: 'widget' }>) {
   return WIDGET_ICON[w.widgetType] ?? Gamepad2
 }
 
+/** Whatever icon the app already wears on its desk tab — one registry, one look. */
+function surfaceIcon(w: Extract<FloatingWindow, { kind: 'surface' }>) {
+  return deskApp(w.app)?.icon ?? LayoutGrid
+}
+
+/** The icon for any window, for the title bar and the minimized bubble alike. */
+function iconFor(w: FloatingWindow) {
+  return w.kind === 'widget' ? widgetIcon(w) : w.kind === 'surface' ? surfaceIcon(w) : CONVERSATION_ICON[w.icon]
+}
+
 // Only ever runs on the client (the shelf is client-only UI). Re-seat the saved windows, then
 // re-pin whatever music was playing before a reload — pin() re-opens its window on the shelf.
 onMounted(() => {
@@ -35,23 +45,18 @@ onMounted(() => {
     <div class="pointer-events-none fixed inset-0 z-40">
       <FloatingFrame v-for="w in windows" :key="w.id" :win="w">
         <template #title>
-          <template v-if="w.kind === 'widget'">
-            <component :is="widgetIcon(w)" class="h-3.5 w-3.5 shrink-0 text-primary" />
-            <span class="truncate">{{ w.title }}</span>
-          </template>
-          <template v-else>
-            <component :is="CONVERSATION_ICON[w.icon]" class="h-3.5 w-3.5 shrink-0 text-primary" />
-            <span class="truncate">{{ w.title }}</span>
-          </template>
+          <component :is="iconFor(w)" class="h-3.5 w-3.5 shrink-0 text-primary" />
+          <span class="truncate">{{ w.title }}</span>
         </template>
 
         <!-- The face of the minimized bubble: just the window's icon. -->
         <template #bubble>
-          <component :is="w.kind === 'widget' ? widgetIcon(w) : CONVERSATION_ICON[w.icon]" class="h-5 w-5" />
+          <component :is="iconFor(w)" class="h-5 w-5" />
         </template>
 
         <FloatingMusicContent v-if="w.kind === 'widget' && w.widgetType === 'music'" :win="w" />
         <FloatingWidgetContent v-else-if="w.kind === 'widget'" :win="w" />
+        <FloatingSurfaceContent v-else-if="w.kind === 'surface'" :win="w" />
         <FloatingConversationContent v-else :win="w" />
       </FloatingFrame>
     </div>

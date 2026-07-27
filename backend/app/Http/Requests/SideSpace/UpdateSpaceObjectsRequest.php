@@ -31,6 +31,9 @@ class UpdateSpaceObjectsRequest extends MemberRequest
             'objects.*.kind' => ['required', 'string', Rule::in(Decorations::keys())],
             'objects.*.x' => ['required', 'integer', 'min:0'],
             'objects.*.y' => ['required', 'integer', 'min:0'],
+            // Optional, and absent means the front view every piece had before pieces could be
+            // turned — so an old client's payload is still a valid room.
+            'objects.*.facing' => ['sometimes', 'string', Rule::in(Decorations::FACINGS)],
         ];
     }
 }

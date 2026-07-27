@@ -1,4 +1,4 @@
-import type { Widget } from '~/types'
+import type { SideDeskSurfaceAppId, Widget } from '~/types'
 
 type WidgetType = Widget['type']
 
@@ -10,8 +10,8 @@ type WidgetType = Widget['type']
  * room is watching, a poll you're waiting on, a chat you don't want to lose sight of. Floating
  * one lifts it out of the timeline's lifecycle and into a small window rendered once by
  * {@link FloatingWindows}, which is mounted in the layout and so survives every navigation —
- * the same trick the music dock plays, generalised to any number of windows and two kinds of
- * content.
+ * the same trick the music dock plays, generalised to any number of windows and three kinds of
+ * content: a widget, a conversation, and a Side Desk surface app (the board, the notes…).
  *
  * State lives here at module scope (via `useState`, so it's one list shared by every component
  * and SSR-safe) and is mirrored to localStorage so the shelf comes back after a reload. Music
@@ -20,7 +20,7 @@ type WidgetType = Widget['type']
  * cost more than it saves. A floating window is for everything else.
  */
 
-export type FloatingWindowKind = 'widget' | 'conversation'
+export type FloatingWindowKind = 'widget' | 'conversation' | 'surface'
 export type FloatingConversationIcon = 'channel' | 'dm' | 'group'
 
 interface FloatingWindowBase {
@@ -54,13 +54,37 @@ export interface FloatingConversationWindow extends FloatingWindowBase {
   icon: FloatingConversationIcon
 }
 
-export type FloatingWindow = FloatingWidgetWindow | FloatingConversationWindow
+/**
+ * A Side Desk *surface* app — the board, the notes, the calendar, the doc shelf, the canvas —
+ * lifted out of the desk panel and into a window that follows you around the app.
+ *
+ * Unlike a widget, a surface app has no id of its own: it's addressed by the surface it hangs
+ * off (`basePath`) plus which app it is, exactly as the desk tab addresses it. That pair is
+ * also the window id, so a channel's board and a side chat's are two different windows while
+ * the same board can't open twice. All state syncing is already handled a level down, by
+ * {@link useSurfaceStore} — the floating copy and the tab beside it are literally one store.
+ */
+export interface FloatingSurfaceWindow extends FloatingWindowBase {
+  kind: 'surface'
+  app: SideDeskSurfaceAppId
+  /** REST base for the surface, e.g. `/api/channels/12` — what the desk tab is handed. */
+  basePath: string
+  /** The private stream that surface's changes ride on, e.g. `channel.12`. */
+  streamName: string
+  /** Whether this person may author here; false renders the app read-only. */
+  canEdit: boolean
+  title: string
+}
+
+export type FloatingWindow = FloatingWidgetWindow | FloatingConversationWindow | FloatingSurfaceWindow
 
 /** What {@link open} takes: the content, minus the geometry the shelf assigns itself. */
 export type OpenWidget = Pick<FloatingWidgetWindow, 'kind' | 'widgetId' | 'channelId' | 'widgetType' | 'title'>
   & Partial<Pick<FloatingWidgetWindow, 'w' | 'h'>>
 export type OpenConversation = Pick<FloatingConversationWindow, 'kind' | 'channelId' | 'title' | 'icon'>
   & Partial<Pick<FloatingConversationWindow, 'w' | 'h'>>
+export type OpenSurface = Pick<FloatingSurfaceWindow, 'kind' | 'app' | 'basePath' | 'streamName' | 'canEdit' | 'title'>
+  & Partial<Pick<FloatingSurfaceWindow, 'w' | 'h'>>
 
 const STORAGE_KEY = 'floating:windows'
 
@@ -76,6 +100,20 @@ const WIDGET_SIZE: Record<string, { w: number, h: number }> = {
 }
 const DEFAULT_WIDGET_SIZE = { w: 380, h: 480 }
 const DEFAULT_CONVERSATION_SIZE = { w: 360, h: 480 }
+
+/**
+ * Surface apps float larger than widgets do. They're workspaces rather than cards — a board you
+ * can't draw a shape on and a note showing four words at a time are worse than not floating
+ * them — so they open at roughly the width the desk panel gives them.
+ */
+const SURFACE_SIZE: Record<string, { w: number, h: number }> = {
+  board: { w: 640, h: 480 },
+  notes: { w: 520, h: 520 },
+  calendar: { w: 560, h: 520 },
+  docs: { w: 460, h: 520 },
+  canvas: { w: 680, h: 520 },
+}
+const DEFAULT_SURFACE_SIZE = { w: 560, h: 480 }
 
 export function useFloatingWindows() {
   const windows = useState<FloatingWindow[]>(STORAGE_KEY, () => [])
@@ -131,10 +169,16 @@ export function useFloatingWindows() {
 
   function open(spec: OpenWidget): FloatingWidgetWindow
   function open(spec: OpenConversation): FloatingConversationWindow
-  function open(spec: OpenWidget | OpenConversation): FloatingWindow {
-    // A widget floats at most once (its state is shared anyway); a conversation likewise. Reopen
-    // just brings the existing window forward rather than stacking a duplicate on top of it.
-    const id = spec.kind === 'widget' ? `widget:${spec.widgetId}` : `conversation:${spec.channelId}`
+  function open(spec: OpenSurface): FloatingSurfaceWindow
+  function open(spec: OpenWidget | OpenConversation | OpenSurface): FloatingWindow {
+    // A widget floats at most once (its state is shared anyway); a conversation likewise, and a
+    // surface app once per surface. Reopen just brings the existing window forward rather than
+    // stacking a duplicate on top of it.
+    const id = spec.kind === 'widget'
+      ? `widget:${spec.widgetId}`
+      : spec.kind === 'surface'
+        ? `surface:${spec.basePath}:${spec.app}`
+        : `conversation:${spec.channelId}`
     const existing = windows.value.find(w => w.id === id)
     if (existing) {
       existing.collapsed = false
@@ -151,9 +195,16 @@ export function useFloatingWindows() {
 
     const size = spec.kind === 'widget'
       ? (WIDGET_SIZE[spec.widgetType] ?? DEFAULT_WIDGET_SIZE)
-      : DEFAULT_CONVERSATION_SIZE
-    const w = spec.w ?? size.w
-    const h = spec.h ?? size.h
+      : spec.kind === 'surface'
+        ? (SURFACE_SIZE[spec.app] ?? DEFAULT_SURFACE_SIZE)
+        : DEFAULT_CONVERSATION_SIZE
+    // Never open wider or taller than the window itself: the workspace apps ask for 640×480,
+    // which is most of a phone and more than some of it. Clamped here rather than at the frame,
+    // so the saved geometry is honest about the size it actually got.
+    const vw = import.meta.client ? window.innerWidth : 1280
+    const vh = import.meta.client ? window.innerHeight : 800
+    const w = Math.min(spec.w ?? size.w, vw - 16)
+    const h = Math.min(spec.h ?? size.h, vh - 16)
     const { x, y } = nextCorner(w, h)
 
     const win = {
@@ -185,6 +236,8 @@ export function useFloatingWindows() {
 
   const isWidgetFloating = (widgetId: number) => windows.value.some(w => w.kind === 'widget' && w.widgetId === widgetId)
   const isConversationFloating = (channelId: number) => windows.value.some(w => w.kind === 'conversation' && w.channelId === channelId)
+  const isSurfaceFloating = (basePath: string, app: string) =>
+    windows.value.some(w => w.kind === 'surface' && w.basePath === basePath && w.app === app)
 
-  return { windows, hydrate, persist, open, close, update, focus, isWidgetFloating, isConversationFloating }
+  return { windows, hydrate, persist, open, close, update, focus, isWidgetFloating, isConversationFloating, isSurfaceFloating }
 }

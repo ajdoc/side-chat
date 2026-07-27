@@ -490,6 +490,82 @@ it('refuses furniture that is off the map, misplaced, or doubled up', function (
     ])->assertStatus(422)->assertJsonValidationErrors('objects.1');
 });
 
+// --- which way things are turned ---
+
+it('measures a turned piece by the footprint it actually takes up', function () {
+    [$owner, , $channel] = ownerWithSpaceChannel();
+    Passport::actingAs($owner);
+
+    $put = fn (array $objects) => $this->putJson(
+        "/api/channels/{$channel->id}/space/map",
+        validMapPayload(['objects' => $objects]),
+    );
+
+    // The room is 10×10 with a wall all round, so the floor is x1–8 by y1–8. A two-wide desk at
+    // x8 runs into the east wall; the same desk turned a quarter is one wide and two deep, and
+    // fits there perfectly. Same piece, same square, opposite answers — which is the whole point.
+    $put([['id' => 'd-1', 'kind' => 'desk', 'x' => 8, 'y' => 3]])
+        ->assertStatus(422)->assertJsonValidationErrors('objects.0');
+
+    $put([['id' => 'd-1', 'kind' => 'desk', 'x' => 8, 'y' => 3, 'facing' => 'left']])
+        ->assertOk()
+        ->assertJsonPath('data.objects.0.facing', 'left');
+
+    // …and the turned footprint is checked in the direction it now points: two deep at y8 runs
+    // into the south wall.
+    $put([['id' => 'd-1', 'kind' => 'desk', 'x' => 3, 'y' => 8, 'facing' => 'left']])
+        ->assertStatus(422)->assertJsonValidationErrors('objects.0');
+
+    // Collision follows the turn too: the desk now occupies the tile *below* its origin.
+    $put([
+        ['id' => 'd-1', 'kind' => 'desk', 'x' => 3, 'y' => 3, 'facing' => 'right'],
+        ['id' => 'd-2', 'kind' => 'plant', 'x' => 3, 'y' => 4],
+    ])->assertStatus(422)->assertJsonValidationErrors('objects.1');
+
+    // Unturned, that same pair is fine — the desk runs east instead.
+    $put([
+        ['id' => 'd-1', 'kind' => 'desk', 'x' => 3, 'y' => 3],
+        ['id' => 'd-2', 'kind' => 'plant', 'x' => 3, 'y' => 4],
+    ])->assertOk();
+});
+
+it('blocks the tiles a turned piece stands on, and no others', function () {
+    [$owner, , $channel] = ownerWithSpaceChannel();
+    Passport::actingAs($owner);
+
+    $this->putJson("/api/channels/{$channel->id}/space/map", validMapPayload([
+        'objects' => [['id' => 'd-1', 'kind' => 'desk', 'x' => 3, 'y' => 3, 'facing' => 'left']],
+    ]))->assertOk();
+
+    $map = $channel->spaceMap()->sole();
+
+    expect($map->isWalkable(3, 3))->toBeFalse()
+        ->and($map->isWalkable(3, 4))->toBeFalse()  // the tile the turn moved it onto
+        ->and($map->isWalkable(4, 3))->toBeTrue();  // the one it used to be on, now free
+});
+
+it('refuses a way of facing that is not one of the four', function () {
+    [$owner, , $channel] = ownerWithSpaceChannel();
+    Passport::actingAs($owner);
+
+    $this->putJson("/api/channels/{$channel->id}/space/map", validMapPayload([
+        'objects' => [['id' => 'd-1', 'kind' => 'plant', 'x' => 3, 'y' => 3, 'facing' => 'sideways']],
+    ]))->assertStatus(422)->assertJsonValidationErrors('objects.0.facing');
+});
+
+it('lets a member turn the furniture as well as move it', function () {
+    [, $server, $channel] = ownerWithSpaceChannel();
+    $member = User::factory()->create();
+    $server->members()->attach($member->id, ['role' => 'member']);
+    Passport::actingAs($member);
+
+    $this->putJson("/api/channels/{$channel->id}/space/objects", [
+        'objects' => [['id' => 'mine-1', 'kind' => 'couch', 'x' => 3, 'y' => 3, 'facing' => 'right']],
+    ])->assertOk()->assertJsonPath('data.objects.0.facing', 'right');
+
+    expect($channel->spaceMap()->sole()->objects[0]['facing'])->toBe('right');
+});
+
 it('refuses an entrance under the furniture', function () {
     [$owner, , $channel] = ownerWithSpaceChannel();
     Passport::actingAs($owner);
@@ -520,23 +596,50 @@ it('opens the channel widget a piece of furniture points at', function () {
     // typing `m!` in the channel, and lands on the very same widget.
     Passport::actingAs($member);
 
-    // 201 the first time — the widget is built on first use, and a resource for something that
-    // has just been created says so.
+    // The answer says which kind of door this was, then hands over the widget behind it.
     $this->postJson("/api/channels/{$channel->id}/space/interact", ['object_id' => 'speaker-1'])
-        ->assertCreated()
+        ->assertOk()
+        ->assertJsonPath('type', 'widget')
+        ->assertJsonPath('app', 'music')
         ->assertJsonPath('data.type', 'music')
         ->assertJsonPath('data.channel_id', $channel->id);
 
     $this->postJson("/api/channels/{$channel->id}/space/interact", ['object_id' => 'tv-1'])
-        ->assertCreated()
+        ->assertOk()
         ->assertJsonPath('data.type', 'video');
 
     // One widget per channel and type: the second person at the speaker joins the first
-    // person's session rather than starting their own — hence 200, not another 201.
+    // person's session rather than starting their own.
     Passport::actingAs($owner);
     $this->postJson("/api/channels/{$channel->id}/space/interact", ['object_id' => 'speaker-1'])->assertOk();
 
     expect(Widget::where('channel_id', $channel->id)->where('type', 'music')->count())->toBe(1);
+});
+
+it('opens a Side Desk app for furniture that points at one, without inventing a widget', function () {
+    [$owner, , $channel] = ownerWithSpaceChannel();
+    Passport::actingAs($owner);
+
+    $this->putJson("/api/channels/{$channel->id}/space/map", validMapPayload([
+        'objects' => [
+            ['id' => 'board-1', 'kind' => 'whiteboard', 'x' => 3, 'y' => 3],
+            ['id' => 'lectern-1', 'kind' => 'lectern', 'x' => 6, 'y' => 3],
+        ],
+    ]))->assertOk();
+
+    // The whiteboard in the room is the channel's Board tab, so the answer is the app's name and
+    // nothing else — there is no widget row behind a surface app to create or return.
+    $this->postJson("/api/channels/{$channel->id}/space/interact", ['object_id' => 'board-1'])
+        ->assertOk()
+        ->assertJsonPath('type', 'app')
+        ->assertJsonPath('app', 'board')
+        ->assertJsonMissingPath('data');
+
+    $this->postJson("/api/channels/{$channel->id}/space/interact", ['object_id' => 'lectern-1'])
+        ->assertOk()
+        ->assertJsonPath('app', 'notes');
+
+    expect(Widget::where('channel_id', $channel->id)->count())->toBe(0);
 });
 
 it('404s on furniture that does nothing, or that is not there', function () {
@@ -595,6 +698,40 @@ it('refuses a look nobody has artwork for', function () {
 
     $this->patchJson('/api/space/appearance', ['pet' => 'dragonite'])
         ->assertStatus(422)->assertJsonValidationErrors('pet');
+
+    $this->patchJson('/api/space/appearance', [
+        'avatar' => ['body' => 'slim', 'hair' => 'short', 'hair_color' => 'brown', 'skin' => 'fair', 'outfit' => 'auto', 'costume' => 'batman'],
+    ])->assertStatus(422)->assertJsonValidationErrors('avatar.costume');
+});
+
+it('puts a costume on without losing the person underneath', function () {
+    $user = User::factory()->create();
+    Passport::actingAs($user);
+
+    $this->patchJson('/api/space/appearance', [
+        'avatar' => ['body' => 'sturdy', 'hair' => 'curly', 'hair_color' => 'ash', 'skin' => 'brown', 'outfit' => 'teal', 'costume' => 'cantor'],
+    ])->assertOk()
+        ->assertJsonPath('data.space_avatar.costume', 'cantor')
+        // Still stored, and still theirs — a costume is worn over a look, not instead of one.
+        ->assertJsonPath('data.space_avatar.hair', 'curly')
+        ->assertJsonPath('data.space_avatar.skin', 'brown');
+
+    // Taking it off is a value, not an omission, and puts the same person back.
+    $this->patchJson('/api/space/appearance', [
+        'avatar' => ['body' => 'sturdy', 'hair' => 'curly', 'hair_color' => 'ash', 'skin' => 'brown', 'outfit' => 'teal', 'costume' => 'none'],
+    ])->assertOk()->assertJsonPath('data.space_avatar.costume', 'none');
+
+    expect($user->fresh()->space_avatar['hair'])->toBe('curly');
+});
+
+it('reads a look saved before costumes existed as wearing none', function () {
+    $user = User::factory()->create();
+    Passport::actingAs($user);
+
+    // A row written by the client that shipped before this feature: five keys, no sixth.
+    $this->patchJson('/api/space/appearance', [
+        'avatar' => ['body' => 'slim', 'hair' => 'bob', 'hair_color' => 'blonde', 'skin' => 'fair', 'outfit' => 'auto'],
+    ])->assertOk()->assertJsonPath('data.space_avatar.costume', 'none');
 });
 
 it('serves a complete look for somebody who has never chosen one', function () {

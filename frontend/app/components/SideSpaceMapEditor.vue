@@ -1,19 +1,24 @@
 <script setup lang="ts">
-import { DoorOpen, Eraser, LayoutTemplate, Loader2, Sofa, SquareDashed, Trash2, X } from 'lucide-vue-next'
+import {
+  DoorOpen, Eraser, LayoutTemplate, Loader2, MousePointer2, RotateCcw, RotateCw, Sofa,
+  SquareDashed, Trash2, X, ZoomIn, ZoomOut,
+} from 'lucide-vue-next'
 import type { Camera, MapTheme, SpaceMap, SpaceZone } from '~/lib/spaceMapEngine'
-import type { SpaceObject } from '~/lib/spaceDecor'
+import type { DecorFacing, SpaceObject } from '~/lib/spaceDecor'
 import type { MapPreset } from '~/composables/useSpacePresets'
 import {
   TILE,
   TILE_BRUSHES,
+  ZOOM_STEP,
   blankTiles,
   drawMap,
   isWalkable,
   resizeTiles,
   toScreen,
   toTile,
+  zoomAround,
 } from '~/lib/spaceMapEngine'
-import { DECOR, decorCovers } from '~/lib/spaceDecor'
+import { DECOR, DECOR_FACINGS, decorCovers, decorSize } from '~/lib/spaceDecor'
 import { isWalkableTile } from '~/lib/spaceTiles'
 import { Button } from '~/components/ui/button'
 import { Input } from '~/components/ui/input'
@@ -61,10 +66,11 @@ const { save, saveObjects } = useSpaceMap(props.channelId)
 
 const isDecorMode = computed(() => props.mode === 'decor')
 
-type Tool = 'tile' | 'decor' | 'spawn' | 'zone' | 'erase-zone' | 'erase-decor'
+type Tool = 'select' | 'tile' | 'decor' | 'spawn' | 'zone' | 'erase-zone' | 'erase-decor'
 
-/** The full toolbox. In decorate mode only the furniture eraser survives — see {@link TOOLS}. */
+/** The full toolbox. In decorate mode only the furniture tools survive — see {@link TOOLS}. */
 const ALL_TOOLS: { id: Tool, label: string, icon: any, hint: string, decor?: boolean }[] = [
+  { id: 'select', label: 'Move things', icon: MousePointer2, hint: 'Pick a thing up, turn it, or take it away', decor: true },
   { id: 'spawn', label: 'Entrance', icon: DoorOpen, hint: 'Where people arrive' },
   { id: 'zone', label: 'Room', icon: SquareDashed, hint: 'Drag out a sealed room — inside hears inside only' },
   { id: 'erase-zone', label: 'Erase room', icon: Eraser, hint: 'Click a room to remove it' },
@@ -73,9 +79,19 @@ const ALL_TOOLS: { id: Tool, label: string, icon: any, hint: string, decor?: boo
 
 const TOOLS = computed(() => (isDecorMode.value ? ALL_TOOLS.filter(t => t.decor) : ALL_TOOLS))
 
+/** Which way "facing left" points, said the way somebody laying out a room would say it. */
+const FACING_LABELS: Record<DecorFacing, string> = {
+  down: 'forwards',
+  left: 'left',
+  up: 'away',
+  right: 'right',
+}
+
 /** Furniture, grouped the way somebody furnishing a room thinks about it. */
 const DECOR_GROUPS: { title: string, kinds: string[] }[] = [
   { title: 'Things that do something', kinds: ['speaker', 'tv', 'computer', 'arcade', 'racer', 'easel', 'noticeboard'] },
+  // The Side Desk's own apps, standing in the room: the whiteboard *is* the Board tab.
+  { title: 'Your Side Desk, in the room', kinds: ['whiteboard', 'lectern', 'planner', 'filecabinet'] },
   { title: 'Furniture', kinds: ['desk', 'couch', 'bench', 'chair', 'stool', 'bookshelf', 'cabinet', 'fridge', 'watercooler', 'lamp'] },
   { title: 'Bits and pieces', kinds: ['plant', 'crate', 'barrel', 'campfire', 'rug', 'mat'] },
   { title: 'On the wall', kinds: ['painting', 'poster', 'window', 'clock', 'shelf'] },
@@ -95,6 +111,16 @@ const tool = ref<Tool>(props.mode === 'decor' ? 'decor' : 'tile')
 /** Which tile character the ground brush paints, and which kind the furniture brush places. */
 const tile = ref<string>('#')
 const decor = ref<string>('speaker')
+/** Which way the *next* piece goes down. Turning a piece that's already down is separate. */
+const facing = ref<DecorFacing>('down')
+/**
+ * The piece being worked on, if any.
+ *
+ * Held as an id rather than as the object, because everything that edits the room replaces the
+ * `objects` array wholesale — a held reference would quietly become a copy of how the piece used
+ * to be, and the chips beside it would move something that no longer exists.
+ */
+const selectedId = ref<string | null>(null)
 const saving = ref(false)
 const error = ref('')
 /** Set when a piece can't go where you clicked, and cleared as soon as one can. */
@@ -138,7 +164,23 @@ const loadedPreset = ref<string | null>(null)
 
 /** An in-progress zone drag, in tiles. */
 let zoneDrag: { x0: number, y0: number, x1: number, y1: number } | null = null
+/**
+ * The piece being dragged, and *where in it* the pointer took hold.
+ *
+ * The offset is the whole reason this isn't just "put the piece under the cursor": grabbing a
+ * two-tile couch by its right end and having it jump so its left end is under your finger is the
+ * kind of small wrongness that makes a room impossible to lay out.
+ */
+let dragging: { id: string, ox: number, oy: number } | null = null
 let painting = false
+/** Every pointer on the canvas. One paints; two pinch and pan. */
+const touches = new Map<number, { x: number, y: number }>()
+/** A two-finger gesture: the gap between the fingers and where their midpoint was. */
+let pinch: { gap: number, x: number, y: number } | null = null
+/** A middle-button pan, in client pixels. */
+let panning: { x: number, y: number } | null = null
+/** Whether the camera is where *you* put it, rather than where {@link fit} put it. */
+let moved = false
 let frame: number | undefined
 let ro: ResizeObserver | undefined
 let openedAt = performance.now()
@@ -170,6 +212,7 @@ function setTile(x: number, y: number, char: string) {
 function paintAt(px: number, py: number) {
   const { x, y } = toTile(camera, px, py)
 
+  if (tool.value === 'select') return
   if (tool.value === 'tile') return setTile(x, y, tile.value)
   if (tool.value === 'decor') return placeDecor(x, y)
 
@@ -195,42 +238,56 @@ function paintAt(px: number, py: number) {
 }
 
 /**
- * Put a piece of furniture down, or say why not.
+ * Why a piece can't stand at `x, y` turned that way — or null, meaning it can.
  *
- * The three rules are the server's three rules, checked here so the answer is immediate: it has
- * to fit on the map, it has to be on the right sort of tile for how it's mounted, and two solid
- * things can't share a square. Overlapping a *flat* thing is fine and rather the point — a desk
- * on a rug, a chair tucked under it.
+ * The server's three rules, checked here so the answer is immediate: it has to fit on the map,
+ * it has to be on the right sort of tile for how it's mounted, and two solid things can't share
+ * a square. Overlapping a *flat* thing is fine and rather the point — a desk on a rug, a chair
+ * tucked under it.
+ *
+ * One rulebook for all three things that need it: putting a piece down, dragging one somewhere
+ * else, and turning one where it stands. A move is checked with `ignore` set to the piece being
+ * moved, or every piece would collide with the copy of itself it hasn't left yet.
  */
-function placeDecor(x: number, y: number) {
-  const kind = DECOR[decor.value]
-  if (!kind) return
+function refusalFor(kindName: string, x: number, y: number, face: DecorFacing, ignore?: string): string | null {
+  const kind = DECOR[kindName]
+  if (!kind) return 'That is not a kind of furniture we know.'
 
-  if (x < 0 || y < 0 || x + kind.w > width.value || y + kind.h > height.value) {
-    return refuse('It doesn’t fit there.')
-  }
+  // As placed, not as catalogued: a turned desk needs 1×2 where an unturned one needs 2×1.
+  const { w, h } = decorSize({ id: '', kind: kindName, x, y, facing: face }, kind)
 
-  for (let dy = y; dy < y + kind.h; dy++) {
-    for (let dx = x; dx < x + kind.w; dx++) {
+  if (x < 0 || y < 0 || x + w > width.value || y + h > height.value) return 'It doesn’t fit there.'
+
+  for (let dy = y; dy < y + h; dy++) {
+    for (let dx = x; dx < x + w; dx++) {
       const ground = tiles.value[dy]?.[dx] ?? ' '
 
       if (kind.mount === 'wall' && isWalkableTile(ground)) {
-        return refuse(`A ${kind.label.toLowerCase()} has to hang on a wall.`)
+        return `A ${kind.label.toLowerCase()} has to hang on a wall.`
       }
 
       if (kind.mount === 'floor' && !isWalkableTile(ground)) {
-        return refuse(`A ${kind.label.toLowerCase()} has to stand on the floor.`)
+        return `A ${kind.label.toLowerCase()} has to stand on the floor.`
       }
 
       if (kind.solid && objects.value.some((o) => {
+        if (o.id === ignore) return false
         const other = DECOR[o.kind]
 
         return other?.solid && decorCovers(o, other, dx, dy)
       })) {
-        return refuse('Something’s already there.')
+        return 'Something’s already there.'
       }
     }
   }
+
+  return null
+}
+
+/** Put a piece of furniture down, or say why not. */
+function placeDecor(x: number, y: number) {
+  const why = refusalFor(decor.value, x, y, facing.value)
+  if (why) return refuse(why)
 
   refused.value = ''
   objects.value = [...objects.value, {
@@ -238,11 +295,175 @@ function placeDecor(x: number, y: number) {
     kind: decor.value,
     x,
     y,
+    facing: facing.value,
   }]
 }
 
 function refuse(why: string) {
   refused.value = why
+}
+
+// --- picking a piece up ---
+
+const selected = computed(() => objects.value.find(o => o.id === selectedId.value) ?? null)
+
+/** The piece on a tile, topmost first — the last one in the list is the last one drawn. */
+function objectAt(x: number, y: number): SpaceObject | null {
+  for (let i = objects.value.length - 1; i >= 0; i--) {
+    const o = objects.value[i]!
+    const kind = DECOR[o.kind]
+    if (kind && decorCovers(o, kind, x, y)) return o
+  }
+
+  return null
+}
+
+/** Replace one piece in place, leaving the rest of the room alone. */
+function patchObject(id: string, patch: Partial<SpaceObject>) {
+  objects.value = objects.value.map(o => (o.id === id ? { ...o, ...patch } : o))
+}
+
+function removeSelected() {
+  if (!selectedId.value) return
+
+  objects.value = objects.value.filter(o => o.id !== selectedId.value)
+  selectedId.value = null
+  refused.value = ''
+}
+
+/**
+ * Turn something a quarter, clockwise or back.
+ *
+ * With a piece selected it turns *that*; with nothing selected it turns the brush, so you can
+ * decide which way a couch faces before you put it down rather than only afterwards. A turn that
+ * wouldn't fit is refused rather than applied, for the same reason a placement is: finding out
+ * on save is worse than not being able to do it.
+ */
+function turn(step: 1 | -1) {
+  const piece = selected.value
+
+  if (!piece) {
+    facing.value = turned(facing.value, step)
+
+    return
+  }
+
+  const next = turned(piece.facing ?? 'down', step)
+  const why = refusalFor(piece.kind, piece.x, piece.y, next, piece.id)
+  if (why) return refuse(why)
+
+  refused.value = ''
+  patchObject(piece.id, { facing: next })
+}
+
+function turned(from: DecorFacing, step: 1 | -1): DecorFacing {
+  const at = DECOR_FACINGS.indexOf(from)
+
+  return DECOR_FACINGS[(at + step + DECOR_FACINGS.length) % DECOR_FACINGS.length]!
+}
+
+/** Move the selection by a tile — the keyboard's version of dragging it. */
+function nudge(dx: number, dy: number) {
+  const piece = selected.value
+  if (!piece) return
+
+  const why = refusalFor(piece.kind, piece.x + dx, piece.y + dy, piece.facing ?? 'down', piece.id)
+  if (why) return refuse(why)
+
+  refused.value = ''
+  patchObject(piece.id, { x: piece.x + dx, y: piece.y + dy })
+}
+
+/**
+ * The selection's box on screen, for the chips that hang off it.
+ *
+ * Recomputed from the camera rather than stored, so it follows a zoom or a resize without anyone
+ * having to remember to move it.
+ */
+const selectionBox = computed(() => {
+  const piece = selected.value
+  const kind = piece ? DECOR[piece.kind] : null
+  if (!piece || !kind) return null
+
+  const { w, h } = decorSize(piece, kind)
+  const size = TILE * camera.zoom
+  const p = toScreen(camera, piece.x - 0.5, piece.y - 0.5)
+
+  return { x: p.x, y: p.y, w: w * size, h: h * size, label: kind.label }
+})
+
+/** Take hold of whatever is under the pointer — or, on empty floor, let go of what was held. */
+function grab(px: number, py: number) {
+  const { x, y } = toTile(camera, px, py)
+  const piece = objectAt(x, y)
+
+  refused.value = ''
+  selectedId.value = piece?.id ?? null
+  dragging = piece ? { id: piece.id, ox: x - piece.x, oy: y - piece.y } : null
+}
+
+/**
+ * Drag the held piece under the pointer.
+ *
+ * A move that breaks a rule simply doesn't happen — the piece stays where it last legally was
+ * and the drag carries on, so dragging a couch across a wall slides it along the wall rather than
+ * dropping it or filling the screen with complaints. The refusal text is left to the actions that
+ * are one-shot (placing, turning), where there's no next frame to say it in.
+ */
+function dragTo(px: number, py: number) {
+  if (!dragging) return
+
+  const piece = objects.value.find(o => o.id === dragging!.id)
+  if (!piece) return (dragging = null)
+
+  const { x, y } = toTile(camera, px, py)
+  const nx = x - dragging.ox
+  const ny = y - dragging.oy
+
+  if (nx === piece.x && ny === piece.y) return
+  if (refusalFor(piece.kind, nx, ny, piece.facing ?? 'down', piece.id)) return
+
+  patchObject(piece.id, { x: nx, y: ny })
+}
+
+/**
+ * The keyboard, for the fiddly half of laying out a room.
+ *
+ * Arrows nudge a tile at a time, which a drag can't do accurately at a zoomed-out size; R turns;
+ * Delete takes a piece away; Escape lets it go. Ignored while a text field has focus, or naming a
+ * room would rotate the furniture behind the dialog.
+ */
+function onKeydown(e: KeyboardEvent) {
+  const el = e.target as HTMLElement | null
+  if (el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.isContentEditable)) return
+
+  const key = e.key.toLowerCase()
+
+  if (key === 'escape' && selectedId.value) {
+    selectedId.value = null
+
+    return e.preventDefault()
+  }
+
+  if (key === 'r') {
+    turn(e.shiftKey ? -1 : 1)
+
+    return e.preventDefault()
+  }
+
+  if (!selected.value) return
+
+  if (key === 'delete' || key === 'backspace') {
+    removeSelected()
+
+    return e.preventDefault()
+  }
+
+  const step = { arrowleft: [-1, 0], arrowright: [1, 0], arrowup: [0, -1], arrowdown: [0, 1] }[key]
+  if (!step) return
+
+  nudge(step[0]!, step[1]!)
+  e.preventDefault()
 }
 
 function onPointerDown(e: PointerEvent) {
@@ -251,6 +472,19 @@ function onPointerDown(e: PointerEvent) {
   const py = e.clientY - rect.top
 
   canvas.value?.setPointerCapture(e.pointerId)
+
+  touches.set(e.pointerId, { x: e.clientX, y: e.clientY })
+  if (touches.size > 1) return startPinch()
+
+  // A middle-drag pans wherever you are and whatever you're holding, so there's always a way to
+  // reach the far side of a room you've zoomed into.
+  if (e.button === 1) {
+    panning = { x: e.clientX, y: e.clientY }
+
+    return
+  }
+
+  if (tool.value === 'select') return grab(px, py)
 
   if (tool.value === 'zone') {
     const t = toTile(camera, px, py)
@@ -270,6 +504,19 @@ function onPointerMove(e: PointerEvent) {
   const px = e.clientX - rect.left
   const py = e.clientY - rect.top
 
+  if (touches.has(e.pointerId)) touches.set(e.pointerId, { x: e.clientX, y: e.clientY })
+
+  if (pinch) return trackPinch()
+
+  if (panning) {
+    panBy(e.clientX - panning.x, e.clientY - panning.y)
+    panning = { x: e.clientX, y: e.clientY }
+
+    return
+  }
+
+  if (dragging) return dragTo(px, py)
+
   if (zoneDrag) {
     const t = toTile(camera, px, py)
     zoneDrag.x1 = t.x
@@ -283,7 +530,18 @@ function onPointerMove(e: PointerEvent) {
 
 function onPointerUp(e: PointerEvent) {
   canvas.value?.releasePointerCapture(e.pointerId)
+  touches.delete(e.pointerId)
   painting = false
+  dragging = null
+  panning = null
+
+  // Lifting a finger out of a pinch ends it; the one still down doesn't become a brush, or
+  // every zoom would paint a wall on its way out.
+  if (pinch) {
+    if (touches.size < 2) pinch = null
+
+    return
+  }
 
   if (!zoneDrag) return
 
@@ -322,8 +580,13 @@ function applySize() {
   zones.value = zones.value.filter(z => z.x + z.w <= width.value && z.y + z.h <= height.value)
   objects.value = objects.value.filter((o) => {
     const kind = DECOR[o.kind]
+    if (!kind) return false
 
-    return kind && o.x + kind.w <= width.value && o.y + kind.h <= height.value
+    // Measured as placed: a turned desk sticks out southwards where an unturned one sticks out
+    // eastwards, so which of them survives a shrink is not the same question.
+    const { w, h } = decorSize(o, kind)
+
+    return o.x + w <= width.value && o.y + h <= height.value
   })
 
   if (!isWalkable(draft.value, spawn.value.x, spawn.value.y)) {
@@ -478,17 +741,107 @@ function resize() {
 
   camera.width = w
   camera.height = h
-  fit()
+
+  // A resize re-fits the room *unless* you've moved the camera yourself. On a phone the address
+  // bar sliding away is a resize, and having it throw away the corner you'd zoomed into would
+  // make the editor feel like it was fighting you.
+  if (!moved) fit()
 }
 
 /** Show the whole room at once — you can't lay out a floor you can only see a corner of. */
 function fit() {
   camera.x = width.value / 2 - 0.5
   camera.y = height.value / 2 - 0.5
-  camera.zoom = Math.min(
+  camera.zoom = fitZoom()
+  moved = false
+}
+
+/** The scale at which the whole room is on screen, with a little air around it. */
+function fitZoom() {
+  return Math.min(
     camera.width / (width.value * TILE),
     camera.height / (height.value * TILE),
   ) * 0.95
+}
+
+// --- getting closer to the work ---
+
+/**
+ * How far in the editor may be pushed.
+ *
+ * Both ends are relative to {@link fitZoom}, not absolute, because "the whole room on screen" is
+ * a different number of pixels per tile for a 10×10 room than for an 80×80 one. Out to most of
+ * the way past that (so a big room can still be seen whole on a phone) and in to eight times it,
+ * which is where a single tile is comfortably bigger than a fingertip.
+ */
+const zoomBounds = () => ({ min: fitZoom() * 0.9, max: fitZoom() * 8 })
+
+/** Zoom about a point on the canvas — the tile under the pointer is the one you close in on. */
+function zoomAt(factor: number, px: number, py: number) {
+  const { min, max } = zoomBounds()
+  zoomAround(camera, factor, px, py, min, max)
+  moved = true
+}
+
+/** The buttons have no pointer to zoom about, so they use the middle of the view. */
+function zoomStep(factor: number) {
+  zoomAt(factor, camera.width / 2, camera.height / 2)
+}
+
+/**
+ * The wheel zooms rather than scrolls — see the same decision in SideSpaceStage. Bound in
+ * `onMounted` rather than in the template so it can be non-passive and actually say so.
+ */
+function onWheel(e: WheelEvent) {
+  e.preventDefault()
+
+  const rect = canvas.value?.getBoundingClientRect()
+  if (!rect) return
+
+  zoomAt(e.deltaY < 0 ? ZOOM_STEP : 1 / ZOOM_STEP, e.clientX - rect.left, e.clientY - rect.top)
+}
+
+/**
+ * Two fingers: pinch to zoom, and drag the pair to pan.
+ *
+ * Both at once, because they're one gesture — you spread your fingers and shift them at the same
+ * time without meaning two separate things by it. The midpoint moving pans, the gap changing
+ * zooms, and neither is a brush stroke: `startPinch` throws away whatever painting or dragging
+ * the first finger had begun, so a two-fingered gesture never leaves a trail of desks behind it.
+ */
+function startPinch() {
+  const [a, b] = [...touches.values()]
+  if (!a || !b) return
+
+  pinch = { gap: Math.hypot(a.x - b.x, a.y - b.y), x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 }
+  painting = false
+  dragging = null
+  zoneDrag = null
+}
+
+function trackPinch() {
+  const [a, b] = [...touches.values()]
+  const rect = canvas.value?.getBoundingClientRect()
+  if (!pinch || !a || !b || !rect) return
+
+  const gap = Math.hypot(a.x - b.x, a.y - b.y)
+  const x = (a.x + b.x) / 2
+  const y = (a.y + b.y) / 2
+
+  // Pan first, by however far the pair of fingers slid, then scale about where they now are.
+  panBy(x - pinch.x, y - pinch.y)
+
+  if (pinch.gap > 20 && gap > 20) zoomAt(gap / pinch.gap, x - rect.left, y - rect.top)
+
+  pinch = { gap, x, y }
+}
+
+/** A middle-drag pans, the way it does in every other canvas people have used. */
+function panBy(dx: number, dy: number) {
+  const size = TILE * camera.zoom
+  camera.x -= dx / size
+  camera.y -= dy / size
+  moved = true
 }
 
 function draw() {
@@ -504,6 +857,26 @@ function draw() {
   drawGrid(ctx, p)
   drawSpawn(ctx)
   drawZoneDrag(ctx)
+  drawSelection(ctx)
+}
+
+/**
+ * A ring round the piece you're holding.
+ *
+ * Round its *footprint*, which is the thing being moved — a bookshelf's sprite reaches a third of
+ * a tile higher than the floor it stands on, and outlining the picture rather than the floor
+ * would show you a box the piece doesn't actually occupy.
+ */
+function drawSelection(ctx: CanvasRenderingContext2D) {
+  const box = selectionBox.value
+  if (!box) return
+
+  ctx.save()
+  ctx.strokeStyle = 'rgb(99 102 241)'
+  ctx.lineWidth = 2
+  ctx.setLineDash([5, 3])
+  ctx.strokeRect(box.x + 1, box.y + 1, box.w - 2, box.h - 2)
+  ctx.restore()
 }
 
 /** Faint tile lines — you're placing individual squares, so you need to see the squares. */
@@ -577,6 +950,18 @@ function chooseTool(id: Tool) {
   chose()
 }
 
+/**
+ * Reaching for another tool puts down whatever you were holding.
+ *
+ * The chips hang over the room, so leaving them there while you paint a wall would leave three
+ * buttons floating over the tile you were trying to aim at. Turning the *brush* is still possible
+ * with nothing selected, which is what makes clearing the selection safe rather than annoying.
+ */
+watch(tool, () => {
+  selectedId.value = null
+  dragging = null
+})
+
 watch([width, height], () => fit())
 
 onMounted(() => {
@@ -585,6 +970,9 @@ onMounted(() => {
   ro = new ResizeObserver(resize)
   if (wrap.value) ro.observe(wrap.value)
   frame = requestAnimationFrame(draw)
+  window.addEventListener('keydown', onKeydown)
+  // Non-passive, or the sheet scrolls behind the grid instead of zooming it — see onWheel.
+  canvas.value?.addEventListener('wheel', onWheel, { passive: false })
 })
 
 onBeforeUnmount(() => {
@@ -592,6 +980,8 @@ onBeforeUnmount(() => {
   ro?.disconnect()
   probe?.remove()
   probe = null
+  window.removeEventListener('keydown', onKeydown)
+  canvas.value?.removeEventListener('wheel', onWheel)
 })
 </script>
 
@@ -681,6 +1071,30 @@ onBeforeUnmount(() => {
                 <span v-if="DECOR[k]?.interact" class="text-primary">·</span>
               </button>
             </div>
+          </div>
+
+          <!-- Which way the next piece goes down. With something selected the same two buttons
+               turn *it* instead, which is why the label changes rather than the controls. -->
+          <div class="flex items-center gap-1.5 rounded-md border bg-muted/30 p-1.5">
+            <span class="flex-1 text-[11px] leading-snug text-muted-foreground">
+              {{ selected ? `Turn the ${selectionBox?.label?.toLowerCase()}` : `New pieces face ${FACING_LABELS[facing]}` }}
+            </span>
+            <button
+              type="button"
+              class="rounded border p-1 text-muted-foreground transition-colors hover:bg-background hover:text-foreground"
+              title="Turn anticlockwise (Shift+R)"
+              @click="turn(-1)"
+            >
+              <RotateCcw class="h-3.5 w-3.5" />
+            </button>
+            <button
+              type="button"
+              class="rounded border p-1 text-muted-foreground transition-colors hover:bg-background hover:text-foreground"
+              title="Turn clockwise (R)"
+              @click="turn(1)"
+            >
+              <RotateCw class="h-3.5 w-3.5" />
+            </button>
           </div>
 
           <p class="text-[11px] leading-snug text-muted-foreground">
@@ -785,16 +1199,65 @@ onBeforeUnmount(() => {
       <div ref="wrap" class="relative min-w-0 flex-1 bg-muted/20">
         <canvas
           ref="canvas"
-          class="block h-full w-full cursor-crosshair touch-none"
+          class="block h-full w-full touch-none"
+          :class="tool === 'select' ? 'cursor-move' : 'cursor-crosshair'"
           @pointerdown="onPointerDown"
           @pointermove="onPointerMove"
           @pointerup="onPointerUp"
           @pointercancel="onPointerUp"
         />
+
+        <!--
+          The handles on the selected piece: turn it, or take it away.
+
+          Pinned to the piece rather than parked in the panel, because "this one" is the whole
+          question a delete button has to answer — a Remove button across the room needs you to
+          remember what's selected, and a trash icon touching the couch does not. It sits above
+          the piece unless the piece is at the top of the room, where it flips below rather than
+          off the edge, and it stops pointer events reaching the canvas so pressing ✕ can't also
+          be a click on the floor behind it.
+        -->
+        <div
+          v-if="selectionBox"
+          class="absolute z-10 flex -translate-x-1/2 items-center gap-0.5 rounded-md border bg-background/95 p-0.5 shadow-lg backdrop-blur"
+          :style="{
+            left: `${selectionBox.x + selectionBox.w / 2}px`,
+            top: selectionBox.y > 44 ? `${selectionBox.y - 38}px` : `${selectionBox.y + selectionBox.h + 6}px`,
+          }"
+          @pointerdown.stop
+        >
+          <span class="max-w-24 truncate px-1.5 text-[11px] text-muted-foreground">{{ selectionBox.label }}</span>
+          <button
+            type="button"
+            class="rounded p-1 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+            title="Turn anticlockwise (Shift+R)"
+            @click="turn(-1)"
+          >
+            <RotateCcw class="h-3.5 w-3.5" />
+          </button>
+          <button
+            type="button"
+            class="rounded p-1 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+            title="Turn clockwise (R)"
+            @click="turn(1)"
+          >
+            <RotateCw class="h-3.5 w-3.5" />
+          </button>
+          <button
+            type="button"
+            class="rounded p-1 text-destructive transition-colors hover:bg-destructive hover:text-destructive-foreground"
+            title="Take it away (Delete)"
+            @click="removeSelected"
+          >
+            <Trash2 class="h-3.5 w-3.5" />
+          </button>
+        </div>
+
         <p class="pointer-events-none absolute bottom-2 left-2 rounded bg-background/85 px-2 py-1 text-[11px] text-muted-foreground">
-          {{ tool === 'decor' ? `${narrow ? 'Tap' : 'Click'} to put it down. Furniture places one at a time.`
-            : tool === 'erase-decor' ? `${narrow ? 'Tap' : 'Click'} a piece of furniture to remove it.`
-              : 'Drag to paint. The green square is where people walk in.' }}
+          {{ tool === 'select' ? `${narrow ? 'Tap' : 'Click'} a thing to pick it up, then drag it. Its handles turn and remove it.`
+            : tool === 'decor' ? `${narrow ? 'Tap' : 'Click'} to put it down. Furniture places one at a time.`
+              : tool === 'erase-decor' ? `${narrow ? 'Tap' : 'Click'} a piece of furniture to remove it.`
+                : 'Drag to paint. The green square is where people walk in.' }}
         </p>
         <p
           v-if="refused"
@@ -805,6 +1268,41 @@ onBeforeUnmount(() => {
         <p class="pointer-events-none absolute right-2 top-2 rounded bg-background/85 px-2 py-1 text-[11px] text-muted-foreground">
           {{ objects.length }} thing{{ objects.length === 1 ? '' : 's' }} in the room
         </p>
+
+        <!--
+          Getting closer to the work. The wheel and a two-finger pinch already do this; these are
+          for the phone, where laying out a 40-tile room at fit-the-screen size means aiming a
+          finger at an eight-pixel square. "Fit" is the way back, and doubles as the way back from
+          having panned somewhere strange.
+        -->
+        <div class="absolute bottom-2 right-2 flex flex-col overflow-hidden rounded-lg border bg-background/90 shadow-sm backdrop-blur">
+          <button
+            type="button"
+            class="flex h-8 w-8 items-center justify-center text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+            title="Closer"
+            aria-label="Zoom in"
+            @click="zoomStep(ZOOM_STEP)"
+          >
+            <ZoomIn class="h-4 w-4" />
+          </button>
+          <button
+            type="button"
+            class="flex h-8 w-8 items-center justify-center border-t text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+            title="Further out"
+            aria-label="Zoom out"
+            @click="zoomStep(1 / ZOOM_STEP)"
+          >
+            <ZoomOut class="h-4 w-4" />
+          </button>
+          <button
+            type="button"
+            class="flex h-8 w-8 items-center justify-center border-t text-[10px] font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+            title="Show the whole room again"
+            @click="fit"
+          >
+            Fit
+          </button>
+        </div>
       </div>
     </div>
   </div>

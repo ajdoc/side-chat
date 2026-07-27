@@ -60,6 +60,52 @@ interface MovePayload {
 
 type RemoteOccupant = Occupant & { tx: number, ty: number, at: number }
 
+/**
+ * Somebody appeared in the room, or vanished from it — for whoever happens to be drawing it.
+ *
+ * Deliberately *not* the same question as earshot. useSpaceProximity already notices people
+ * coming and going within hearing and fires the room's configured fanfare at them; this is the
+ * plainer fact underneath that: a person who was not in this room now is, or was and no longer
+ * is. It's what a puff of light at their feet should be tied to, because walking away from
+ * somebody is not the same event as leaving.
+ *
+ * Carries everything the effect needs to draw itself *after the person is gone* — where they
+ * stood, which way they faced, what they looked like — since by the time a departure is known
+ * they're already out of `others`.
+ */
+export interface RoomEvent {
+  kind: 'arrive' | 'depart'
+  id: number
+  name: string
+  x: number
+  y: number
+  facing: Facing
+  look: AvatarLook
+  /** Your own arrival. Worth a beat of its own: it's the moment you land in the room. */
+  self: boolean
+}
+
+/**
+ * Who's listening. Module-scoped alongside the rest of the room state, but *unlike* the rest it
+ * is emptied when the last listener goes: an effect is something you watch, so nobody watching
+ * means nothing to fire.
+ */
+const roomListeners = new Set<(event: RoomEvent) => void>()
+
+function emitRoom(event: RoomEvent) {
+  for (const listen of roomListeners) listen(event)
+}
+
+/**
+ * Everybody we already knew about, so an arrival can be told from a *roster*.
+ *
+ * Without this every occupant of the room would appear to arrive the instant you walked in —
+ * six people standing about would greet you with six puffs of light, none of which happened.
+ * Seeded by {@link seed} from the roster the API hands over on entry, and added to as people
+ * genuinely turn up.
+ */
+const knownFaces = new Set<number>()
+
 /*
  * --- room state, deliberately outside the composable ---
  *
@@ -218,6 +264,19 @@ export function useSpacePresence(channelId: number, map: Ref<SpaceMap | null>) {
     }
     placed = true
     whisperMove(true)
+
+    // Your own arrival. Everyone else in the room gets one of these from your first whisper,
+    // and it would be odd for the person it happened to to be the only one who missed it.
+    emitRoom({
+      kind: 'arrive',
+      id: user.value.id,
+      name: user.value.name,
+      x: at.x,
+      y: at.y,
+      facing,
+      look: me.value.look,
+      self: true,
+    })
   }
 
   /**
@@ -249,6 +308,11 @@ export function useSpacePresence(channelId: number, map: Ref<SpaceMap | null>) {
     const next = { ...others.value }
 
     for (const o of occupants) {
+      // Known whether or not we can place them: somebody on the roster with no remembered
+      // position is still somebody who was already here, and their first whisper mustn't be
+      // mistaken for them walking in.
+      knownFaces.add(o.id)
+
       if (o.id === user.value?.id || o.x === null || o.y === null) continue
 
       next[o.id] = {
@@ -516,6 +580,8 @@ export function useSpacePresence(channelId: number, map: Ref<SpaceMap | null>) {
 
     // A newcomer changes the roster, so it's worth telling everyone about. They appear exactly
     // where they say they are rather than gliding in from wherever the origin happens to be.
+    const look = normaliseLook(payload.look)
+
     others.value = {
       ...others.value,
       [payload.id]: {
@@ -527,11 +593,36 @@ export function useSpacePresence(channelId: number, map: Ref<SpaceMap | null>) {
         tx: payload.x,
         ty: payload.y,
         facing: payload.facing,
-        look: normaliseLook(payload.look),
+        look,
         pet: payload.pet ?? null,
         petAt: { x: payload.x - 0.6, y: payload.y + 0.3, facing: payload.facing },
         at: Date.now(),
       },
+    }
+
+    /*
+     * Somebody walked in.
+     *
+     * Fired *here*, on their first whisper, rather than on the presence event that strictly
+     * announces them — because presence says only that a person exists, and an effect needs
+     * somewhere to happen. A whisper is the first moment we know both, and it's at most a
+     * twelfth of a second later.
+     *
+     * `knownFaces` is what keeps this honest: everyone on the roster you walked in on is
+     * already in it, so their first whisper is a hello rather than an arrival.
+     */
+    if (!knownFaces.has(payload.id)) {
+      knownFaces.add(payload.id)
+      emitRoom({
+        kind: 'arrive',
+        id: payload.id,
+        name: payload.name,
+        x: payload.x,
+        y: payload.y,
+        facing: payload.facing,
+        look,
+        self: false,
+      })
     }
 
     // Somebody we'd never heard from before. They don't know where we are either — their roster
@@ -589,25 +680,60 @@ export function useSpacePresence(channelId: number, map: Ref<SpaceMap | null>) {
 
     stopMemberWatch = roomScope.run(() => watch(memberIds, (ids) => {
       const here = new Set(ids)
-      const staying = Object.fromEntries(
-        Object.entries(others.value).filter(([id]) => here.has(Number(id))),
-      )
 
-      // Same shallow-ref discipline as `prune`: only write when somebody actually went.
-      if (Object.keys(staying).length !== Object.keys(others.value).length) others.value = staying
+      // Forget the ones who left, so that coming back counts as arriving again. Done for
+      // *everyone* off the roster rather than only those we could draw, or somebody who left
+      // before their first whisper would never be able to arrive.
+      for (const id of knownFaces) if (!here.has(id)) knownFaces.delete(id)
+
+      keepOnly(o => here.has(o.id))
     }))
   }
 
   /** Drop anybody who has gone quiet — a tab that died without presence noticing yet. */
   function prune() {
     const cutoff = Date.now() - STALE_AFTER
-    const alive = Object.fromEntries(
-      Object.entries(others.value).filter(([, o]) => o.at >= cutoff),
-    )
 
-    // Only if somebody actually went: reassigning every four seconds regardless would undo
-    // the point of the shallow ref.
-    if (Object.keys(alive).length !== Object.keys(others.value).length) others.value = alive
+    keepOnly(o => o.at >= cutoff)
+  }
+
+  /**
+   * Take away everybody who fails the test, and see them out with a puff of light.
+   *
+   * The one place an occupant is removed, which is why it's shared by the two paths that do it:
+   * presence noticing a socket go, and the sweep catching a tab that died without it. Both are
+   * "they're not here any more", and both should look the same to somebody watching the room.
+   *
+   * Same shallow-ref discipline as before: only write when somebody actually went, or a sweep
+   * every four seconds would undo the point of the shallow ref.
+   */
+  function keepOnly(test: (o: RemoteOccupant) => boolean) {
+    const staying: Record<number, RemoteOccupant> = {}
+    const going: RemoteOccupant[] = []
+
+    for (const o of Object.values(others.value)) {
+      if (test(o)) staying[o.id] = o
+      else going.push(o)
+    }
+
+    if (!going.length) return
+
+    others.value = staying
+
+    for (const o of going) {
+      knownFaces.delete(o.id)
+      emitRoom({
+        kind: 'depart',
+        id: o.id,
+        name: o.name,
+        // Where they actually were, not where they were heading: they never got there.
+        x: o.x,
+        y: o.y,
+        facing: o.facing,
+        look: normaliseLook(o.look),
+        self: false,
+      })
+    }
   }
 
   // --- attaching (lasts as long as you're in the room) ---
@@ -631,6 +757,16 @@ export function useSpacePresence(channelId: number, map: Ref<SpaceMap | null>) {
     // Presence is what actually says somebody left; the sweep below is only for a tab that died
     // without the socket noticing.
     watchMembers()
+
+    /*
+     * Everybody already on the presence channel was here before we were.
+     *
+     * `seed` marks the roster the *entry* path hands over, but there is a second way in with no
+     * roster at all: a reload, where useVoice restores the call from the server and the stage
+     * merely reattaches. Without this, the first whisper from each of the six people standing
+     * about would read as six people walking in — a welcome party for a room you never left.
+     */
+    for (const id of useVoice().memberIds.value) knownFaces.add(id)
 
     pruneTimer = setInterval(prune, 4000)
     // The idle heartbeat lives on its own clock rather than in the render loop, because the
@@ -689,7 +825,11 @@ export function useSpacePresence(channelId: number, map: Ref<SpaceMap | null>) {
     persist()
 
     held.clear()
+    // Cleared directly rather than through `keepOnly`: walking out of a room is not everybody
+    // in it vanishing, and seeing it off with twelve puffs of light would be a firework display
+    // for an empty stage. Nobody is drawing this room a frame from now anyway.
     others.value = {}
+    knownFaces.clear()
     me.value = null
     moving.value = false
     placed = false
@@ -736,6 +876,20 @@ export function useSpacePresence(channelId: number, map: Ref<SpaceMap | null>) {
     whisperMove(true)
   }
 
+  /**
+   * Watch people come and go. Returns its own undo — call it when you stop drawing the room.
+   *
+   * A listener rather than a queue of events to poll, because the thing that notices an arrival
+   * (a whisper, a presence event) and the thing that draws one (the stage's frame loop) run on
+   * completely different clocks, and a queue between them would need somebody to remember to
+   * empty it even when nothing is on screen.
+   */
+  function onRoomEvent(listener: (event: RoomEvent) => void): () => void {
+    roomListeners.add(listener)
+
+    return () => roomListeners.delete(listener)
+  }
+
   return {
     me,
     others,
@@ -751,6 +905,7 @@ export function useSpacePresence(channelId: number, map: Ref<SpaceMap | null>) {
     isWalking,
     subscribe,
     unsubscribe,
+    onRoomEvent,
     bindKeys,
     unbindKeys,
     releaseKeys,

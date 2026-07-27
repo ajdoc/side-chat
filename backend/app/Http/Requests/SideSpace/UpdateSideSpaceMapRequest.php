@@ -49,9 +49,9 @@ class UpdateSideSpaceMapRequest extends ServerOwnerRequest
             'zones.*.w' => ['required', 'integer', 'min:1'],
             'zones.*.h' => ['required', 'integer', 'min:1'],
 
-            // Furniture. A decoration carries only what the author chose — where it goes and
-            // what it is. Its size, whether it's solid and what pressing E on it opens are all
-            // read from the catalogue, so there is nothing here for a client to lie about.
+            // Furniture. A decoration carries only what the author chose — where it goes, what
+            // it is and which way it's turned. Its size, whether it's solid and what pressing E
+            // on it opens are all read from the catalogue, so there is nothing here to lie about.
             // `sometimes`, unlike zones: a map saved without it is an unfurnished room rather
             // than a malformed request, which keeps every room built before furniture existed
             // saveable by a client that has never heard of it.
@@ -60,6 +60,7 @@ class UpdateSideSpaceMapRequest extends ServerOwnerRequest
             'objects.*.kind' => ['required', 'string', Rule::in(Decorations::keys())],
             'objects.*.x' => ['required', 'integer', 'min:0'],
             'objects.*.y' => ['required', 'integer', 'min:0'],
+            'objects.*.facing' => ['sometimes', 'string', Rule::in(Decorations::FACINGS)],
 
             'spawn' => ['required', 'array'],
             'spawn.x' => ['required', 'integer', 'min:0'],

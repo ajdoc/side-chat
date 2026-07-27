@@ -251,6 +251,52 @@ export interface Camera {
   height: number
 }
 
+/**
+ * How far the view may be pushed either side of the size a room picks for itself.
+ *
+ * A *multiplier*, not a zoom: the room already chooses a scale from the height it's been given
+ * (a squat panel gets a wider view), and this is how much of that choice a person can overrule.
+ * Bounded on both sides because neither extreme is a view of a room — far enough out and everyone
+ * is three pixels tall, far enough in and you're looking at one desk through a letterbox.
+ */
+export const MIN_ZOOM = 0.6
+export const MAX_ZOOM = 2.5
+
+/** One notch of a zoom button, and the scale a wheel notch applies. */
+export const ZOOM_STEP = 1.2
+
+export function clampZoom(zoom: number, min = MIN_ZOOM, max = MAX_ZOOM): number {
+  return Math.max(min, Math.min(max, zoom))
+}
+
+/**
+ * Scale the view about a point on the canvas, keeping the world under that point still.
+ *
+ * The behaviour everyone expects from a wheel and from a pinch: the thing you are pointing at is
+ * the thing you zoom into. Done by measuring where the point lands in the room before and after
+ * the scale and shifting the camera by the difference — which is exact, and needs no special case
+ * for where the camera happens to be.
+ *
+ * For a camera that follows somebody around (the stage) this is the wrong tool: there, the centre
+ * is *supposed* to be the person, and a wheel that shifted it would fight the follow on the next
+ * frame. That camera scales and stays put; see SideSpaceStage.
+ */
+export function zoomAround(
+  cam: Camera,
+  factor: number,
+  px: number,
+  py: number,
+  min = MIN_ZOOM,
+  max = MAX_ZOOM,
+): void {
+  const before = toWorld(cam, px, py)
+  cam.zoom = clampZoom(cam.zoom * factor, min, max)
+  const after = toWorld(cam, px, py)
+
+  cam.x += before.x - after.x
+  cam.y += before.y - after.y
+}
+
 /** Tile coordinates → canvas pixels. */
 export function toScreen(cam: Camera, x: number, y: number): { x: number, y: number } {
   const size = TILE * cam.zoom

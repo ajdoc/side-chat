@@ -23,6 +23,16 @@ class Message extends Model
         return ['edited_at' => 'datetime', 'pinned_at' => 'datetime', 'decided_at' => 'datetime'];
     }
 
+    /**
+     * A Side Desk app the *sender's* client should open, set only on the ephemeral reply to an
+     * `a!<app>` command (see WidgetService::handleAppCommand).
+     *
+     * Deliberately not a column and never broadcast: launching a floating window is a thing
+     * that happens to one person, in the browser tab that typed the command, once. It rides
+     * out on that one HTTP response ({@see \App\Http\Resources\MessageResource}) and is gone.
+     */
+    public ?string $openApp = null;
+
     public function isSystem(): bool
     {
         return $this->type === 'system';
