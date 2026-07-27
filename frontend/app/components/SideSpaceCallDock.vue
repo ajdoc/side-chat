@@ -38,7 +38,7 @@ const props = defineProps<{
   sheet?: boolean
 }>()
 
-const emit = defineEmits<{ close: [] }>()
+const emit = defineEmits<{ close: [], resize: [PointerEvent] }>()
 
 const { user } = useAuth()
 const {
@@ -69,13 +69,6 @@ const {
  */
 const nearby = computed(() => peers.value.filter(p => !outOfEarshot(p)))
 
-/**
- * Folded up to its header. The rail's own space-saver, and meaningless as a sheet — a sheet you
- * opened on purpose and close with the X.
- */
-const collapsed = ref(false)
-
-watch(() => props.sheet, on => { if (on) collapsed.value = false })
 const stageEl = ref<HTMLElement | null>(null)
 const isFullscreen = ref(false)
 const watching = ref<number | 'self' | null>(null)
@@ -186,9 +179,11 @@ onBeforeUnmount(() => document.removeEventListener('fullscreenchange', onFullscr
 
 <template>
   <aside
-    class="flex min-h-0 flex-col"
+    class="relative flex min-h-0 flex-col"
     :class="sheet ? 'border-l-0 bg-background shadow-xl' : 'border-l bg-card/40'"
   >
+    <!-- Trade width with the room. A rail only: a sheet is as wide as the window. -->
+    <ResizeHandle v-if="!sheet" edge="left" @resize="emit('resize', $event)" />
     <header
       class="flex shrink-0 items-center justify-between gap-2 border-b px-2.5"
       :class="sheet ? 'h-11' : 'h-9'"
@@ -198,26 +193,19 @@ onBeforeUnmount(() => document.removeEventListener('fullscreenchange', onFullscr
         In earshot
         <span class="tabular-nums">{{ nearby.length }}</span>
       </span>
+      <!-- Gone entirely, not folded to a stub: the header button that opened it brings it back. -->
       <button
-        v-if="sheet"
         type="button"
         class="rounded p-1.5 text-muted-foreground transition hover:bg-muted hover:text-foreground"
-        aria-label="Close"
+        :aria-label="sheet ? 'Close' : 'Hide the people panel'"
+        :title="sheet ? 'Close' : 'Hide the people panel'"
         @click="emit('close')"
       >
         <X class="h-4 w-4" />
       </button>
-      <button
-        v-else
-        type="button"
-        class="rounded px-1.5 py-0.5 text-[11px] text-muted-foreground transition hover:bg-muted hover:text-foreground"
-        @click="collapsed = !collapsed"
-      >
-        {{ collapsed ? 'Show' : 'Hide' }}
-      </button>
     </header>
 
-    <div v-if="!collapsed" class="flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto p-2">
+    <div class="flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto p-2">
       <!-- Whatever's being shared near you. -->
       <section v-if="stage" class="flex shrink-0 flex-col gap-1.5">
         <div

@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import {
   AudioLines,
+  ChevronLeft,
   Headphones,
   HeadphoneOff,
   Loader2,
@@ -23,6 +24,7 @@ import {
   Video,
   VideoOff,
 } from 'lucide-vue-next'
+import { useLocalStorage } from '@vueuse/core'
 import type { AmongUsState, Channel, SpaceInteraction, VoiceParticipant } from '~/types'
 import type { Camera, MapTheme, Occupant } from '~/lib/spaceMapEngine'
 import type { SpaceObject } from '~/lib/spaceDecor'
@@ -541,6 +543,30 @@ const showMore = ref(false)
  * is still there underneath the moment you close it.
  */
 const showPeople = ref(false)
+
+/**
+ * The same panel on a wide window, where it's a rail beside the room — open unless you've said
+ * otherwise, and remembered, because whether you want faces beside the room is a standing
+ * preference rather than a per-visit one. Kept apart from `showPeople` so closing the sheet on a
+ * phone doesn't also decide the rail is unwanted on the desktop.
+ */
+const peopleOpen = useLocalStorage('space-people-open', true)
+
+/**
+ * How wide that rail is, dragged by its left border and remembered — the faces and their sliders
+ * are worth more room on a big screen than the 224px it used to be fixed at.
+ */
+const { width: peopleWidth, startResize: startPeopleResize } = useResizable(
+  'space-people', 224, { min: 180, max: 560, edge: 'left' },
+)
+
+/** Whichever of the two is in charge at this width — one thing for the template to ask. */
+const peopleShowing = computed(() => (narrow.value ? showPeople.value : peopleOpen.value))
+
+function togglePeople() {
+  if (narrow.value) showPeople.value = !showPeople.value
+  else peopleOpen.value = !peopleOpen.value
+}
 
 watch(narrow, () => {
   showMore.value = false
@@ -1733,21 +1759,22 @@ watch(inThisRoom, (now) => {
           <component :is="micOpen ? Mic : MicOff" class="h-4 w-4" />
         </button>
 
-        <!-- The way to everyone's cameras, screens and volumes, which on a wide window is simply
-             a panel on the right and needs no button at all. -->
+        <!-- The way to everyone's cameras, screens and volumes: a sheet on a narrow window, the
+             rail beside the room on a wide one. Either way this is the switch, so a panel you've
+             put away has somewhere obvious to come back from. -->
         <button
-          v-if="narrow && inThisRoom"
+          v-if="inThisRoom"
           type="button"
           class="relative rounded p-1.5 transition-colors hover:bg-muted"
-          :class="showPeople ? 'text-primary' : 'text-muted-foreground'"
-          :aria-expanded="showPeople"
+          :class="peopleShowing ? 'text-primary' : 'text-muted-foreground'"
+          :aria-expanded="peopleShowing"
           title="Who's in earshot — cameras, screens and volumes"
-          @click="showPeople = !showPeople"
+          @click="togglePeople"
         >
           <Users class="h-4 w-4" />
           <!-- Somebody put a screen or a track on while you were looking at the room. -->
           <span
-            v-if="someoneSharing && !showPeople"
+            v-if="someoneSharing && !peopleShowing"
             class="absolute right-0.5 top-0.5 h-2 w-2 rounded-full bg-primary ring-2 ring-background"
           />
         </button>
@@ -2155,15 +2182,33 @@ watch(inThisRoom, (now) => {
             @forfeit="onForfeit"
           />
         </template>
+
+        <!-- The way back, on the edge the panel went out by. The header button does the same
+             thing, but a rail you've hidden should be reachable from where it used to be rather
+             than only from an icon three feet away. Narrow windows have the sheet's own button. -->
+        <button
+          v-if="inThisRoom && !narrow && !peopleShowing"
+          type="button"
+          class="absolute right-0 top-1/2 z-20 flex -translate-y-1/2 items-center gap-1 rounded-l-md border border-r-0 bg-background/90 py-2 pl-1.5 pr-1 text-[11px] text-muted-foreground shadow-sm transition hover:bg-muted hover:text-foreground"
+          title="Show who's in earshot"
+          @click="togglePeople"
+        >
+          <ChevronLeft class="h-3.5 w-3.5" />
+          <span class="[writing-mode:vertical-rl]">In earshot</span>
+          <!-- Somebody's sharing behind the panel you put away. -->
+          <span v-if="someoneSharing" class="absolute -left-1 top-1 h-2 w-2 rounded-full bg-primary ring-2 ring-background" />
+        </button>
       </div>
 
       <!-- Cameras, screens and the volume of everyone near you. -->
       <SideSpaceCallDock
-        v-if="inThisRoom && (!narrow || showPeople)"
-        :class="narrow ? 'absolute inset-0 z-30' : 'w-56 shrink-0'"
+        v-if="inThisRoom && peopleShowing"
+        :class="narrow ? 'absolute inset-0 z-30' : 'shrink-0'"
+        :style="narrow ? undefined : { width: `${peopleWidth}px` }"
         :can-moderate="canModerate"
         :sheet="narrow"
-        @close="showPeople = false"
+        @close="togglePeople"
+        @resize="startPeopleResize"
       />
     </div>
 
