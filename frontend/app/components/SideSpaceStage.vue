@@ -661,10 +661,31 @@ function watchProximity() {
     knownMembers,
     setPeerProximity,
     setPeerInRange,
-    fireEffect,
+    fireEffect: announceOnce,
     meeting: () => gameMeeting.value,
     quiet: () => gameRunning.value,
   })
+}
+
+/**
+ * The room's configured fanfare, minus the news it has already given.
+ *
+ * Two things now notice people coming and going, and they are *not* the same event: the room
+ * draws a puff of light where somebody walked in, and proximity fires the channel's chosen
+ * effect when somebody comes within earshot. Usually those are minutes apart — someone crosses
+ * the room to talk to you — and both are worth having.
+ *
+ * But everybody arrives at the same entrance, so if you happen to be standing near it the two
+ * land within a frame of each other: a puff at their feet and a screenful of fireworks about the
+ * same person. So an arrival the room has *just* announced doesn't get announced again. Reading
+ * it off the live effects list is exact rather than approximate — that list is precisely "who the
+ * room has said something about lately", and it empties itself.
+ */
+function announceOnce(phase: 'join' | 'leave', id: number, name: string) {
+  const kind = phase === 'join' ? 'arrive' : 'depart'
+  if (effects.some(e => e.id === id && e.kind === kind)) return
+
+  fireEffect(phase, id, name)
 }
 
 // --- using the furniture ---

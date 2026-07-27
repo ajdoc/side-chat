@@ -547,14 +547,14 @@ const HAIR_ART: Record<HairKind, Record<SpriteDir, string[]>> = {
  * What it *doesn't* replace is the rest of the look: your skin, hair and shirt stay stored
  * underneath, so taking a costume off puts you back rather than a stranger with default hair.
  *
- * The designs are ours. A figure in a dark hooded robe and a painted mask, and a suit of white
- * powered armour with horns, are both older than anything either one might remind you of — the
- * genre is borrowed in the same way the trainer sprite borrows its chunky outline, and no
- * character is copied.
+ * Every design here is original — none copies a specific copyrighted character. Each borrows a
+ * broad genre trope (a hooded robe and mask, powered armour, a masked mercenary suit, a giant
+ * grinning figure, a color-blocked hero suit, a cactus) the same way the trainer sprite borrows
+ * its chunky outline, without reproducing anyone's particular design.
  */
 
-export type CostumeKind = 'none' | 'cantor' | 'sentinel'
-export const COSTUMES: CostumeKind[] = ['none', 'cantor', 'sentinel']
+export type CostumeKind = 'none' | 'cantor' | 'sentinel' | 'merc' | 'cactus' | 'guard' | 'colossus'
+export const COSTUMES: CostumeKind[] = ['none', 'cantor', 'sentinel', 'merc', 'cactus', 'guard', 'colossus']
 
 interface Costume {
   label: string
@@ -740,9 +740,342 @@ const SENTINEL: Costume = {
   },
 }
 
+/**
+ * The Mercenary: a black-and-red masked suit, black straps crossing the chest, black eye lenses.
+ *
+ * Slots: `M` suit red, `m` its shading, `k` outline/black, `K` straps, `W` eye lenses.
+ */
+const MERC: Costume = {
+  label: 'Crimson Mercenary',
+  blurb: 'A quip-cracking merc in a red-and-black suit, twin blades sheathed on his back',
+  covered: true,
+  paint: {
+    k: '#151318',
+    M: '#c9403c',
+    m: '#7c211f',
+    W: '#161616',
+    K: '#1c1a1f',
+  },
+  body: {
+    down: [
+      '................',
+      '.....kkkkkk.....',
+      '....kMMMMMMk....',
+      '...kMMmmmmMMk...',
+      '...kMmmmmmmMk...',
+      '...kMmWmmWmMk...',
+      '...kMmWWWWmMk...',
+      '...kMmmWWmmMk...',
+      '....kMmmmmMk....',
+      '.....kMMMMk.....',
+      '...kMMKKKKMMk...',
+      '..kMMMKKKKMMMk..',
+      '..kMMMMMMMMMMk..',
+      '...kMMMMMMMMk...',
+    ],
+    up: [
+      '................',
+      '.....kkkkkk.....',
+      '....kMMMMMMk....',
+      '...kMMMMMMMMk...',
+      '...kMMMMMMMMk...',
+      '...kMMMMMMMMk...',
+      '...kMMMMMMMMk...',
+      '...kMMMMMMMMk...',
+      '....kMMMMMMk....',
+      '.....kMMMMk.....',
+      '...kMMMMMMMMk...',
+      '..kMMMMMMMMMMk..',
+      '..kMMMMMMMMMMk..',
+      '...kMMMMMMMMk...',
+    ],
+    right: [
+      '................',
+      '.....kkkkkk.....',
+      '....kMMMMMMk....',
+      '...kMMmmmmMk....',
+      '...kMmmmmmWk....',
+      '...kMmmWWmmk....',
+      '...kMmmmmmmk....',
+      '...kMMmmmmMk....',
+      '....kMMMMMk.....',
+      '.....kMMMMk.....',
+      '....kMMKKMMk....',
+      '...kMMMKKMMMk...',
+      '...kMMMMMMMMk...',
+      '....kMMMMMMk....',
+    ],
+  },
+  legs: {
+    down: [
+      ['...kMMMookMMMk...', '....oKKooKKo....'],
+      ['...kMMMMMMMMk...', '...oKKo..oKKo...'],
+    ],
+    up: [
+      ['...kMMMookMMMk...', '....oKKooKKo....'],
+      ['...kMMMMMMMMk...', '...oKKo..oKKo...'],
+    ],
+    right: [
+      ['....kMMMMMk.....', '.....oKKKo......'],
+      ['...kMMMMMk......', '...oKKo.oKKo....'],
+    ],
+  },
+}
+
+/**
+ * The Prickly Pear: a round green cactus suit with a little pink flower on top.
+ *
+ * Slots: `G` cactus green, `g` its shadow/outline, `m` highlight band, `F` flower, `Y` a darker
+ * ring standing in for the ridged base.
+ */
+const CACTUS: Costume = {
+  label: 'Prickly Pear',
+  blurb: 'A round green cactus suit with a little pink flower on top',
+  covered: true,
+  paint: {
+    g: '#2f5c34',
+    G: '#4f9a52',
+    m: '#3f7c45',
+    F: '#e2739e',
+    Y: '#3a6b3d',
+  },
+  body: {
+    down: [
+      '................',
+      '.....gggggg.....',
+      '....gGGGGGGg....',
+      '...gGGmmmmGGg...',
+      '...gGmmmmmmGg...',
+      '...gGmFmmFmGg...',
+      '...gGmFFFFmGg...',
+      '...gGmmFFmmGg...',
+      '....gGmmmmGg....',
+      '.....gGGGGg.....',
+      '...gGGYYYYGGg...',
+      '..gGGGYYYYGGGg..',
+      '..gGGGGGGGGGGg..',
+      '...gGGGGGGGGg...',
+    ],
+    up: [
+      '................',
+      '.....gggggg.....',
+      '....gGGGGGGg....',
+      '...gGGGGGGGGg...',
+      '...gGGGGGGGGg...',
+      '...gGGGGGGGGg...',
+      '...gGGGGGGGGg...',
+      '...gGGGGGGGGg...',
+      '....gGGGGGGg....',
+      '.....gGGGGg.....',
+      '...gGGGGGGGGg...',
+      '..gGGGGGGGGGGg..',
+      '..gGGGGGGGGGGg..',
+      '...gGGGGGGGGg...',
+    ],
+    right: [
+      '................',
+      '.....gggggg.....',
+      '....gGGGGGGg....',
+      '...gGGmmmmGg....',
+      '...gGmmmmmFg....',
+      '...gGmmFFmmg....',
+      '...gGmmmmmmg....',
+      '...gGGmmmmGg....',
+      '....gGGGGGg.....',
+      '.....gGGGGg.....',
+      '....gGGYYGGg....',
+      '...gGGGYYGGGg...',
+      '...gGGGGGGGGg...',
+      '....gGGGGGGg....',
+    ],
+  },
+  legs: {
+    down: [
+      ['...gGGGooGGGg...', '....oYYooYYo....'],
+      ['...gGGGGGGGGg...', '...oYYo..oYYo...'],
+    ],
+    up: [
+      ['...gGGGooGGGg...', '....oYYooYYo....'],
+      ['...gGGGGGGGGg...', '...oYYo..oYYo...'],
+    ],
+    right: [
+      ['....gGGGGGg.....', '.....oYYYo......'],
+      ['...gGGGGGg......', '...oYYo.oYYo....'],
+    ],
+  },
+}
+
+/**
+ * The Color Guard: a sculpted helmet visor over a bold color-blocked hero suit.
+ *
+ * Slots: `V` suit, `m` visor shading, `S` visor bright, `W` belt/trim, `k` outline.
+ */
+const GUARD: Costume = {
+  label: 'Color Guard',
+  blurb: 'A sculpted helmet visor and a bold color-blocked hero suit',
+  covered: true,
+  paint: {
+    k: '#141316',
+    V: '#d1332f',
+    m: '#8a1f1c',
+    S: '#eef1f5',
+    W: '#f2f2ec',
+  },
+  body: {
+    down: [
+      '................',
+      '.....kkkkkk.....',
+      '....kVVVVVVk....',
+      '...kVVSSSSVVk...',
+      '...kVSSSSSSVk...',
+      '...kVSmSSmSVk...',
+      '...kVSmmmmSVk...',
+      '...kVSSmmSSVk...',
+      '....kVSSSSVk....',
+      '.....kVVVVk.....',
+      '...kVVWWWWVVk...',
+      '..kVVVWWWWVVVk..',
+      '..kVVVVVVVVVVk..',
+      '...kVVVVVVVVk...',
+    ],
+    up: [
+      '................',
+      '.....kkkkkk.....',
+      '....kVVVVVVk....',
+      '...kVVVVVVVVk...',
+      '...kVVVVVVVVk...',
+      '...kVVVVVVVVk...',
+      '...kVVVVVVVVk...',
+      '...kVVVVVVVVk...',
+      '....kVVVVVVk....',
+      '.....kVVVVk.....',
+      '...kVVVVVVVVk...',
+      '..kVVVVVVVVVVk..',
+      '..kVVVVVVVVVVk..',
+      '...kVVVVVVVVk...',
+    ],
+    right: [
+      '................',
+      '.....kkkkkk.....',
+      '....kVVVVVVk....',
+      '...kVVSSSSVk....',
+      '...kVmmmmmSk....',
+      '...kVmmSSmmk....',
+      '...kVmmmmmmk....',
+      '...kVVmmmmVk....',
+      '....kVVVVVk.....',
+      '.....kVVVVk.....',
+      '....kVVWWVVk....',
+      '...kVVVWWVVVk...',
+      '...kVVVVVVVVk...',
+      '....kVVVVVVk....',
+    ],
+  },
+  legs: {
+    down: [
+      ['...kVVVooVVVk...', '....oWWooWWo....'],
+      ['...kVVVVVVVVk...', '...oWWo..oWWo...'],
+    ],
+    up: [
+      ['...kVVVooVVVk...', '....oWWooWWo....'],
+      ['...kVVVVVVVVk...', '...oWWo..oWWo...'],
+    ],
+    right: [
+      ['....kVVVVVk.....', '.....oWWWo......'],
+      ['...kVVVVVk......', '...oWWo.oWWo....'],
+    ],
+  },
+}
+
+/**
+ * The Colossal Guardian: a towering skin-toned giant with two eyes, black hair, and a wide grin.
+ *
+ * Slots: `T` skin, `t` its shadow/outline, `W` teeth, `A` hair, `e` eyes.
+ */
+const COLOSSUS: Costume = {
+  label: 'Colossal Guardian',
+  blurb: 'A towering skin-toned giant with a wide, toothy grin',
+  covered: true,
+  paint: {
+    t: '#8a6a52',
+    T: '#d9b48f',
+    W: '#f5efe2',
+    A: '#2a2620',
+    e: '#1c1a1f',
+  },
+  body: {
+    down: [
+      '................',
+      '.....oAAAAo.....',
+      '....oAAAAAAo....',
+      '...tTTTTTTTTt...',
+      '...tTTteteTTt...',
+      '...tTtWWWWtTt...',
+      '...tTtWWWWtTt...',
+      '...tTTttttTTt...',
+      '....tTTTTTTt....',
+      '.....tTTTTt.....',
+      '...tTTTTTTTTt...',
+      '..tTTTTTTTTTTt..',
+      '..tTTTTTTTTTTt..',
+      '...tTTTTTTTTt...',
+    ],
+    up: [
+      '................',
+      '.....oAAAAo.....',
+      '....oAAAAAAo....',
+      '...tTTTTTTTTt...',
+      '...tTTTTTTTTt...',
+      '...tTTTTTTTTt...',
+      '...tTTTTTTTTt...',
+      '...tTTTTTTTTt...',
+      '....tTTTTTTt....',
+      '.....tTTTTt.....',
+      '...tTTTTTTTTt...',
+      '..tTTTTTTTTTTt..',
+      '..tTTTTTTTTTTt..',
+      '...tTTTTTTTTt...',
+    ],
+    right: [
+      '................',
+      '.....oAAAAo.....',
+      '....oAAAAAAo....',
+      '...tTTTTTTTTt...',
+      '...tTTtettTt....',
+      '...tTtWWWtTt....',
+      '...tTtWWWtTt....',
+      '...tTTttttTt....',
+      '....tTTTTTt.....',
+      '.....tTTTTt.....',
+      '....tTTTTTTt....',
+      '...tTTTTTTTTt...',
+      '...tTTTTTTTTt...',
+      '....tTTTTTTt....',
+    ],
+  },
+  legs: {
+    down: [
+      ['...tTTTooTTTt...', '....oTTooTTo....'],
+      ['...tTTTTTTTTt...', '...oTTo..oTTo...'],
+    ],
+    up: [
+      ['...tTTTooTTTt...', '....oTTooTTo....'],
+      ['...tTTTTTTTTt...', '...oTTo..oTTo...'],
+    ],
+    right: [
+      ['....tTTTTTt.....', '.....oTTTo......'],
+      ['...tTTTTTt......', '...oTTo.oTTo....'],
+    ],
+  },
+}
+
 const COSTUME_ART: Record<Exclude<CostumeKind, 'none'>, Costume> = {
   cantor: CANTOR,
   sentinel: SENTINEL,
+  merc: MERC,
+  cactus: CACTUS,
+  guard: GUARD,
+  colossus: COLOSSUS,
 }
 
 /** Names and one-liners for the picker, including the one for wearing nothing. */
@@ -750,6 +1083,10 @@ export const COSTUME_META: Record<CostumeKind, { label: string, blurb: string }>
   none: { label: 'Just you', blurb: 'Your own face, hair and shirt' },
   cantor: { label: CANTOR.label, blurb: CANTOR.blurb },
   sentinel: { label: SENTINEL.label, blurb: SENTINEL.blurb },
+  merc: { label: MERC.label, blurb: MERC.blurb },
+  cactus: { label: CACTUS.label, blurb: CACTUS.blurb },
+  guard: { label: GUARD.label, blurb: GUARD.blurb },
+  colossus: { label: COLOSSUS.label, blurb: COLOSSUS.blurb },
 }
 
 /** The costume being worn, or null for none — the one place the `none` string is unpacked. */
