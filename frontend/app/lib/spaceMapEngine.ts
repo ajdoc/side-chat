@@ -108,6 +108,16 @@ export interface SpaceMap {
   /** The furniture standing on the ground. Kinds and positions only — see spaceDecor. */
   objects: SpaceObject[]
   spawn: { x: number, y: number }
+  /**
+   * Who is responsible for each room, and which doors are shut to whom.
+   *
+   * Kept out of the saved document on the server — any member may save a map, so a lock stored
+   * in it would be a lock any member could delete by rebuilding the room. They arrive *with* the
+   * map because the browser needs them at frame rate to decide whether a door swings open, and
+   * for whom. See lib/spaceDoors.ts, and the migration that explains the split.
+   */
+  rooms?: Array<{ zone_id: string, owner_id: number | null, owner: string | null }>
+  locks?: Array<{ object_id: string, zone_id: string | null, allowed: number[] }>
   updated_by?: string | null
   updated_at?: string
 }
@@ -130,6 +140,14 @@ export interface Occupant {
    * and a pet that arrived over the wire would cost as much traffic as a second person.
    */
   petAt?: { x: number, y: number, facing: Facing }
+  /**
+   * The id of the piece of furniture they're sitting on, or null if they're on their feet.
+   *
+   * Whispered with the position rather than derived from it, because it can't be derived: a
+   * sitter is standing on a couch's tile, and so is somebody who has walked onto a stool. The
+   * difference is intent, and only their own client knows it.
+   */
+  seatedOn?: string | null
 }
 
 // --- the grid ---

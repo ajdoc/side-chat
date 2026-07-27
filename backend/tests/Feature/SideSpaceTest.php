@@ -15,7 +15,7 @@ use Laravel\Passport\Passport;
 /*
  * A Side Space is a channel you walk around in. Almost everything about it — messages, threads,
  * the call — is the existing stack unchanged, so what's worth testing here is the part that is
- * genuinely new: that a room gets built when the channel is, that only its owner can rebuild it,
+ * genuinely new: that a room gets built when the channel is, that any member may rebuild it,
  * that a malformed room is refused, and that where you were standing outlives your tab.
  */
 
@@ -156,16 +156,31 @@ it('lets the server owner rebuild the room and tells everyone in it', function (
     Event::assertDispatched(SideSpaceMapUpdated::class);
 });
 
-it('forbids a plain member from rebuilding the room', function () {
+it('lets a plain member rebuild the room too', function () {
+    Event::fake([SideSpaceMapUpdated::class]);
+
     [, $server, $channel] = ownerWithSpaceChannel();
     $member = User::factory()->create();
     $server->members()->attach($member->id, ['role' => 'member']);
 
     Passport::actingAs($member);
 
+    $this->putJson("/api/channels/{$channel->id}/space/map", validMapPayload())->assertOk();
+
+    // Rebuilt, and credited: a shared room records who last laid its floor.
+    expect($channel->spaceMap()->sole()->width)->toBe(10)
+        ->and($channel->spaceMap()->sole()->updated_by)->toBe($member->id);
+
+    Event::assertDispatched(SideSpaceMapUpdated::class);
+});
+
+it('still refuses a stranger to the server', function () {
+    [, , $channel] = ownerWithSpaceChannel();
+
+    Passport::actingAs(User::factory()->create());
+
     $this->putJson("/api/channels/{$channel->id}/space/map", validMapPayload())->assertForbidden();
 
-    // Untouched — the room they're standing in is still the one they were standing in.
     expect($channel->spaceMap()->sole()->width)->toBe(30);
 });
 

@@ -7,6 +7,7 @@ use App\Support\SideSpace\Tiles;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Database\Eloquent\Relations\HasMany;
 
 /**
  * A Side Space channel's map: the room people walk around in.
@@ -76,6 +77,18 @@ class SideSpaceMap extends Model
     public function channel(): BelongsTo
     {
         return $this->belongsTo(Channel::class);
+    }
+
+    /** Who is responsible for each of this map's rooms. Only owned zones have a row. */
+    public function rooms(): HasMany
+    {
+        return $this->hasMany(SideSpaceRoom::class);
+    }
+
+    /** The locked doors. A door with no row here is one anybody may walk through. */
+    public function locks(): HasMany
+    {
+        return $this->hasMany(SideSpaceLock::class);
     }
 
     /** Who last saved it. Null once they've left the server. */

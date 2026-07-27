@@ -15,6 +15,9 @@ import type { CanvasItem, CanvasItemKind, Widget } from '~/types'
 export function useCanvas(basePath: string, streamName: string) {
   const api = useApi()
   const echo: any = useNuxtApp().$echo
+  // Held for as long as this view is on screen, so the surface's own message stream
+  // leaving the channel can't take our listeners with it. See useEchoStream.
+  const { hold, release } = useEchoStream()
 
   const items = ref<CanvasItem[]>([])
 
@@ -55,7 +58,7 @@ export function useCanvas(basePath: string, streamName: string) {
     for (const it of items.value) {
       const cid = it.widget?.channel_id
       if (cid == null || widgetChannels.has(cid)) continue
-      const ch = echo.private(`channel.${cid}`)
+      const ch = hold(`channel.${cid}`)
       ch.listen('.WidgetUpdated', onWidgetUpdated)
       widgetChannels.set(cid, ch)
     }
@@ -118,7 +121,7 @@ export function useCanvas(basePath: string, streamName: string) {
 
   function subscribe() {
     if (!echo) return
-    channel = echo.private(streamName)
+    channel = hold(streamName)
     channel
       .listen('.CanvasItemSaved', (it: CanvasItem) => {
         const idx = items.value.findIndex(x => x.id === it.id)
@@ -136,8 +139,12 @@ export function useCanvas(basePath: string, streamName: string) {
       ?.stopListening('.CanvasItemSaved')
       .stopListening('.CanvasItemRemoved')
     channel = null
+    release(streamName)
     // Drop only our WidgetUpdated handler from each channel — the timeline still listens there.
-    for (const ch of widgetChannels.values()) ch.stopListening('.WidgetUpdated', onWidgetUpdated)
+    for (const [cid, ch] of widgetChannels) {
+      ch.stopListening('.WidgetUpdated', onWidgetUpdated)
+      release(`channel.${cid}`)
+    }
     widgetChannels.clear()
   }
 

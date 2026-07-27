@@ -29,8 +29,15 @@ const isVoice = computed(() => channel.value?.type === 'voice')
 // toolbar and its dock down to a phone's width itself. See SideSpaceStage.
 const { narrow } = useNavDrawer()
 const isSpace = computed(() => channel.value?.type === 'space')
-/** Only the server's owner may rebuild a room; the API refuses everybody else besides. */
-const canEditMap = computed(() => !!server.value?.is_owner)
+/**
+ * Anybody who belongs here may build here.
+ *
+ * A Side Space is a room a group makes together, so the walls are open to the same people the
+ * furniture always was — see UpdateSideSpaceMapRequest, which is the gate that actually holds.
+ * Being *in* the server is the whole of the requirement, and reaching this page already means
+ * that, so this is only false while the server itself is still loading.
+ */
+const canEditMap = computed(() => !!server.value)
 
 /**
  * Whether the room has the window to itself, with the conversation folded away.

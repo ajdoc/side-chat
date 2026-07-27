@@ -9,6 +9,7 @@ import type { MapPreset } from '~/composables/useSpacePresets'
 import {
   TILE,
   TILE_BRUSHES,
+  VOID,
   ZOOM_STEP,
   blankTiles,
   drawMap,
@@ -46,12 +47,16 @@ import { Label } from '~/components/ui/label'
  * it there.
  */
 /**
- * `mode` is the owner/member split made visible.
+ * `mode` is how much of the room this session is editing — no longer who is editing it.
  *
- *   - `full` — the owner's editor: ground, furniture, rooms, the entrance, the size. Saves the
- *     whole map, and is the only way any of the geometry changes.
- *   - `decor` — a member decorating: furniture and nothing else. The ground shows through as a
- *     backdrop you can't paint, and Save writes only the furniture, through the member endpoint.
+ *   - `full` — the whole room: ground, furniture, rooms, the entrance, the size. Saves the map
+ *     entire, and is the only way any of the geometry changes.
+ *   - `decor` — the furniture and nothing else. The ground shows through as a backdrop you can't
+ *     paint, and Save writes only the furniture, through the furniture-only endpoint.
+ *
+ * Both are open to any member now; the modes stayed because "I want to move a couch" and "I want
+ * to rebuild the room" are still different jobs, and offering the second when somebody asked for
+ * the first is how rooms get rebuilt by accident.
  *
  * One component rather than two because the *canvas* — how a room is drawn, how a piece previews,
  * how placement is checked — is identical either way. All `mode` changes is which tools appear
@@ -66,14 +71,19 @@ const { save, saveObjects } = useSpaceMap(props.channelId)
 
 const isDecorMode = computed(() => props.mode === 'decor')
 
-type Tool = 'select' | 'tile' | 'decor' | 'spawn' | 'zone' | 'erase-zone' | 'erase-decor'
+type Tool = 'select' | 'tile' | 'decor' | 'spawn' | 'zone' | 'erase-zone' | 'erase-decor' | 'erase-tile'
 
 /** The full toolbox. In decorate mode only the furniture tools survive — see {@link TOOLS}. */
 const ALL_TOOLS: { id: Tool, label: string, icon: any, hint: string, decor?: boolean }[] = [
   { id: 'select', label: 'Move things', icon: MousePointer2, hint: 'Pick a thing up, turn it, or take it away', decor: true },
   { id: 'spawn', label: 'Entrance', icon: DoorOpen, hint: 'Where people arrive' },
   { id: 'zone', label: 'Room', icon: SquareDashed, hint: 'Drag out a sealed room — inside hears inside only' },
-  { id: 'erase-zone', label: 'Erase room', icon: Eraser, hint: 'Click a room to remove it' },
+  // Taking the ground away is its own tool rather than only the last swatch in the Ground row.
+  // It was reachable there — "Nothing" paints the void — but a transparent square at the end of
+  // twelve coloured ones is not where anybody looks for an eraser, and rubbing a wall out is a
+  // dragged gesture like painting one, not a colour you happen to choose.
+  { id: 'erase-tile', label: 'Erase ground', icon: Eraser, hint: 'Drag to rub out wall and floor, back to nothing' },
+  { id: 'erase-zone', label: 'Erase room', icon: SquareDashed, hint: 'Click a room to remove it' },
   { id: 'erase-decor', label: 'Remove furniture', icon: Trash2, hint: 'Click a thing to take it away', decor: true },
 ]
 
@@ -89,6 +99,8 @@ const FACING_LABELS: Record<DecorFacing, string> = {
 
 /** Furniture, grouped the way somebody furnishing a room thinks about it. */
 const DECOR_GROUPS: { title: string, kinds: string[] }[] = [
+  // Doors lead, because a door is the first thing you place after a wall: it's the hole in it.
+  { title: 'Ways through', kinds: ['door', 'gate'] },
   { title: 'Things that do something', kinds: ['speaker', 'tv', 'computer', 'arcade', 'racer', 'easel', 'noticeboard'] },
   // The Side Desk's own apps, standing in the room: the whiteboard *is* the Board tab.
   { title: 'Your Side Desk, in the room', kinds: ['whiteboard', 'lectern', 'planner', 'filecabinet'] },
@@ -106,7 +118,7 @@ const zones = ref<SpaceZone[]>(props.map.zones.map(z => ({ ...z })))
 const objects = ref<SpaceObject[]>((props.map.objects ?? []).map(o => ({ ...o })))
 const spawn = ref({ ...props.map.spawn })
 
-// Decorate mode has no ground brush, so it opens on the furniture; the owner opens on the wall.
+// Decorate mode has no ground brush, so it opens on the furniture; full mode opens on the wall.
 const tool = ref<Tool>(props.mode === 'decor' ? 'decor' : 'tile')
 /** Which tile character the ground brush paints, and which kind the furniture brush places. */
 const tile = ref<string>('#')
@@ -214,6 +226,10 @@ function paintAt(px: number, py: number) {
 
   if (tool.value === 'select') return
   if (tool.value === 'tile') return setTile(x, y, tile.value)
+  // Rubbing out is painting the void: solid, drawn as nothing, and the character a room's
+  // outside is already made of. So an erased wall is not a hole in the map — it's the map
+  // ending there, which is what somebody rubbing out a wall means.
+  if (tool.value === 'erase-tile') return setTile(x, y, VOID)
   if (tool.value === 'decor') return placeDecor(x, y)
 
   if (tool.value === 'spawn') {
@@ -1027,7 +1043,7 @@ onBeforeUnmount(() => {
         class="w-64 shrink-0 space-y-4 overflow-y-auto border-r bg-background p-3"
         :class="narrow ? 'absolute inset-y-0 left-0 z-20 max-w-[85%] shadow-xl' : undefined"
       >
-        <!-- The ground. Owner only — a member decorating can't repaint the floor. -->
+        <!-- The ground. Absent in decorate mode, which is the furniture layer alone. -->
         <div v-if="!isDecorMode" class="space-y-1.5">
           <Label class="text-xs text-muted-foreground">Ground</Label>
           <div class="grid grid-cols-4 gap-1.5">
@@ -1040,9 +1056,12 @@ onBeforeUnmount(() => {
               :title="b.hint"
               @click="chooseTile(b.tile)"
             >
+              <!-- A transparent swatch shows as a chequer, the way every editor draws "no
+                   colour here" — an empty outlined square just reads as white. -->
               <span
-                class="h-6 w-6 rounded-sm border"
-                :style="{ backgroundColor: b.swatch }"
+                class="h-6 w-6 rounded-sm border bg-[length:8px_8px]"
+                :class="b.swatch === 'transparent' ? 'bg-[linear-gradient(45deg,var(--muted)_25%,transparent_25%,transparent_75%,var(--muted)_75%),linear-gradient(45deg,var(--muted)_25%,transparent_25%,transparent_75%,var(--muted)_75%)] bg-[position:0_0,4px_4px]' : undefined"
+                :style="b.swatch === 'transparent' ? undefined : { backgroundColor: b.swatch }"
               />
               <span class="text-[9px] leading-none">{{ b.label }}</span>
             </button>

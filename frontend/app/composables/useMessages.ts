@@ -15,9 +15,9 @@ export function useMessages() {
   // Likewise for the Pinned tab: this composable owns the channel stream, so it's the one
   // that folds a pin toggle into the shared list. See usePins().
   const { toggle: togglePinRequest, apply: applyPin } = usePins()
-  // The docked music player listens on this same channel and outlives the timeline — see
-  // unsubscribe() for why it has to be handed its subscription back.
-  const { rejoin: rejoinPinnedMusic } = useMusicPin()
+  // The timeline is no longer the only thing listening on `channel.{id}` — a floating window
+  // or the pinned music player may still need it after we walk away. See unsubscribe().
+  const { hold, release } = useEchoStream()
   // `a!<app>` opens a Side Desk app on the app-level shelf — see openDeskApp below.
   const { open: openFloating } = useFloatingWindows()
 
@@ -203,74 +203,98 @@ export function useMessages() {
     removeMessage(id)
   }
 
-  function subscribe(id: number) {
-    echo.private(`channel.${id}`)
-      .listen('.MessageSent', (m: Message) => {
-        pushUnique(m)
-        // A widget card arrives as a reference (no state) — pull its live state in.
-        if (m.type === 'widget' && m.widget && m.widget.state == null) refreshWidget(m.widget.id)
-      })
-      .listen('.MessageUpdated', (m: Message) => replaceMessage(m))
-      .listen('.MessageDeleted', (p: { id: number }) => removeMessage(p.id))
-      .listen('.ReactionToggled', (p: { message_id: number, reactions: Reaction[] }) => {
-        patchMessage(p.message_id, { reactions: p.reactions })
-      })
-      // A comment ("word-reaction") was posted or removed — refresh the chips. We receive
-      // our own broadcast too, so this is also how the actor's chips update.
-      .listen('.CommentPosted', (p: { message_id: number, comments: CommentSummary[] }) => {
-        patchMessage(p.message_id, { comments: p.comments })
-      })
-      // A link finished unfurling on the queue — drop the card in under the message.
-      .listen('.MessagePreviewsUpdated', (p: { message_id: number, link_previews: LinkPreview[] }) => {
-        patchMessage(p.message_id, { link_previews: p.link_previews })
-      })
-      // A widget moved (track changed, card crossed a column). The broadcast is a reference
-      // only, so fetch the fresh state and re-sync every card of it.
-      .listen('.WidgetUpdated', (ref: { id: number }) => refreshWidget(ref.id))
-      // Someone pinned or unpinned something. Patch the timeline (the pin icon) and the
-      // Pinned tab. The message may live in a thread we've never opened, which is why the
-      // event carries the whole thing rather than an id — patchMessage simply won't match.
-      .listen('.MessagePinToggled', (p: { pinned: boolean, message: Message }) => {
-        patchMessage(p.message.id, { pinned: p.pinned, pinned_at: p.message.pinned_at })
-        applyPin(p.pinned, p.message)
-      })
-      .listen('.ThreadCreated', (t: Thread) => {
-        setStartedThread(t.message_id, { id: t.id, name: t.name, replies_count: t.replies_count ?? 0 })
-        if (!threads.value.some(x => x.id === t.id)) threads.value = [t, ...threads.value]
-      })
-      .listen('.ThreadActivity', (a: { thread_id: number, message_id: number | null, name: string, replies_count: number }) => {
-        setStartedThread(a.message_id, { id: a.thread_id, name: a.name, replies_count: a.replies_count })
-        bumpThreadCount(a.thread_id, a.replies_count)
-      })
-      // Thread title changed (parent message was edited).
-      .listen('.ThreadUpdated', (a: { thread_id: number, message_id: number | null, name: string, replies_count: number }) => {
-        setStartedThread(a.message_id, { id: a.thread_id, name: a.name, replies_count: a.replies_count })
-        bumpThreadCount(a.thread_id, a.replies_count, a.name)
-      })
-      // Thread removed (parent message deleted): drop the indicator + list entry.
-      .listen('.ThreadDeleted', (a: { thread_id: number, message_id: number | null }) => {
-        setStartedThread(a.message_id, null)
-        threads.value = threads.value.filter(t => t.id !== a.thread_id)
-      })
-      // A side chat was spun up — drop its living-object card onto the origin message.
-      .listen('.SideChatCreated', (s: SideChat) => {
-        setStartedSideChat(s.message_id, s)
-        upsertSideChat(s)
-      })
-      // Its pulse changed (a message, a join, a decision) — refresh the card in place.
-      .listen('.SideChatActivity', (s: SideChat) => {
-        setStartedSideChat(s.message_id, s)
-        upsertSideChat(s)
-      })
+  /**
+   * The timeline's own handlers, held so they can be taken off again one by one.
+   *
+   * They used to be anonymous, because unsubscribing meant `echo.leave` and the whole
+   * subscription went with them. It doesn't any more — a floating window may keep the channel
+   * open after we're gone — so leaving these attached would have a closed timeline's callbacks
+   * still firing into refs nobody is rendering, and a re-opened one listening twice.
+   */
+  const handlers: Record<string, (payload: any) => void> = {
+    '.MessageSent': (m: Message) => {
+      pushUnique(m)
+      // A widget card arrives as a reference (no state) — pull its live state in.
+      if (m.type === 'widget' && m.widget && m.widget.state == null) refreshWidget(m.widget.id)
+    },
+    '.MessageUpdated': (m: Message) => replaceMessage(m),
+    '.MessageDeleted': (p: { id: number }) => removeMessage(p.id),
+    '.ReactionToggled': (p: { message_id: number, reactions: Reaction[] }) => {
+      patchMessage(p.message_id, { reactions: p.reactions })
+    },
+    // A comment ("word-reaction") was posted or removed — refresh the chips. We receive
+    // our own broadcast too, so this is also how the actor's chips update.
+    '.CommentPosted': (p: { message_id: number, comments: CommentSummary[] }) => {
+      patchMessage(p.message_id, { comments: p.comments })
+    },
+    // A link finished unfurling on the queue — drop the card in under the message.
+    '.MessagePreviewsUpdated': (p: { message_id: number, link_previews: LinkPreview[] }) => {
+      patchMessage(p.message_id, { link_previews: p.link_previews })
+    },
+    // A widget moved (track changed, card crossed a column). The broadcast is a reference
+    // only, so fetch the fresh state and re-sync every card of it.
+    '.WidgetUpdated': (ref: { id: number }) => refreshWidget(ref.id),
+    // Someone pinned or unpinned something. Patch the timeline (the pin icon) and the
+    // Pinned tab. The message may live in a thread we've never opened, which is why the
+    // event carries the whole thing rather than an id — patchMessage simply won't match.
+    '.MessagePinToggled': (p: { pinned: boolean, message: Message }) => {
+      patchMessage(p.message.id, { pinned: p.pinned, pinned_at: p.message.pinned_at })
+      applyPin(p.pinned, p.message)
+    },
+    '.ThreadCreated': (t: Thread) => {
+      setStartedThread(t.message_id, { id: t.id, name: t.name, replies_count: t.replies_count ?? 0 })
+      if (!threads.value.some(x => x.id === t.id)) threads.value = [t, ...threads.value]
+    },
+    '.ThreadActivity': (a: { thread_id: number, message_id: number | null, name: string, replies_count: number }) => {
+      setStartedThread(a.message_id, { id: a.thread_id, name: a.name, replies_count: a.replies_count })
+      bumpThreadCount(a.thread_id, a.replies_count)
+    },
+    // Thread title changed (parent message was edited).
+    '.ThreadUpdated': (a: { thread_id: number, message_id: number | null, name: string, replies_count: number }) => {
+      setStartedThread(a.message_id, { id: a.thread_id, name: a.name, replies_count: a.replies_count })
+      bumpThreadCount(a.thread_id, a.replies_count, a.name)
+    },
+    // Thread removed (parent message deleted): drop the indicator + list entry.
+    '.ThreadDeleted': (a: { thread_id: number, message_id: number | null }) => {
+      setStartedThread(a.message_id, null)
+      threads.value = threads.value.filter(t => t.id !== a.thread_id)
+    },
+    // A side chat was spun up — drop its living-object card onto the origin message.
+    '.SideChatCreated': (s: SideChat) => {
+      setStartedSideChat(s.message_id, s)
+      upsertSideChat(s)
+    },
+    // Its pulse changed (a message, a join, a decision) — refresh the card in place.
+    '.SideChatActivity': (s: SideChat) => {
+      setStartedSideChat(s.message_id, s)
+      upsertSideChat(s)
+    },
   }
 
+  function subscribe(id: number) {
+    const channel = hold(`channel.${id}`)
+    if (!channel) return
+
+    for (const [event, handler] of Object.entries(handlers)) channel.listen(event, handler)
+  }
+
+  /**
+   * Let go of the channel stream — which only actually leaves it if nobody else is holding it.
+   *
+   * `echo.leave` drops the *whole* channel, every listener on it, including ones this
+   * composable never put there. A floating widget, a floating conversation, a floating board
+   * and the pinned music player all listen here and all deliberately outlive the timeline, so
+   * leaving outright made every one of them go quietly deaf the moment you changed channel.
+   * See {@link useEchoStream}, which counts the holders and leaves for the last one out.
+   */
   function unsubscribe(id: number) {
-    echo.leave(`channel.${id}`)
-    // `leave` drops the *whole* channel, including listeners this composable never put
-    // there. A pinned music player keeps listening here long after its timeline closes —
-    // without this it would go deaf on the way out, freeze on its last state, and look for
-    // all the world like its buttons had stopped working. No-op when nothing is pinned here.
-    rejoinPinnedMusic(id)
+    const channel = echo?.private(`channel.${id}`)
+
+    if (channel) {
+      for (const [event, handler] of Object.entries(handlers)) channel.stopListening(event, handler)
+    }
+
+    release(`channel.${id}`)
   }
 
   return { messages, hasMore, loadingOlder, load, loadOlder, ensureLoaded, send, edit, remove, removeAttachment, toggleReaction, togglePin, subscribe, unsubscribe }

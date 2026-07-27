@@ -24,7 +24,15 @@ class SideSpaceMapUpdated implements ShouldBroadcastNow
 
     public function __construct(public SideSpaceMap $map)
     {
-        $this->map->loadMissing('editor');
+        /*
+         * Rooms and locks as well as the editor, and this is load-bearing rather than tidy.
+         *
+         * The resource writes them with `whenLoaded`, so an unloaded relation isn't sent as
+         * empty — it's absent. A client applying a broadcast that had left them out would end up
+         * holding a map with no locks on it, and would open every door in the room. Loading them
+         * here is what makes "the map changed" and "the map, whole" the same message.
+         */
+        $this->map->loadMissing('editor', 'rooms.owner', 'locks.creator');
     }
 
     /** @return array<int, PrivateChannel> */

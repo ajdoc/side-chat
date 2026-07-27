@@ -14,6 +14,7 @@ import {
   drawPortrait,
 } from '~/lib/spaceAvatar'
 import { PETS, PET_KEYS, drawPetPortrait } from '~/lib/spacePets'
+import { onSheetLoaded } from '~/lib/spriteSheet'
 import { Button } from '~/components/ui/button'
 
 /**
@@ -95,11 +96,12 @@ const OUTFIT_SWATCH: Record<Exclude<OutfitKind, 'auto'>, string> = {
   slate: '#6b7280',
 }
 
-/** The two trios, in the order the picker shows them. */
+/** The groups, in the order the picker shows them. Empty ones don't get a heading. */
 const petGroups = computed(() => [
   { title: 'First three', keys: PET_KEYS.filter(k => PETS[k].region === 'first') },
   { title: 'Second three', keys: PET_KEYS.filter(k => PETS[k].region === 'second') },
-])
+  { title: 'Visitors', keys: PET_KEYS.filter(k => PETS[k].region === 'guest') },
+].filter(g => g.keys.length > 0))
 
 // --- the previews ---
 
@@ -154,6 +156,12 @@ function repaint() {
 
 watch(() => ({ ...look }), () => nextTick(repaint), { deep: true })
 onMounted(() => nextTick(repaint))
+/*
+ * Sheet-backed sprites (the Espurr pet and suit) may finish loading after the previews have been
+ * painted, and these canvases are painted once rather than on a loop. Without this the dialog
+ * would sit showing the fallback artwork for a creature whose real sheet had since arrived.
+ */
+onScopeDispose(onSheetLoaded(() => nextTick(repaint)))
 
 // --- saving ---
 

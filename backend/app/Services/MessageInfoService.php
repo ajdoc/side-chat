@@ -22,10 +22,18 @@ final class MessageInfoService
      */
     public function for(Message $message): array
     {
-        $message->loadMissing('channel.server');
+        $message->loadMissing('channel.server', 'channel.conversation');
 
-        $members = $message->channel->server->members()->get()
-            ->reject(fn ($member) => $member->id === $message->user_id);
+        /*
+         * The channel's *container*, not its server — a DM or a group chat owns a channel
+         * exactly as a server does, and asking for `->server` there is a null. Which is what
+         * this panel used to do, and why "seen by" was a 500 in every group chat.
+         */
+        $container = $message->channel->container();
+
+        $members = $container === null
+            ? collect()
+            : $container->members()->get()->reject(fn ($member) => $member->id === $message->user_id);
 
         $seen = $this->reads->seenBy($message);
 

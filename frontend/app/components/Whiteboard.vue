@@ -1,6 +1,8 @@
 <script setup lang="ts">
-import { ArrowUpRight, Circle, Eraser, Hand, Maximize, Minus, MousePointer2, PaintBucket, Pencil, Square, StickyNote, Trash2, Type, Undo2, ZoomIn, ZoomOut } from 'lucide-vue-next'
+import { ArrowUpRight, Circle, Eraser, Hand, Maximize, Minus, MousePointer2, PaintBucket, Pencil, Redo2, Square, StickyNote, Trash2, Type, Undo2, ZoomIn, ZoomOut } from 'lucide-vue-next'
 import type { WhiteboardStroke, WhiteboardStrokeKind, WhiteboardStrokePayload } from '~/types'
+import type { BoardEntry } from '~/composables/useWhiteboard'
+import { snapshot } from '~/composables/useWhiteboard'
 import { LOGICAL_WIDTH, boundingBox, hitStroke, renderStroke, simplify } from '~/lib/whiteboardEngine'
 import {
   AlertDialog,
@@ -33,10 +35,11 @@ const props = defineProps<{
   readonlyHint?: string
 }>()
 
-const { user } = useAuth()
 const {
   strokes, liveStrokes, cursors,
-  load, addStroke, updateStroke, removeStroke, clear,
+  load, addStroke, removeStroke,
+  draw, erase, editStroke, asOneGesture, clear,
+  undo, redo, canUndo, canRedo,
   whisperLive, whisperCursor, whisperMove, subscribe, unsubscribe,
 } = useWhiteboard(props.basePath, props.streamName)
 
@@ -168,6 +171,16 @@ function shade(hex: string, amount: number): string {
     .join('')}`
 }
 
+/**
+ * Whether the pointer is over the board — the toolbar included, not just the canvas.
+ *
+ * The keyboard shortcuts are claimed only while it is. A board can be a tab in a panel or a
+ * floating window sitting over a chat, and in both cases something else on the page has an
+ * equally good claim to Ctrl+Z — the message you were rewriting, most obviously. Hover is the
+ * cheapest honest answer to "did they mean the board?".
+ */
+const hovering = ref(false)
+
 const wrap = ref<HTMLDivElement | null>(null)
 const canvas = ref<HTMLCanvasElement | null>(null)
 const textInput = ref<HTMLInputElement | null>(null)
@@ -182,7 +195,9 @@ const draft = ref<{ kind: WhiteboardStrokeKind, payload: WhiteboardStrokePayload
 let drawing = false
 // Select tool: the picked text/note, and an in-flight move or resize of it.
 const selectedId = ref<number | null>(null)
-let drag: { mode: 'move' | 'resize', stroke: WhiteboardStroke, offX: number, offY: number } | null = null
+// `before` is the mark's geometry as the drag began — snapshotted because the live payload is
+// mutated in place for instant feedback, and undo needs the side of the change that's now gone.
+let drag: { mode: 'move' | 'resize', stroke: WhiteboardStroke, offX: number, offY: number, before: WhiteboardStrokePayload } | null = null
 
 function selectedStroke(): WhiteboardStroke | null {
   return strokes.value.find(s => s.id === selectedId.value) ?? null
@@ -461,7 +476,7 @@ function onPointerDown(e: PointerEvent) {
     const sel = selectedStroke()
     if (sel && onResizeHandle(sel, p)) {
       canvas.value?.setPointerCapture(e.pointerId)
-      drag = { mode: 'resize', stroke: sel, offX: 0, offY: 0 }
+      drag = { mode: 'resize', stroke: sel, offX: 0, offY: 0, before: snapshot(sel.payload) }
       return
     }
     for (let i = strokes.value.length - 1; i >= 0; i--) {
@@ -469,7 +484,7 @@ function onPointerDown(e: PointerEvent) {
       if (MOVABLE.includes(s.kind) && s.id > 0 && hitStroke({ kind: s.kind, payload: s.payload }, p, 6)) {
         canvas.value?.setPointerCapture(e.pointerId)
         selectedId.value = s.id
-        drag = { mode: 'move', stroke: s, offX: p.x - (s.payload.x ?? 0), offY: p.y - (s.payload.y ?? 0) }
+        drag = { mode: 'move', stroke: s, offX: p.x - (s.payload.x ?? 0), offY: p.y - (s.payload.y ?? 0), before: snapshot(s.payload) }
         return
       }
     }
@@ -581,9 +596,9 @@ async function onPointerUp(e: PointerEvent) {
 
   // Finished a move/resize — persist it (the broadcast then corrects every other board).
   if (drag) {
-    const s = drag.stroke
+    const { stroke, before } = drag
     drag = null
-    try { await updateStroke(s) } catch { await load() /* reconcile on failure */ }
+    try { await editStroke(stroke, before) } catch { await load() /* reconcile on failure */ }
     return
   }
 
@@ -601,7 +616,7 @@ async function onPointerUp(e: PointerEvent) {
   } else if (d.payload.x1 === d.payload.x2 && d.payload.y1 === d.payload.y2) {
     return
   }
-  await addStroke(d.kind, d.payload, crypto.randomUUID())
+  await draw(d.kind, d.payload)
 }
 
 /**
@@ -625,6 +640,8 @@ async function fillAt(p: { x: number, y: number }) {
     if (!hitStroke({ kind: s.kind, payload: s.payload }, p, 6)) continue
     if (s.id <= 0) return // still awaiting its server id; nothing to PATCH yet
 
+    const before = snapshot(s.payload)
+
     if (s.kind === 'rect' || s.kind === 'ellipse' || s.kind === 'pen') {
       if (bucketColor.value) s.payload.fill = bucketColor.value
       else delete s.payload.fill
@@ -635,7 +652,7 @@ async function fillAt(p: { x: number, y: number }) {
     }
 
     try {
-      await updateStroke(s)
+      await editStroke(s, before)
     } catch {
       await load() // reconcile against the board of record
     }
@@ -651,12 +668,27 @@ async function paintBoard() {
   // each add one, and the loser of that race must not be left buried under the winner.
   const previous = strokes.value.filter(s => s.kind === 'bg')
 
-  if (bucketColor.value) {
-    // The new wash lands *before* the old ones go, or the board flashes bare for a round trip.
-    await addStroke('bg', { color: bucketColor.value }, crypto.randomUUID())
-  }
+  // Recolouring the board is several writes and exactly one gesture, so it's logged as one:
+  // undoing it has to bring the old backdrop back *and* take the new one away, or the board
+  // ends up in a state nobody asked for. See asOneGesture.
+  await asOneGesture(async () => {
+    const ops: BoardEntry = []
+    const clientId = crypto.randomUUID()
 
-  for (const bg of previous) await removeStroke(bg)
+    if (bucketColor.value) {
+      const payload = { color: bucketColor.value }
+      // The new wash lands *before* the old ones go, or the board flashes bare for a round trip.
+      await addStroke('bg', payload, clientId)
+      ops.push({ op: 'add' as const, clientId, kind: 'bg' as const, payload })
+    }
+
+    for (const bg of previous) {
+      ops.push({ op: 'erase' as const, clientId: bg.client_id, kind: bg.kind, payload: snapshot(bg.payload) })
+      await removeStroke(bg)
+    }
+
+    return ops
+  })
 }
 
 function eraseAt(p: { x: number, y: number }) {
@@ -664,7 +696,7 @@ function eraseAt(p: { x: number, y: number }) {
   for (let i = strokes.value.length - 1; i >= 0; i--) {
     const s = strokes.value[i]!
     if (hitStroke({ kind: s.kind, payload: s.payload }, p, 8)) {
-      removeStroke(s)
+      void erase(s)
       break
     }
   }
@@ -678,15 +710,47 @@ async function commitText() {
   const payload: WhiteboardStrokePayload = entry.kind === 'note'
     ? { x: entry.x, y: entry.y, text: value, color: '#fde68a' }
     : { x: entry.x, y: entry.y, text: value, color: color.value, width: 18 }
-  await addStroke(entry.kind, payload, crypto.randomUUID())
+  await draw(entry.kind, payload)
 }
 
-/** Undo: take back your own most recent mark (not other people's). */
-function undoMine() {
-  for (let i = strokes.value.length - 1; i >= 0; i--) {
-    const s = strokes.value[i]!
-    if (s.user?.id === user.value?.id) { removeStroke(s); return }
-  }
+/**
+ * Undo and redo, from the toolbar or from Ctrl/⌘+Z and Ctrl/⌘+Y (⇧Z also works, as it does
+ * everywhere else).
+ *
+ * Scoped to *my own* gestures, and applied as inverse operations through the same API the
+ * originals went through — see the history log in useWhiteboard for why a shared board can't
+ * undo by snapshot. So pressing it never disturbs somebody else's mark, and when it does put
+ * something back, everyone watching sees it come back.
+ */
+function onUndo() {
+  if (!props.canDraw || !canUndo.value) return
+  selectedId.value = null
+  void undo()
+}
+
+function onRedo() {
+  if (!props.canDraw || !canRedo.value) return
+  selectedId.value = null
+  void redo()
+}
+
+/**
+ * The board only claims the keys while the pointer is over it and nothing else is being typed
+ * into — a board floating beside a composer must not eat the Ctrl+Z of somebody rewriting a
+ * message. `hovering` is that gate.
+ */
+function onKeydown(e: KeyboardEvent) {
+  if (!hovering.value || !props.canDraw) return
+  if (!(e.ctrlKey || e.metaKey) || e.altKey) return
+
+  const target = e.target as HTMLElement | null
+  if (target?.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(target?.tagName ?? '')) return
+
+  const key = e.key.toLowerCase()
+
+  if (key === 'z' && !e.shiftKey) { e.preventDefault(); onUndo(); return }
+  // Redo answers to both conventions: Ctrl+Y (Windows) and Ctrl+Shift+Z (mac, and most editors).
+  if (key === 'y' || (key === 'z' && e.shiftKey)) { e.preventDefault(); onRedo() }
 }
 
 // Clearing wipes the board for everyone, so it goes through a confirm dialog.
@@ -735,6 +799,9 @@ onMounted(async () => {
   ro = new ResizeObserver(resize)
   if (wrap.value) ro.observe(wrap.value)
   raf = requestAnimationFrame(paint)
+  // On the window rather than the board: the canvas isn't focusable, so a keystroke never
+  // arrives at it. `hovering` is what scopes them to this board instead.
+  window.addEventListener('keydown', onKeydown)
   await load()
   subscribe()
 })
@@ -742,12 +809,20 @@ onBeforeUnmount(() => {
   cancelAnimationFrame(raf)
   ro?.disconnect()
   clearTimeout(hintTimer)
+  window.removeEventListener('keydown', onKeydown)
   unsubscribe()
 })
 </script>
 
 <template>
-  <div class="flex min-h-0 flex-1 flex-col">
+  <!-- Hover is what scopes the keyboard shortcuts to this board (see onKeydown), so it's claimed
+       for the whole component rather than just the canvas: reaching for Ctrl+Z with the pointer
+       resting on the toolbar is not a person who meant some other undo. -->
+  <div
+    class="flex min-h-0 flex-1 flex-col"
+    @pointerenter="hovering = true"
+    @pointerleave="hovering = false"
+  >
     <!-- Toolbar -->
     <div class="flex flex-wrap items-center gap-1 border-b p-2">
       <button
@@ -905,11 +980,20 @@ onBeforeUnmount(() => {
         <button
           type="button"
           class="grid h-7 w-7 place-items-center rounded text-muted-foreground transition-colors hover:bg-muted disabled:opacity-40"
-          title="Undo my last mark"
-          :disabled="!canDraw"
-          @click="undoMine"
+          title="Undo (Ctrl+Z)"
+          :disabled="!canDraw || !canUndo"
+          @click="onUndo"
         >
           <Undo2 class="h-4 w-4" />
+        </button>
+        <button
+          type="button"
+          class="grid h-7 w-7 place-items-center rounded text-muted-foreground transition-colors hover:bg-muted disabled:opacity-40"
+          title="Redo (Ctrl+Y)"
+          :disabled="!canDraw || !canRedo"
+          @click="onRedo"
+        >
+          <Redo2 class="h-4 w-4" />
         </button>
         <button
           type="button"

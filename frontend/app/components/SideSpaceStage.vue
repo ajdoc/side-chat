@@ -16,6 +16,7 @@ import {
   ScreenShare,
   ScreenShareOff,
   Gamepad2,
+  Lock,
   Shirt,
   Sofa,
   Users,
@@ -44,7 +45,8 @@ import {
   toWorld,
   zoneAt,
 } from '~/lib/spaceMapEngine'
-import { decorInFront, decorKind, decorSize } from '~/lib/spaceDecor'
+import { decorInFront, decorKind, decorSize, seatInFront, seatOn } from '~/lib/spaceDecor'
+import { doorInFront, lockMap, mayPass, syncDoors } from '~/lib/spaceDoors'
 import { EFFECT_MS, drawRoomEffect, drawRoomEffectLabel } from '~/lib/spaceEffects'
 import { normaliseLook } from '~/lib/spaceAvatar'
 import { Button } from '~/components/ui/button'
@@ -130,6 +132,9 @@ const {
   tick,
   walkTo,
   stopWalking,
+  sit,
+  stand,
+  seated,
   isWalking,
   subscribe: subscribeMoves,
   unsubscribe: unsubscribeMoves,
@@ -170,6 +175,30 @@ const joining = ref(false)
  */
 const editing = ref<'full' | 'decor' | null>(null)
 const dressing = ref(false)
+/** The rooms-and-locks panel. Only ever opened by somebody with something to manage. */
+const managingLocks = ref(false)
+
+/**
+ * Whether this person administers anything in here.
+ *
+ * Read off the *map*, not off a permission call: the map already carries who owns which room,
+ * because the doors need it. So the server owner sees the button, a room owner sees the button,
+ * and a member with no room never learns there is one — with no extra request to find out.
+ */
+const managesRooms = computed(() =>
+  canModerate.value || (map.value?.rooms ?? []).some(r => r.owner_id === user.value?.id))
+
+/**
+ * Everybody in the channel — who a room can be handed to, and who can be given a key.
+ *
+ * The *channel's* roster rather than the room's: putting somebody in charge of a room, or giving
+ * them a key to it, is most useful precisely for the people who aren't standing in it at the
+ * moment. Loaded lazily, when the panel is first opened, since most visits never need it.
+ */
+const { members: channelMembers, load: loadChannelMembers } = useChannelMembers()
+const roomMembers = computed(() => channelMembers.value.map(m => ({ id: m.id, name: m.name })))
+
+watch(managingLocks, (open) => { if (open) void loadChannelMembers(props.channel.id) })
 
 /**
  * The piece of furniture you're standing at, if any, and whether we're mid-way through opening
@@ -180,6 +209,60 @@ const dressing = ref(false)
  * when the answer actually changes, so the prompt doesn't re-render sixty times a second.
  */
 const facingObject = ref<SpaceObject | null>(null)
+/**
+ * The seat within reach, tracked exactly as the usable piece above it is and for the same
+ * reason: it's a question about where you're standing, asked every frame, whose answer only
+ * changes when you walk. Kept apart from `facingObject` because nothing is both — a couch opens
+ * no app, and pressing E at a TV should watch it rather than sit on it.
+ */
+const facingSeat = ref<SpaceObject | null>(null)
+
+/**
+ * Everyone standing in the room, me included — what the doors are computed against.
+ *
+ * A door opens for *anybody* who may pass, not just for the person at this keyboard; see
+ * spaceDoors. Rebuilt per frame from two refs that are already reactive, which is cheap next to
+ * the drawing that follows it.
+ */
+const occupants = computed(() => (me.value ? [me.value, ...Object.values(others.value)] : Object.values(others.value)))
+
+/** Which doors are locked and who holds a key, in the shape the frame loop wants to ask. */
+const locks = computed(() => lockMap(map.value?.locks))
+
+/** The door you're standing at, if any — for the "this one's locked" prompt. */
+const facingDoor = computed(() => (me.value ? doorInFront(map.value, me.value) : null))
+
+/**
+ * What the locked-door label says.
+ *
+ * Names whoever is responsible for the room where there is somebody, because "this is locked" is
+ * a dead end and "this is Alice's room" is a thing you can do something about.
+ */
+const lockedDoorHint = computed(() => {
+  const door = blockedDoor.value
+  if (!door) return ''
+
+  const zone = map.value?.locks?.find(l => l.object_id === door.id)?.zone_id
+  const owners = (map.value?.rooms ?? []).filter(r => r.zone_id === zone).map(r => r.owner).filter(Boolean)
+  const room = (map.value?.zones ?? []).find(z => z.id === zone)?.name
+
+  // Name one of them and count the rest — a room can be several people's, and a label listing
+  // four names is a label nobody reads.
+  const who = owners.length > 1 ? `${owners[0]} or ${owners.length - 1} other${owners.length > 2 ? 's' : ''}` : owners[0]
+
+  if (who && room) return `${room} is locked — ask ${who}`
+  if (room) return `${room} is locked`
+
+  return 'This door is locked'
+})
+
+/** A door you're at that will not open for you. The only reason a door needs a prompt at all. */
+const blockedDoor = computed(() => {
+  const door = facingDoor.value
+  if (!door || !me.value) return null
+
+  return mayPass(locks.value, door.id, me.value.id) ? null : door
+})
 const using = ref(false)
 const { open: openWindow } = useFloatingWindows()
 const api = useApi()
@@ -539,12 +622,27 @@ async function enter() {
       return
     }
 
-    // Muted *after* joining, not before: this way the mute is published to the roster and
-    // whispered to the room, where doing it first would have been a local-only flag on a call
-    // that didn't exist yet — leaving everyone else's sidebar showing an open mic. Nothing
-    // leaks in the gap, because in a Side Space nobody is dialled until a frame has worked out
-    // who is near enough.
-    if (!selfMuted.value) toggleMute()
+    /*
+     * You walk in with your microphone on.
+     *
+     * The opposite of a voice channel, and for the reason the room exists: nobody can hear you.
+     * Joining a voice channel puts your voice in everybody's ears at once, so arriving muted is
+     * the only polite default. Arriving in a Side Space puts you on a tile — audible to whoever
+     * is standing within a couple of squares of it, which at the entrance is usually nobody, and
+     * fading to silence a few tiles further out. Walking up to somebody *is* the act of choosing
+     * to be heard by them, and having to find a mute button first turns every hello into a
+     * fumble.
+     *
+     * Set after joining, not before, so the state is published to the roster and whispered to
+     * the room; doing it first would be a local flag on a call that didn't exist yet, leaving
+     * everyone else's sidebar showing the wrong thing. Nothing leaks in the gap either way,
+     * because nobody is dialled until a frame has worked out who is near enough.
+     *
+     * `selfMuted` is global and survives across calls, so this is an explicit unmute rather than
+     * an absence of muting: somebody who muted themselves in a meeting an hour ago should not
+     * walk into a room silent and wonder why.
+     */
+    if (selfMuted.value) toggleMute()
 
     subscribeMoves()
     bindKeys()
@@ -613,6 +711,7 @@ async function leave() {
   stopWalking()
   stopProximity()
   facingObject.value = null
+  facingSeat.value = null
   await disconnect()
 }
 
@@ -627,6 +726,15 @@ function loop(now: number) {
   lastAt = now
 
   if (inThisRoom.value) {
+    /*
+     * Doors first, before anybody moves.
+     *
+     * `tick` is what walks people, and walking asks whether a tile is passable — so the doors
+     * have to have already decided for this frame. Get the order wrong and you spend one frame
+     * per approach walking into a door that was about to open, which reads as the door sticking.
+     */
+    syncDoors(map.value, occupants.value, locks.value)
+
     // A meeting freezes the room — nobody walks, so movement isn't ticked; everything else runs
     // so the countdown and the voice keep going.
     if (!gameMeeting.value) tick(dt)
@@ -706,14 +814,51 @@ function checkFurniture() {
 
   // Only when it changes: this runs sixty times a second.
   if (found?.id !== facingObject.value?.id) facingObject.value = found
+
+  // A seat is only worth offering when there isn't something more interesting under your nose:
+  // stand at the arcade cabinet and E should play it, not sit you on the stool beside it.
+  const seat = m && self && !gameRunning.value && !found && !seated.value
+    ? seatInFront(m.objects, self)
+    : null
+
+  if (seat?.id !== facingSeat.value?.id) facingSeat.value = seat
 }
 
 /** The label on the prompt — "Press E to put something on". */
 const interactHint = computed(() => {
-  const kind = facingObject.value ? decorKind(facingObject.value.kind) : null
+  if (seated.value) return 'Get up'
 
-  return kind ? `${kind.verb ?? 'Use'} the ${kind.label.toLowerCase()}` : ''
+  const kind = facingObject.value ? decorKind(facingObject.value.kind) : null
+  if (kind) return `${kind.verb ?? 'Use'} the ${kind.label.toLowerCase()}`
+
+  const seat = facingSeat.value ? decorKind(facingSeat.value.kind) : null
+
+  return seat ? `Sit on the ${seat.label.toLowerCase()}` : ''
 })
+
+/** Whether E has anything to do where you're standing — what the prompt hangs off. */
+const hasPrompt = computed(() => seated.value || !!facingObject.value || !!facingSeat.value)
+
+/**
+ * Sit down, or get up again.
+ *
+ * Nothing here reaches the server. A seat is a *local* posture — where you are was already being
+ * whispered several times a second, and which couch you're on rides along with it — so sitting
+ * is as cheap as walking and needs no more permission than walking does. Contrast
+ * {@link useFurniture}, which asks the server precisely because opening the room's music player
+ * is a claim about a thing the channel owns.
+ */
+function toggleSeat() {
+  if (seated.value) return stand()
+
+  const m = map.value
+  const self = me.value
+  const object = facingSeat.value
+  const kind = object ? decorKind(object.kind) : null
+  if (!m || !self || !object || !kind) return
+
+  sit(object.id, seatOn(object, kind, self))
+}
 
 /**
  * Use it.
@@ -968,10 +1113,12 @@ function onInteractKey(e: KeyboardEvent) {
     return
   }
 
-  if (!facingObject.value) return
+  // Getting up comes first: while you're sitting, E is the way off the couch and nothing else.
+  if (seated.value) { e.preventDefault(); toggleSeat(); return }
 
-  e.preventDefault()
-  void useFurniture()
+  if (facingObject.value) { e.preventDefault(); void useFurniture(); return }
+
+  if (facingSeat.value) { e.preventDefault(); toggleSeat() }
 }
 
 /**
@@ -1126,6 +1273,51 @@ function draw() {
   // *tile* — pinning an HTML bubble to a moving world-space position means a transform update
   // every frame, which is the one thing canvas is already doing.
   drawPrompt(ctx)
+  drawLocks(ctx)
+}
+
+/**
+ * A padlock over every locked door.
+ *
+ * Drawn for locked doors you *can't* pass only. A door you hold the key to opens as you reach it
+ * and needs no explaining; badging it too would put a padlock on half the room and teach people
+ * to ignore padlocks. This way the symbol means exactly one thing: that one won't open for you.
+ *
+ * Above the cast rather than among it, because it's a label about the world rather than a thing
+ * in it — a person standing in the doorway should not hide the reason they're in your way.
+ */
+function drawLocks(ctx: CanvasRenderingContext2D) {
+  const m = map.value
+  const self = me.value
+  if (!m || !self || !inThisRoom.value) return
+
+  const size = TILE * camera.zoom
+
+  for (const object of m.objects ?? []) {
+    const kind = decorKind(object.kind)
+    if (!kind?.door || mayPass(locks.value, object.id, self.id)) continue
+
+    const across = decorSize(object, kind).w
+    const p = toScreen(camera, object.x + (across - 1) / 2, object.y - 0.45)
+    const r = size * 0.2
+
+    ctx.save()
+    ctx.beginPath()
+    ctx.arc(p.x, p.y, r, 0, Math.PI * 2)
+    ctx.fillStyle = 'rgb(23 23 30 / 0.85)'
+    ctx.fill()
+
+    // A shackle and a body — a padlock reads at this size, where a key or a cross doesn't.
+    ctx.strokeStyle = '#f4d06f'
+    ctx.lineWidth = Math.max(1, size * 0.045)
+    ctx.beginPath()
+    ctx.arc(p.x, p.y - r * 0.18, r * 0.34, Math.PI, 0)
+    ctx.stroke()
+
+    ctx.fillStyle = '#f4d06f'
+    ctx.fillRect(p.x - r * 0.46, p.y - r * 0.16, r * 0.92, r * 0.72)
+    ctx.restore()
+  }
 }
 
 // --- coming and going ---
@@ -1204,7 +1396,12 @@ function drawCompanion(ctx: CanvasRenderingContext2D, owner: Occupant) {
 
 /** "Press E to watch something", floating over whatever you're standing at. */
 function drawPrompt(ctx: CanvasRenderingContext2D) {
-  const object = facingObject.value
+  // Sitting has no object to hang a tag over — you are *on* the thing — so the seated prompt is
+  // the button below the room and nothing here. A label floating over your own head would be
+  // over the sprite it's about.
+  if (seated.value) return
+
+  const object = facingObject.value ?? facingSeat.value
   const kind = object ? decorKind(object.kind) : null
   if (!object || !kind || !inThisRoom.value) return
 
@@ -1215,7 +1412,7 @@ function drawPrompt(ctx: CanvasRenderingContext2D) {
   const p = toScreen(camera, object.x + (across - 1) / 2, object.y - 0.6)
   // No key to name on a phone — there, the tag is the verb alone and the button below is how
   // you do it.
-  const verb = kind.verb ?? 'Use'
+  const verb = object === facingSeat.value ? 'Sit' : (kind.verb ?? 'Use')
   const label = narrow.value ? verb : `E · ${verb}`
 
   ctx.save()
@@ -1355,8 +1552,11 @@ function drawPerson(
     look: normaliseLook(o.look),
     hue: spriteHue(o.id),
     self,
-    walking,
+    // A sitter isn't walking whatever their legs think — a couch's occupant bobbing along on
+    // the spot would be the one thing worse than not being able to sit at all.
+    walking: walking && !o.seatedOn,
     phase: walkPhase(),
+    sitting: !!o.seatedOn,
   })
 
   // A muted mic is worth showing on the map: it's the difference between "they're ignoring me"
@@ -1486,6 +1686,7 @@ watch(inThisRoom, (now) => {
 
   stopProximity()
   facingObject.value = null
+  facingSeat.value = null
   if (attached.value) unsubscribeMoves()
 })
 </script>
@@ -1663,6 +1864,19 @@ watch(inThisRoom, (now) => {
             <VoiceEffectSettings :channel="channel" />
           </div>
 
+          <!-- Rooms and their doors. Hidden from anybody who administers neither: a panel whose
+               every list would be empty is worse than no panel. -->
+          <button
+            v-if="managesRooms"
+            type="button"
+            :class="[toolClass, 'text-muted-foreground hover:text-foreground']"
+            title="Rooms and locks"
+            @click="fromMenu(() => (managingLocks = true))"
+          >
+            <Lock class="h-4 w-4 shrink-0" />
+            <span v-if="narrow">Rooms and locks</span>
+          </button>
+
           <!-- Start a game. Only when you're in the room and none is already on the table; a game
                in progress is driven by the panel over the map, not from up here. -->
           <button
@@ -1822,12 +2036,28 @@ watch(inThisRoom, (now) => {
           itself; this is the half that says what the key does, and gives a pointer a target —
           not everybody will think to press a letter.
         -->
+        <!--
+          Why the door isn't moving.
+
+          A door needs no pressing, so this is an explanation rather than an affordance — which
+          is why it's a label and not a button. Without it a locked door is indistinguishable
+          from a broken one: you walk at it, nothing happens, and there is nothing on screen
+          that says anybody meant that.
+        -->
+        <p
+          v-if="inThisRoom && blockedDoor"
+          class="absolute bottom-2 left-1/2 flex -translate-x-1/2 items-center gap-2 rounded-full bg-foreground/90 px-3 py-1.5 text-xs font-medium text-background shadow-lg"
+        >
+          <Lock class="h-3.5 w-3.5" />
+          {{ lockedDoorHint }}
+        </p>
+
         <button
-          v-if="inThisRoom && facingObject"
+          v-if="inThisRoom && hasPrompt && !blockedDoor"
           type="button"
           class="absolute bottom-2 left-1/2 flex -translate-x-1/2 items-center gap-2 rounded-full bg-foreground px-3 py-1.5 text-xs font-medium text-background shadow-lg transition hover:opacity-90 disabled:opacity-60"
           :disabled="using"
-          @click="useFurniture"
+          @click="facingObject ? useFurniture() : toggleSeat()"
         >
           <Loader2 v-if="using" class="h-3.5 w-3.5 animate-spin" />
           <span v-else-if="!narrow" class="rounded border border-background/40 px-1 text-[10px] leading-4">E</span>
@@ -1954,6 +2184,14 @@ watch(inThisRoom, (now) => {
       v-if="dressing"
       @close="dressing = false"
       @saved="onDressed"
+    />
+
+    <SpaceLocksDialog
+      v-if="managingLocks && map"
+      :channel-id="channel.id"
+      :map="map"
+      :members="roomMembers"
+      @close="managingLocks = false"
     />
   </div>
 </template>

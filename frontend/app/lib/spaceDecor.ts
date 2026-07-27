@@ -58,10 +58,41 @@ export interface DecorKind {
   mount: DecorMount
   /** Drawn taller than its footprint and anchored at the bottom — see above. */
   lift: boolean
+  /**
+   * The piece seen from its side, authored in the box a quarter turn puts it in — so a 2×1 desk's
+   * side view is a 1×2 grid, 16 wide and 32 tall. Drawn as-is for a piece facing *right* and
+   * mirrored for one facing left, which is right for anything whose two sides match, and that is
+   * every piece of furniture here.
+   */
+  side: string[] | null
+  /** The piece seen from behind, in the same box as its front view. */
+  back: string[] | null
+  /**
+   * A door: something that gets out of the way rather than something you walk round.
+   *
+   * The one kind whose solidity is a property of the *moment*. `solid` stays true — that is what
+   * the server stores and what every question about the room at rest wants — and the walk loop
+   * consults {@link SpaceObject.open}, which the room recomputes each frame from where everybody
+   * is standing. See lib/spaceDoors.ts.
+   */
+  door: boolean
+  /** The three views again, for a door standing open. Only doors have these. */
+  open: { art: string[], side: string[] | null, back: string[] | null } | null
   /** The Side Desk app pressing E opens, if any. */
   interact: SideDeskAppId | null
   /** What the prompt says you'd be doing. */
   verb: string | null
+  /**
+   * Can you sit on it?
+   *
+   * Purely a matter of drawing and prompting, which is why it lives here and has no counterpart
+   * on the server: sitting never reaches the API. Where you're sitting rides along with your
+   * position over the same whispers that carry your walking, and a client that lied about it
+   * would be a client claiming to be sitting on a plant pot — visible, harmless, and its own
+   * punishment. Everything that *is* worth enforcing about furniture (its size, its solidity,
+   * what pressing E opens) stays with the server, exactly as before.
+   */
+  seat: boolean
 }
 
 /** A decoration as it's stored: a kind, a place, and which way it's turned. */
@@ -72,6 +103,17 @@ export interface SpaceObject {
   y: number
   /** Absent on everything placed before pieces could be turned, and read as `down`. */
   facing?: DecorFacing
+  /**
+   * Doors only, and *not stored*: whether this one is standing open right now.
+   *
+   * Written onto the object each frame by {@link file://./spaceDoors.ts}, before anything asks
+   * whether a tile is walkable. It rides on the object rather than being threaded through
+   * `decorBlocks` / `isWalkable` / `step` as a parameter because those are called from a dozen
+   * places — the walk loop, the pet loop, spawning, the editor, the map validator's mirror — and
+   * all but one of them want the same answer they always gave. A field the editor never sets is
+   * a door the editor treats as shut, which is exactly right for editing.
+   */
+  open?: boolean
 }
 
 // --- the palette every piece of furniture shares ---
@@ -789,16 +831,736 @@ const NOTICEBOARD = [
   '................',
 ]
 
+/*
+ * Side and back views.
+ *
+ * The pieces whose facing you can actually read, drawn from the two other angles a room
+ * shows them at. A side view is authored in the *turned* footprint — a 2×1 couch's side is a
+ * 1×2 grid — which is what lets it be drawn without rotating anything; see view().
+ *
+ * Everything not listed here still falls back to the old approximation, and mostly should:
+ * a barrel, a plant and a rug have no front to turn away from.
+ */
+
+/** A couch turned side-on: the backrest runs down one long edge and the seat opens off it.
+ * Authored 1×2, because that is the footprint a quarter turn gives a 2×1 couch. */
+const COUCH_SIDE = [
+  '................',
+  '................',
+  '.ooooooo........',
+  '.occcccoooooooo.',
+  '.occcccoCCCCCCo.',
+  '.ocCCccoCCCCCCo.',
+  '.ocCCccoCCCCCCo.',
+  '.ocCCccoCCCCCCo.',
+  '.ocCCccoCCCCCCo.',
+  '.ocCCccoCCCCCCo.',
+  '.ocCCccoCCCCCCo.',
+  '.ocCCccoCCCCCCo.',
+  '.ocCCccoCCCCCCo.',
+  '.ocCCccoCCCCCCo.',
+  '.ocCCccoCCCCCCo.',
+  '.ocCCccoCCCCCCo.',
+  '.ocCCccoCCCCCCo.',
+  '.ocCCccoCCCCCCo.',
+  '.ocCCccoCCCCCCo.',
+  '.ocCCccoCCCCCCo.',
+  '.ocCCccoCCCCCCo.',
+  '.ocCCccoCCCCCCo.',
+  '.ocCCccoCCCCCCo.',
+  '.ocCCccoCCCCCCo.',
+  '.ocCCccoCCCCCCo.',
+  '.ocCCccoCCCCCCo.',
+  '.ocCCccoCCCCCCo.',
+  '.occcccoCCCCCCo.',
+  '.occcccoooooooo.',
+  '.ooooooo....oo..',
+  '..oo........oo..',
+  '..oo........oo..',
+]
+
+/** The back of a couch — which is almost all backrest, with the cushion seam showing over the top. */
+const COUCH_BACK = [
+  '................................',
+  '................................',
+  '.oooooooooooooooooooooooooooooo.',
+  '.occcccccccccccooccccccccccccco.',
+  '.ocCCCCCCCCCCCCooCCCCCCCCCCCCco.',
+  '.ocCCCCCCCCCCCCooCCCCCCCCCCCCco.',
+  '.ocCCCCCCCCCCCCooCCCCCCCCCCCCco.',
+  '.ocCCCCCCCCCCCCooCCCCCCCCCCCCco.',
+  '.ocCCCCCCCCCCCCooCCCCCCCCCCCCco.',
+  '.ocCCCCCCCCCCCCooCCCCCCCCCCCCco.',
+  '.occcccccccccccooccccccccccccco.',
+  '.occcccccccccccooccccccccccccco.',
+  '.oooooooooooooooooooooooooooooo.',
+  '...oo......................oo...',
+  '...oo......................oo...',
+  '...oo......................oo...',
+]
+
+/** A bench end-on: two rails and the seat between them. */
+const BENCH_SIDE = [
+  '................',
+  '................',
+  '..ooooooo.......',
+  '..owwwwwooooooo.',
+  '..ownnnwoWWWWWo.',
+  '..ownnnwoWWWWWo.',
+  '..ownnnwoWWWWWo.',
+  '..ownnnwoWWWWWo.',
+  '..ownnnwoWWWWWo.',
+  '..ownnnwoWWWWWo.',
+  '..ownnnwoWWWWWo.',
+  '..ownnnwoWWWWWo.',
+  '..ownnnwoWWWWWo.',
+  '..ownnnwoWWWWWo.',
+  '..ownnnwoWWWWWo.',
+  '..ownnnwoWWWWWo.',
+  '..ownnnwoWWWWWo.',
+  '..ownnnwoWWWWWo.',
+  '..ownnnwoWWWWWo.',
+  '..ownnnwoWWWWWo.',
+  '..ownnnwoWWWWWo.',
+  '..ownnnwoWWWWWo.',
+  '..ownnnwoWWWWWo.',
+  '..ownnnwoWWWWWo.',
+  '..ownnnwoWWWWWo.',
+  '..ownnnwoWWWWWo.',
+  '..ownnnwoWWWWWo.',
+  '..ownnnwoWWWWWo.',
+  '..owwwwwooooooo.',
+  '..ooooooonno....',
+  '........onno....',
+  '........onno....',
+]
+
+/** A bench from behind: the two back rails, with daylight between them. */
+const BENCH_BACK = [
+  '................................',
+  '................................',
+  '................................',
+  '....oooooooooooooooooooooooo....',
+  '....oWWWWWWWWWWWWWWWWWWWWWWo....',
+  '....oWWWWWWWWWWWWWWWWWWWWWWo....',
+  '....oooooooooooooooooooooooo....',
+  '................................',
+  '....oooooooooooooooooooooooo....',
+  '....owwwwwwwwwwwwwwwwwwwwwwo....',
+  '....owwwwwwwwwwwwwwwwwwwwwwo....',
+  '....oooooooooooooooooooooooo....',
+  '.....nn..................nn.....',
+  '.....nn..................nn.....',
+  '.....nn..................nn.....',
+  '.....nn..................nn.....',
+]
+
+/** A desk end-on: the top, and the drawer stack under one end of it. */
+const DESK_SIDE = [
+  '................',
+  '................',
+  '................',
+  '..oooooooooooo..',
+  '..oWWWWWWWWWWo..',
+  '..oWWWWWWWWWWo..',
+  '..owwwwwwwwwwo..',
+  '..owwwwwwwwwwo..',
+  '..oooooooooooo..',
+  '...oooooooooo...',
+  '...owwwwwwwwo...',
+  '...owwwwwwwwo...',
+  '...ownnnnnnwo...',
+  '...ownnnnnnwo...',
+  '...ownnnnnnwo...',
+  '...owwwwwwwwo...',
+  '...owwwwwwwwo...',
+  '...owwwwwwwwo...',
+  '...ownnnnnnwo...',
+  '...ownnnnnnwo...',
+  '...ownnnnnnwo...',
+  '...owwwwwwwwo...',
+  '...owwwwwwwwo...',
+  '...owwwwwwwwo...',
+  '...owwwwwwwwo...',
+  '...owwwwwwwwo...',
+  '...owwwwwwwwo...',
+  '...oooooooooo...',
+  '...nn......nn...',
+  '...nn......nn...',
+  '...nn......nn...',
+  '...nn......nn...',
+]
+
+/** A desk from behind: a top and a modesty panel, no drawers. */
+const DESK_BACK = [
+  '................................',
+  '................................',
+  '................................',
+  '....oooooooooooooooooooooooo....',
+  '....oWWWWWWWWWWWWWWWWWWWWWWo....',
+  '....oWWWWWWWWWWWWWWWWWWWWWWo....',
+  '....oooooooooooooooooooooooo....',
+  '.....oooooooooooooooooooooo.....',
+  '.....owwwwwwwwwwwwwwwwwwwwo.....',
+  '.....owwwwwwwwwwwwwwwwwwwwo.....',
+  '.....owwwwwwwwwwwwwwwwwwwwo.....',
+  '.....owwwwwwwwwwwwwwwwwwwwo.....',
+  '.....oooooooooooooooooooooo.....',
+  '.....nn..................nn.....',
+  '.....nn..................nn.....',
+  '.....nn..................nn.....',
+]
+
+/** A screen edge-on — a dark slab on a stand, which is all a television is from the side. */
+const TV_SIDE = [
+  '................',
+  '................',
+  '................',
+  '................',
+  '.....oooooo.....',
+  '.....oddddo.....',
+  '.....okkddo.....',
+  '.....okkddo.....',
+  '.....okkddo.....',
+  '.....okkddo.....',
+  '.....okkddo.....',
+  '.....okkddo.....',
+  '.....okkddo.....',
+  '.....okkddo.....',
+  '.....okkddo.....',
+  '.....okkddo.....',
+  '.....okkddo.....',
+  '.....okkddo.....',
+  '.....okkddo.....',
+  '.....okkddo.....',
+  '.....okkddo.....',
+  '.....okkddo.....',
+  '.....okkddo.....',
+  '.....oddddo.....',
+  '.....oooooo.....',
+  '.......oo.......',
+  '.......oo.......',
+  '.......oo.......',
+  '....oooooooo....',
+  '....okkkkkko....',
+  '....oooooooo....',
+  '................',
+]
+
+/** The back of the casing: vents where the picture was. */
+const TV_BACK = [
+  '................................',
+  '....oooooooooooooooooooooooo....',
+  '....oddddddddddddddddddddddo....',
+  '....odddkkkkkkkkkkkkkkkkdddo....',
+  '....oddddddddddddddddddddddo....',
+  '....odddkkkkkkkkkkkkkkkkdddo....',
+  '....oddddddddddddddddddddddo....',
+  '....odddkkkkkkkkkkkkkkkkdddo....',
+  '....oddddddddddddddddddddddo....',
+  '....oddddddddddddddddddddddo....',
+  '....oooooooooooooooooooooooo....',
+  '..............oooo..............',
+  '..............oooo..............',
+  '..............oooo..............',
+  '..........oooooooooooo..........',
+  '..........oooooooooooo..........',
+]
+
+/** A monitor edge-on, on its desk. */
+const COMPUTER_SIDE = [
+  '................',
+  '......oooo......',
+  '......okko......',
+  '......okko......',
+  '......okko......',
+  '......okko......',
+  '......okko......',
+  '......oooo......',
+  '.......oo.......',
+  '.......oo.......',
+  '.....oooooo.....',
+  '.....oooooo.....',
+  '................',
+  '..oooooooooooo..',
+  '..oMMMMMMMMMMo..',
+  '..oooooooooooo..',
+]
+
+/** The back of the panel and its stand. */
+const COMPUTER_BACK = [
+  '................',
+  '...oooooooooo...',
+  '...oddddddddo...',
+  '...odkkkkkkdo...',
+  '...odkkkkkkdo...',
+  '...oddddddddo...',
+  '...oooooooooo...',
+  '.......oo.......',
+  '.......oo.......',
+  '.......oo.......',
+  '.....oooooo.....',
+  '.....oooooo.....',
+  '................',
+  '..oooooooooooo..',
+  '..oMMMMMMMMMMo..',
+  '..oooooooooooo..',
+]
+
+/** A chair from the side: the back, and the seat sticking out in front of it. */
+const CHAIR_SIDE = [
+  '................',
+  '...oooo.........',
+  '...oddo.........',
+  '...oddo.........',
+  '...oddo.........',
+  '...oddo.........',
+  '...oddooooooo...',
+  '...oddodddddo...',
+  '...oddodddddo...',
+  '...oddooooooo...',
+  '...oooo.........',
+  '.......mm.......',
+  '.......mm.......',
+  '....oooooooo....',
+  '....oMMMMMMo....',
+  '....oooooooo....',
+]
+
+/** A chair from behind — the back of the backrest, which is most of a chair. */
+const CHAIR_BACK = [
+  '................',
+  '...oooooooooo...',
+  '...oddddddddo...',
+  '...odmmmmmmdo...',
+  '...odmmmmmmdo...',
+  '...odmmmmmmdo...',
+  '...oddddddddo...',
+  '...oooooooooo...',
+  '..oooooooooooo..',
+  '..oddddddddddo..',
+  '..oooooooooooo..',
+  '.......mm.......',
+  '.......mm.......',
+  '...oooooooooo...',
+  '...oMMMMMMMMo...',
+  '...oooooooooo...',
+]
+
+/** A bookcase from the side: a plank on edge with the shelf ends showing. */
+const BOOKSHELF_SIDE = [
+  '.....oooooo.....',
+  '.....owwwwo.....',
+  '.....owwwwo.....',
+  '.....onnnno.....',
+  '.....owwwwo.....',
+  '.....owwwwo.....',
+  '.....onnnno.....',
+  '.....owwwwo.....',
+  '.....owwwwo.....',
+  '.....onnnno.....',
+  '.....owwwwo.....',
+  '.....owwwwo.....',
+  '.....onnnno.....',
+  '.....owwwwo.....',
+  '.....oooooo.....',
+  '.....oo..oo.....',
+]
+
+/** Its back panel — plain, and the reason a bookcase turned around is a wall. */
+const BOOKSHELF_BACK = [
+  '..oooooooooooo..',
+  '..owwwwwwwwwwo..',
+  '..owwwwwwwwwwo..',
+  '..owwwwwwwwwwo..',
+  '..owwwwwwwwwwo..',
+  '..owwwwwwwwwwo..',
+  '..owwwwwwwwwwo..',
+  '..onnnnnnnnnno..',
+  '..owwwwwwwwwwo..',
+  '..owwwwwwwwwwo..',
+  '..owwwwwwwwwwo..',
+  '..owwwwwwwwwwo..',
+  '..owwwwwwwwwwo..',
+  '..owwwwwwwwwwo..',
+  '..oooooooooooo..',
+  '..oo........oo..',
+]
+
+/** A fridge from the side: narrow, with the door seam at its front edge. */
+const FRIDGE_SIDE = [
+  '.....oooooo.....',
+  '.....oMMMmo.....',
+  '.....oMMMmo.....',
+  '.....oMMMmo.....',
+  '.....oMMMmo.....',
+  '.....oMMMmo.....',
+  '.....oMMMmo.....',
+  '.....oMMMmo.....',
+  '.....oMMMmo.....',
+  '.....oMMMmo.....',
+  '.....oMMMmo.....',
+  '.....oMMMmo.....',
+  '.....oMMMmo.....',
+  '.....oMMMmo.....',
+  '.....oooooo.....',
+  '.....oo..oo.....',
+]
+
+/** A fridge from behind, coils and all. */
+const FRIDGE_BACK = [
+  '...oooooooooo...',
+  '...oMMMMMMMMo...',
+  '...oMMMMMMMMo...',
+  '...oMmmmmmmMo...',
+  '...oMMMMMMMMo...',
+  '...oMMMMMMMMo...',
+  '...oMmmmmmmMo...',
+  '...oMMMMMMMMo...',
+  '...oMMMMMMMMo...',
+  '...oMmmmmmmMo...',
+  '...oMMMMMMMMo...',
+  '...oMMMMMMMMo...',
+  '...oMMMMMMMMo...',
+  '...oMMMMMMMMo...',
+  '...oooooooooo...',
+  '...oo......oo...',
+]
+
+/** A cabinet from the side. */
+const CABINET_SIDE = [
+  '................',
+  '................',
+  '.....oooooo.....',
+  '.....owwwwo.....',
+  '.....owwwwo.....',
+  '.....owwwwo.....',
+  '.....owwwwo.....',
+  '.....onnnno.....',
+  '.....owwwwo.....',
+  '.....owwwwo.....',
+  '.....owwwwo.....',
+  '.....owwwwo.....',
+  '.....owwwwo.....',
+  '.....oooooo.....',
+  '.....oo..oo.....',
+  '.....oo..oo.....',
+]
+
+/** Its plain back panel. */
+const CABINET_BACK = [
+  '................',
+  '................',
+  '..oooooooooooo..',
+  '..owwwwwwwwwwo..',
+  '..owwwwwwwwwwo..',
+  '..owwwwwwwwwwo..',
+  '..owwwwwwwwwwo..',
+  '..owwwwwwwwwwo..',
+  '..onnnnnnnnnno..',
+  '..owwwwwwwwwwo..',
+  '..owwwwwwwwwwo..',
+  '..owwwwwwwwwwo..',
+  '..owwwwwwwwwwo..',
+  '..oooooooooooo..',
+  '..oo........oo..',
+  '..oo........oo..',
+]
+
+
+/*
+ * Doors.
+ *
+ * Two states each, and the state is not a facing: a door is drawn shut or open depending on
+ * whether somebody who may pass is standing near it *this frame*. So the open artwork is a
+ * parallel set rather than another entry in the facing table — see `open` on DecorKind, and
+ * lib/spaceDoors.ts for who decides.
+ */
+
+/** A door, shut: a frame, a panelled leaf, and a brass handle. */
+const DOOR = [
+  '.oooooooooooooo.',
+  '.oooooooooooooo.',
+  '.oowwwwwwwwwwoo.',
+  '.oownnnnnnnnwoo.',
+  '.oownnnnnnnnwoo.',
+  '.oowwwwwwwwwwoo.',
+  '.oowwwwwwwwyyoo.',
+  '.oowwwwwwwwyyoo.',
+  '.oownnnnnnnnwoo.',
+  '.oownnnnnnnnwoo.',
+  '.oowwwwwwwwwwoo.',
+  '.oowwwwwwwwwwoo.',
+  '.oowwwwwwwwwwoo.',
+  '.oowwwwwwwwwwoo.',
+  '.oowwwwwwwwwwoo.',
+  '.oooooooooooooo.',
+]
+
+/** The same door, swung back against its jamb — the dark is the room beyond. */
+const DOOR_OPEN = [
+  '.oooooooooooooo.',
+  '.ooookkkkkkkkko.',
+  '.oowokkkkkkkkko.',
+  '.oowokkkkkkkkko.',
+  '.oonokkkkkkkkko.',
+  '.oonokkkkkkkkko.',
+  '.oonokkkkkkkkko.',
+  '.oonokkkkkkkkko.',
+  '.oonokkkkkkkkko.',
+  '.oonokkkkkkkkko.',
+  '.oonokkkkkkkkko.',
+  '.oonokkkkkkkkko.',
+  '.oowokkkkkkkkko.',
+  '.oowokkkkkkkkko.',
+  '.oowokkkkkkkkko.',
+  '.oooooooooooooo.',
+]
+
+/** From behind. No handle on this face; the hinges are the tell. */
+const DOOR_BACK = [
+  '.oooooooooooooo.',
+  '.oooooooooooooo.',
+  '.oowwwwwwwwwwoo.',
+  '.ommnnnnnnnnwoo.',
+  '.ommnnnnnnnnwoo.',
+  '.oowwwwwwwwwwoo.',
+  '.oowwwwwwwwwwoo.',
+  '.oowwwwwwwwwwoo.',
+  '.oownnnnnnnnwoo.',
+  '.oownnnnnnnnwoo.',
+  '.ommwwwwwwwwwoo.',
+  '.ommwwwwwwwwwoo.',
+  '.oowwwwwwwwwwoo.',
+  '.oowwwwwwwwwwoo.',
+  '.oowwwwwwwwwwoo.',
+  '.oooooooooooooo.',
+]
+
+/** Open, from behind — the leaf folds the other way. */
+const DOOR_OPEN_BACK = [
+  '.oooooooooooooo.',
+  '.okkkkkkkkkoooo.',
+  '.okkkkkkkkkowoo.',
+  '.okkkkkkkkkowoo.',
+  '.okkkkkkkkkonoo.',
+  '.okkkkkkkkkonoo.',
+  '.okkkkkkkkkonoo.',
+  '.okkkkkkkkkonoo.',
+  '.okkkkkkkkkonoo.',
+  '.okkkkkkkkkonoo.',
+  '.okkkkkkkkkonoo.',
+  '.okkkkkkkkkonoo.',
+  '.okkkkkkkkkowoo.',
+  '.okkkkkkkkkowoo.',
+  '.okkkkkkkkkowoo.',
+  '.oooooooooooooo.',
+]
+
+/** Edge-on: the frame in section with the leaf inside it. */
+const DOOR_SIDE = [
+  '.....oooooo.....',
+  '.....oooooo.....',
+  '.....oowwoo.....',
+  '.....oowwoo.....',
+  '.....oowwoo.....',
+  '.....oonnoo.....',
+  '.....oonnoo.....',
+  '.....oonnoo.....',
+  '.....oonnoo.....',
+  '.....oonnoo.....',
+  '.....oonnoo.....',
+  '.....oowwoo.....',
+  '.....oowwoo.....',
+  '.....oowwoo.....',
+  '.....oowwoo.....',
+  '.....oooooo.....',
+]
+
+/** Edge-on and open, the leaf swung clear up the jamb. */
+const DOOR_OPEN_SIDE = [
+  '.....oooooo.....',
+  '.....oooooo.....',
+  '.....oowwoo.....',
+  '.....oowwoo.....',
+  '.....oooooo.....',
+  '.....okkkko.....',
+  '.....okkkko.....',
+  '.....okkkko.....',
+  '.....okkkko.....',
+  '.....okkkko.....',
+  '.....okkkko.....',
+  '.....okkkko.....',
+  '.....okkkko.....',
+  '.....okkkko.....',
+  '.....okkkko.....',
+  '.....oooooo.....',
+]
+
+/** Double doors, shut, meeting in the middle. */
+const GATE = [
+  '.oooooooooooooooooooooooooooooo.',
+  '.oooooooooooooooooooooooooooooo.',
+  '.oowwwwwwwwwwwwoowwwwwwwwwwwwoo.',
+  '.oownnnnnnnnnnwoownnnnnnnnnnwoo.',
+  '.oownnnnnnnnnnwoownnnnnnnnnnwoo.',
+  '.oowwwwwwwwwwwwoowwwwwwwwwwwwoo.',
+  '.oowwwwwwwwwwwyyyywwwwwwwwwwwoo.',
+  '.oowwwwwwwwwwwyyyywwwwwwwwwwwoo.',
+  '.oownnnnnnnnnnwoownnnnnnnnnnwoo.',
+  '.oownnnnnnnnnnwoownnnnnnnnnnwoo.',
+  '.oowwwwwwwwwwwwoowwwwwwwwwwwwoo.',
+  '.oowwwwwwwwwwwwoowwwwwwwwwwwwoo.',
+  '.oowwwwwwwwwwwwoowwwwwwwwwwwwoo.',
+  '.oowwwwwwwwwwwwoowwwwwwwwwwwwoo.',
+  '.oowwwwwwwwwwwwoowwwwwwwwwwwwoo.',
+  '.oooooooooooooooooooooooooooooo.',
+]
+
+/** Both leaves folded back to their jambs. */
+const GATE_OPEN = [
+  '.oooooooooooooooooooooooooooooo.',
+  '.oooookkkkkkkkkkkkkkkkkkkkooooo.',
+  '.oowwokkkkkkkkkkkkkkkkkkkkowwoo.',
+  '.oowwokkkkkkkkkkkkkkkkkkkkowwoo.',
+  '.oonnokkkkkkkkkkkkkkkkkkkkonnoo.',
+  '.oonnokkkkkkkkkkkkkkkkkkkkonnoo.',
+  '.oonnokkkkkkkkkkkkkkkkkkkkonnoo.',
+  '.oonnokkkkkkkkkkkkkkkkkkkkonnoo.',
+  '.oonnokkkkkkkkkkkkkkkkkkkkonnoo.',
+  '.oonnokkkkkkkkkkkkkkkkkkkkonnoo.',
+  '.oonnokkkkkkkkkkkkkkkkkkkkonnoo.',
+  '.oonnokkkkkkkkkkkkkkkkkkkkonnoo.',
+  '.oowwokkkkkkkkkkkkkkkkkkkkowwoo.',
+  '.oowwokkkkkkkkkkkkkkkkkkkkowwoo.',
+  '.oowwokkkkkkkkkkkkkkkkkkkkowwoo.',
+  '.oooooooooooooooooooooooooooooo.',
+]
+
+/** From behind, hinges at both edges. */
+const GATE_BACK = [
+  '.oooooooooooooooooooooooooooooo.',
+  '.oooooooooooooooooooooooooooooo.',
+  '.oowwwwwwwwwwwwoowwwwwwwwwwwwoo.',
+  '.ommnnnnnnnnnnwoownnnnnnnnnnmmo.',
+  '.ommnnnnnnnnnnwoownnnnnnnnnnmmo.',
+  '.oowwwwwwwwwwwwoowwwwwwwwwwwwoo.',
+  '.oowwwwwwwwwwwwoowwwwwwwwwwwwoo.',
+  '.oowwwwwwwwwwwwoowwwwwwwwwwwwoo.',
+  '.oownnnnnnnnnnwoownnnnnnnnnnwoo.',
+  '.oownnnnnnnnnnwoownnnnnnnnnnwoo.',
+  '.ommwwwwwwwwwwwoowwwwwwwwwwwmmo.',
+  '.ommwwwwwwwwwwwoowwwwwwwwwwwmmo.',
+  '.oowwwwwwwwwwwwoowwwwwwwwwwwwoo.',
+  '.oowwwwwwwwwwwwoowwwwwwwwwwwwoo.',
+  '.oowwwwwwwwwwwwoowwwwwwwwwwwwoo.',
+  '.oooooooooooooooooooooooooooooo.',
+]
+
+/** Open from behind — the leaves are folded away, so it reads the same either side. */
+const GATE_OPEN_BACK = [
+  '.oooooooooooooooooooooooooooooo.',
+  '.oooookkkkkkkkkkkkkkkkkkkkooooo.',
+  '.oowwokkkkkkkkkkkkkkkkkkkkowwoo.',
+  '.oowwokkkkkkkkkkkkkkkkkkkkowwoo.',
+  '.oonnokkkkkkkkkkkkkkkkkkkkonnoo.',
+  '.oonnokkkkkkkkkkkkkkkkkkkkonnoo.',
+  '.oonnokkkkkkkkkkkkkkkkkkkkonnoo.',
+  '.oonnokkkkkkkkkkkkkkkkkkkkonnoo.',
+  '.oonnokkkkkkkkkkkkkkkkkkkkonnoo.',
+  '.oonnokkkkkkkkkkkkkkkkkkkkonnoo.',
+  '.oonnokkkkkkkkkkkkkkkkkkkkonnoo.',
+  '.oonnokkkkkkkkkkkkkkkkkkkkonnoo.',
+  '.oowwokkkkkkkkkkkkkkkkkkkkowwoo.',
+  '.oowwokkkkkkkkkkkkkkkkkkkkowwoo.',
+  '.oowwokkkkkkkkkkkkkkkkkkkkowwoo.',
+  '.oooooooooooooooooooooooooooooo.',
+]
+
+/** Turned: a 2x1 gate is 1x2, so this is 16 wide and 32 tall. */
+const GATE_SIDE = [
+  '.....oooooo.....',
+  '.....oooooo.....',
+  '.....oowwoo.....',
+  '.....oowwoo.....',
+  '.....oowwoo.....',
+  '.....oowwoo.....',
+  '.....oonnoo.....',
+  '.....oonnoo.....',
+  '.....oonnoo.....',
+  '.....oonnoo.....',
+  '.....oonnoo.....',
+  '.....oowwoo.....',
+  '.....oowwoo.....',
+  '.....oowwoo.....',
+  '.....oowwoo.....',
+  '.....oooooo.....',
+  '.....oooooo.....',
+  '.....oowwoo.....',
+  '.....oowwoo.....',
+  '.....oowwoo.....',
+  '.....oowwoo.....',
+  '.....oonnoo.....',
+  '.....oonnoo.....',
+  '.....oonnoo.....',
+  '.....oonnoo.....',
+  '.....oonnoo.....',
+  '.....oowwoo.....',
+  '.....oowwoo.....',
+  '.....oowwoo.....',
+  '.....oowwoo.....',
+  '.....oooooo.....',
+  '.....oooooo.....',
+]
+
+/** The same, standing open. */
+const GATE_OPEN_SIDE = [
+  '.....oooooo.....',
+  '.....oooooo.....',
+  '.....oowwoo.....',
+  '.....oowwoo.....',
+  '.....oowwoo.....',
+  '.....oooooo.....',
+  '.....okkkko.....',
+  '.....okkkko.....',
+  '.....okkkko.....',
+  '.....okkkko.....',
+  '.....okkkko.....',
+  '.....okkkko.....',
+  '.....okkkko.....',
+  '.....okkkko.....',
+  '.....okkkko.....',
+  '.....okkkko.....',
+  '.....okkkko.....',
+  '.....okkkko.....',
+  '.....okkkko.....',
+  '.....okkkko.....',
+  '.....okkkko.....',
+  '.....okkkko.....',
+  '.....okkkko.....',
+  '.....okkkko.....',
+  '.....okkkko.....',
+  '.....okkkko.....',
+  '.....oooooo.....',
+  '.....oowwoo.....',
+  '.....oowwoo.....',
+  '.....oowwoo.....',
+  '.....oooooo.....',
+  '.....oooooo.....',
+]
+
 /**
  * Every kind, keyed exactly as the server's catalogue is.
  *
  * `art` is null for the two flat pieces, which are drawn as rectangles instead — a rug is a
  * pattern, not a picture, and generating it means one entry rather than a thirty-two row grid.
+ * `side` and `back` are the extra angles, and are optional: a piece without them falls back to
+ * the approximation in pose().
  */
 export const DECOR: Record<string, DecorKind & { art: string[] | string[][] | null }> = {
   speaker: kind('Speaker', { interact: 'music', verb: 'Put something on', art: SPEAKER }),
-  tv: kind('TV', { w: 2, interact: 'video', verb: 'Watch something', art: TV }),
-  computer: kind('Computer', { interact: 'kanban', verb: 'Check the board', art: COMPUTER }),
+  tv: kind('TV', { w: 2, interact: 'video', verb: 'Watch something', art: TV, side: TV_SIDE, back: TV_BACK }),
+  computer: kind('Computer', { interact: 'kanban', verb: 'Check the board', art: COMPUTER, side: COMPUTER_SIDE, back: COMPUTER_BACK }),
   arcade: kind('Arcade cabinet', { interact: 'shooter', verb: 'Play', art: ARCADE }),
   racer: kind('Racing cabinet', { interact: 'racing', verb: 'Race', art: RACER }),
   easel: kind('Easel', { interact: 'skribbl', verb: 'Draw', art: EASEL }),
@@ -811,14 +1573,34 @@ export const DECOR: Record<string, DecorKind & { art: string[] | string[][] | nu
   planner: kind('Wall planner', { mount: 'wall', interact: 'calendar', verb: 'Check the schedule', art: PLANNER }),
   filecabinet: kind('Filing cabinet', { interact: 'docs', verb: 'Look through the files', art: FILECABINET }),
 
-  desk: kind('Desk', { w: 2, art: DESK }),
-  couch: kind('Couch', { w: 2, art: COUCH }),
-  bench: kind('Bench', { w: 2, art: BENCH }),
-  chair: kind('Office chair', { solid: false, art: CHAIR }),
-  stool: kind('Stool', { solid: false, art: STOOL }),
-  bookshelf: kind('Bookshelf', { art: BOOKSHELF }),
-  cabinet: kind('Cabinet', { art: CABINET }),
-  fridge: kind('Fridge', { art: FRIDGE }),
+  // Doors. Solid in the catalogue and opened by the room — see `door` above.
+  door: kind('Door', {
+    door: true,
+    art: DOOR,
+    side: DOOR_SIDE,
+    back: DOOR_BACK,
+    open: { art: DOOR_OPEN, side: DOOR_OPEN_SIDE, back: DOOR_OPEN_BACK },
+  }),
+  gate: kind('Gate', {
+    w: 2,
+    door: true,
+    art: GATE,
+    side: GATE_SIDE,
+    back: GATE_BACK,
+    open: { art: GATE_OPEN, side: GATE_OPEN_SIDE, back: GATE_OPEN_BACK },
+  }),
+
+  desk: kind('Desk', { w: 2, art: DESK, side: DESK_SIDE, back: DESK_BACK }),
+  // The seats. A two-tile couch is two seats, because its footprint is what you sit on — see
+  // seatOn(). A chair and a stool are walk-on-able already; sitting on one is what stops you
+  // standing *in* it looking like a person who has been impaled on their own furniture.
+  couch: kind('Couch', { w: 2, seat: true, art: COUCH, side: COUCH_SIDE, back: COUCH_BACK }),
+  bench: kind('Bench', { w: 2, seat: true, art: BENCH, side: BENCH_SIDE, back: BENCH_BACK }),
+  chair: kind('Office chair', { solid: false, seat: true, art: CHAIR, side: CHAIR_SIDE, back: CHAIR_BACK }),
+  stool: kind('Stool', { solid: false, seat: true, art: STOOL }),
+  bookshelf: kind('Bookshelf', { art: BOOKSHELF, side: BOOKSHELF_SIDE, back: BOOKSHELF_BACK }),
+  cabinet: kind('Cabinet', { art: CABINET, side: CABINET_SIDE, back: CABINET_BACK }),
+  fridge: kind('Fridge', { art: FRIDGE, side: FRIDGE_SIDE, back: FRIDGE_BACK }),
   watercooler: kind('Water cooler', { art: WATERCOOLER }),
   lamp: kind('Floor lamp', { art: LAMP }),
   plant: kind('Potted plant', { art: PLANT }),
@@ -858,8 +1640,13 @@ function kind(
     mount,
     // Wall pieces are flush with their wall; everything else stands up unless told otherwise.
     lift: over.lift ?? mount !== 'wall',
+    side: over.side ?? null,
+    back: over.back ?? null,
+    door: over.door ?? false,
+    open: over.open ?? null,
     interact: over.interact ?? null,
     verb: over.verb ?? null,
+    seat: over.seat ?? false,
     art: over.art,
   }
 }
@@ -889,7 +1676,69 @@ export function decorCovers(object: SpaceObject, kind: DecorKind, x: number, y: 
 }
 
 /**
- * How a turn is *drawn*, which is not simply "rotate the picture".
+ * Which picture a facing calls for, and in what box.
+ *
+ * The first question, asked before {@link pose} gets a look in. A piece that *has* art for the
+ * way it's turned simply uses it — no rotation, no mirroring of a front view, no fake at all —
+ * and that is what makes a couch turned to face the wall look like the back of a couch instead
+ * of a couch lying on its side.
+ *
+ * Note the box: a side view is authored in the footprint the turn produces, so a 2×1 desk's side
+ * is a 1×2 grid. That's the whole reason it needs no rotating — it was drawn turned.
+ *
+ * Everything without the extra artwork falls through to {@link pose}, which is the older
+ * approximation and still the right answer for the pieces it covers: a rug has no front, and a
+ * potted plant looks the same from every side a room can see it from.
+ */
+function view(
+  kind: DecorKind & { art: string[] | string[][] | null },
+  facing: DecorFacing,
+  frames: string[][],
+  frame: number,
+  isOpen = false,
+): { rows: string[], w: number, h: number, mirror: boolean, rotate: number, key: string } {
+  const turns = TURNS[facing]
+
+  /*
+   * A door standing open swaps in a whole parallel set of views — front, side and back — rather
+   * than being the shut one shifted or hidden. It has to: what you see through an open doorway
+   * is the *next room*, and a door drawn as "absent" reads as a hole in the wall rather than as
+   * a way through. The three facings are chosen exactly as below, off the same turn.
+   */
+  if (isOpen && kind.open) {
+    const shape = kind.open
+
+    if (turns === 2 && shape.back) {
+      return { rows: shape.back, w: kind.w, h: kind.h, mirror: false, rotate: 0, key: 'open-back' }
+    }
+
+    if (turns % 2 === 1 && shape.side) {
+      return { rows: shape.side, w: kind.h, h: kind.w, mirror: turns === 1, rotate: 0, key: 'open-side' }
+    }
+
+    return { rows: shape.art, w: kind.w, h: kind.h, mirror: turns === 2, rotate: 0, key: 'open' }
+  }
+
+  if (turns === 0) {
+    return { rows: frames[frame]!, w: kind.w, h: kind.h, mirror: false, rotate: 0, key: `f${frame}` }
+  }
+
+  if (turns === 2 && kind.back) {
+    return { rows: kind.back, w: kind.w, h: kind.h, mirror: false, rotate: 0, key: 'back' }
+  }
+
+  if (turns % 2 === 1 && kind.side) {
+    // Authored facing right; facing left is the same piece seen from its other side.
+    return { rows: kind.side, w: kind.h, h: kind.w, mirror: turns === 1, rotate: 0, key: 'side' }
+  }
+
+  const { rotate, mirror } = pose(kind, facing)
+
+  return { rows: frames[frame]!, w: kind.w, h: kind.h, mirror, rotate, key: `f${frame}|${rotate}${mirror ? 'm' : ''}` }
+}
+
+/**
+ * How a turn is *drawn* when there is no artwork for it — the fallback behind {@link view}.
  *
  * Every sprite is authored as a front view, so a turn has to be faked from it, and the honest
  * fake differs by what the piece is:
@@ -932,7 +1781,12 @@ function pose(kind: DecorKind, facing: DecorFacing): { rotate: number, mirror: b
 export function decorBlocks(objects: SpaceObject[] | undefined, x: number, y: number): boolean {
   for (const object of objects ?? []) {
     const kind = DECOR[object.kind]
-    if (kind?.solid && decorCovers(object, kind, x, y)) return true
+    if (!kind?.solid || !decorCovers(object, kind, x, y)) continue
+    // An open door is a doorway. Anything that hasn't been told otherwise — the editor, the
+    // spawn search, a map being validated — sees every door shut, which is the safe reading.
+    if (kind.door && object.open) continue
+
+    return true
   }
 
   return false
@@ -944,10 +1798,15 @@ export function decorBlocks(objects: SpaceObject[] | undefined, x: number, y: nu
  * Deliberately generous: the tile in front of you *or* the one you're on, because a chair or a
  * rug is walked onto rather than up to, and because a two-tile TV is easier to find from either
  * end than from the exact square its origin happens to sit in.
+ *
+ * `wants` says what counts as usable — something that opens an app, by default, or somewhere to
+ * sit. Both questions are asked of the same tiles in the same order, so a couch you can sit on
+ * and a TV you can watch are found by the identical reach; only the test differs.
  */
 export function decorInFront(
   objects: SpaceObject[] | undefined,
   at: { x: number, y: number, facing: string },
+  wants: (kind: DecorKind) => boolean = kind => !!kind.interact,
 ): SpaceObject | null {
   const x = Math.round(at.x)
   const y = Math.round(at.y)
@@ -963,11 +1822,40 @@ export function decorInFront(
   for (const [cx, cy] of candidates) {
     for (const object of objects ?? []) {
       const kind = DECOR[object.kind]
-      if (kind?.interact && decorCovers(object, kind, cx, cy)) return object
+      if (kind && wants(kind) && decorCovers(object, kind, cx, cy)) return object
     }
   }
 
   return null
+}
+
+/** The seat somebody at `at` could drop into, if there is one within reach. */
+export function seatInFront(
+  objects: SpaceObject[] | undefined,
+  at: { x: number, y: number, facing: string },
+): SpaceObject | null {
+  return decorInFront(objects, at, kind => kind.seat)
+}
+
+/**
+ * Which tile of a seat to sit on, and which way you end up facing.
+ *
+ * A bench is two or three seats, not one, so the tile chosen is the one nearest whoever is
+ * sitting down — walk to the far end of a couch and you sit at the far end of it. Facing comes
+ * from the *piece*, not from the sitter: furniture is drawn with a front, and somebody sitting
+ * on a couch faces the way the couch does, whatever direction they happened to approach from.
+ */
+export function seatOn(
+  object: SpaceObject,
+  kind: DecorKind,
+  from: { x: number, y: number },
+): { x: number, y: number, facing: DecorFacing } {
+  const { w, h } = decorSize(object, kind)
+
+  const x = Math.min(object.x + w - 1, Math.max(object.x, Math.round(from.x)))
+  const y = Math.min(object.y + h - 1, Math.max(object.y, Math.round(from.y)))
+
+  return { x, y, facing: object.facing ?? 'down' }
 }
 
 // --- drawing ---
@@ -998,8 +1886,6 @@ export function drawDecor(
   const placed = decorSize(object, kind)
   const pw = placed.w * size
   const ph = placed.h * size
-  const w = kind.w * size
-  const h = kind.h * size
 
   if (kind.art === null) return flat(ctx, object, px, py, size, pw, ph)
 
@@ -1007,8 +1893,14 @@ export function drawDecor(
   const frames = Array.isArray(kind.art[0]) ? (kind.art as string[][]) : [kind.art as string[]]
   const frame = frames.length > 1 ? Math.floor(t * 2) % frames.length : 0
 
-  const canvas = sprite(`decor|${object.kind}|${frame}`, kind.w * 16, kind.h * 16, [
-    { rows: frames[frame]!, palette: P },
+  const chosen = view(kind, object.facing ?? 'down', frames, frame, object.open === true)
+  // The box the *chosen picture* was drawn in, which for a side view is the turned footprint
+  // and for everything else is the catalogue one.
+  const w = chosen.w * size
+  const h = chosen.h * size
+
+  const canvas = sprite(`decor|${object.kind}|${chosen.key}`, chosen.w * 16, chosen.h * 16, [
+    { rows: chosen.rows, palette: P },
   ])
 
   const drawn = kind.lift ? h * 1.34 : h
@@ -1024,9 +1916,12 @@ export function drawDecor(
     ctx.fill()
   }
 
-  const { rotate, mirror } = pose(kind, object.facing ?? 'down')
+  const { rotate, mirror } = chosen
 
-  if (rotate === 0) return blit(ctx, canvas, px + pw / 2, py + ph, pw, drawn, mirror)
+  // No rotation to do: the picture is already in the footprint's shape, so it's blitted straight
+  // into it. True of every front view, every back view and every side view — the rotated branch
+  // below is only ever reached by the pieces with no art for the way they're turned.
+  if (rotate === 0) return blit(ctx, canvas, px + pw / 2, py + ph, w, drawn, mirror)
 
   // Turn the world about the middle of the footprint, then draw the piece as though nothing had
   // happened: inside the rotated frame the sprite is upright in its authored box, whose bottom

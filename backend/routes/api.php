@@ -227,6 +227,20 @@ Route::middleware('auth:api')->group(function () {
     Route::post('channels/{channel}/space/interact', [SideSpaceController::class, 'interact']);
 
     /*
+     * Rooms and their doors.
+     *
+     * Deliberately *not* part of the map payload above. That one is saved by any member — the
+     * room is built by the group — so a lock kept inside it would be a lock any member could
+     * delete by saving the room around it. These are rows with their own gates: appointing a
+     * room owner is the server owner's alone, and locking a door belongs to whoever is
+     * responsible for the room it guards. See App\Support\SideSpace\Doors.
+     */
+    Route::put('channels/{channel}/space/rooms/{zone}', [SideSpaceController::class, 'assignRoom']);
+    Route::get('channels/{channel}/space/locks', [SideSpaceController::class, 'locks']);
+    Route::put('channels/{channel}/space/locks/{object}', [SideSpaceController::class, 'lockDoor']);
+    Route::delete('channels/{channel}/space/locks/{object}', [SideSpaceController::class, 'unlockDoor']);
+
+    /*
      * Games in the room — "the map becomes a game". The catalogue is global; everything else is
      * scoped to a channel and, inside that, to the people standing in it. Movement during a game
      * is still the whispered peer-to-peer movement of any Side Space; only the game's own moves

@@ -19,6 +19,9 @@ import { merge3 } from '~/lib/mergeText'
 export function useSpaceNote(basePath: string, streamName: string) {
   const api = useApi()
   const echo: any = useNuxtApp().$echo
+  // Held for as long as this view is on screen, so the surface's own message stream
+  // leaving the channel can't take our listeners with it. See useEchoStream.
+  const { hold, release } = useEchoStream()
 
   const content = ref('')
   const updatedBy = ref<User | null>(null)
@@ -98,7 +101,7 @@ export function useSpaceNote(basePath: string, streamName: string) {
    */
   function subscribe(onRemote: (content: string, ancestor: string) => void) {
     if (!echo) return
-    channel = echo.private(streamName)
+    channel = hold(streamName)
     channel.listen('.SpaceNoteUpdated', (note: SpaceNote) => {
       // Ignore anything not newer than what we hold — a save of ours that crossed with the
       // broadcast, or an out-of-order delivery.
@@ -112,6 +115,7 @@ export function useSpaceNote(basePath: string, streamName: string) {
   function unsubscribe() {
     channel?.stopListening('.SpaceNoteUpdated')
     channel = null
+    release(streamName)
   }
 
   return { content, updatedBy, updatedAt, loading, saving, base, version, load, save, subscribe, unsubscribe }

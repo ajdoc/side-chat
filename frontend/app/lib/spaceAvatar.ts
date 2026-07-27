@@ -29,7 +29,9 @@
  */
 
 import type { Facing } from './spaceMapEngine'
+import type { SheetSpec } from './spriteSheet'
 import { blit, sprite } from './pixelSprite'
+import { drawSheetFrame, sheetReady, sheetRow } from './spriteSheet'
 
 export const SPRITE_SIZE = 16
 
@@ -553,8 +555,8 @@ const HAIR_ART: Record<HairKind, Record<SpriteDir, string[]>> = {
  * its chunky outline, without reproducing anyone's particular design.
  */
 
-export type CostumeKind = 'none' | 'cantor' | 'sentinel' | 'merc' | 'cactus' | 'guard' | 'colossus' | 'plush' | 'bunny' | 'faceless' | 'mummy' | 'jackoghost' | 'pirate' | 'robot' | 'witch' | 'devil'
-export const COSTUMES: CostumeKind[] = ['none', 'cantor', 'sentinel', 'merc', 'cactus', 'guard', 'colossus', 'plush', 'bunny', 'faceless', 'mummy', 'jackoghost', 'pirate', 'robot', 'witch', 'devil']
+export type CostumeKind = 'none' | 'cantor' | 'sentinel' | 'merc' | 'cactus' | 'guard' | 'colossus' | 'plush' | 'bunny' | 'faceless' | 'mummy' | 'jackoghost' | 'pirate' | 'robot' | 'witch' | 'devil' | 'espurr'
+export const COSTUMES: CostumeKind[] = ['none', 'cantor', 'sentinel', 'merc', 'cactus', 'guard', 'colossus', 'plush', 'bunny', 'faceless', 'mummy', 'jackoghost', 'pirate', 'robot', 'witch', 'devil', 'espurr']
 
 interface Costume {
   label: string
@@ -568,6 +570,15 @@ interface Costume {
   body: Record<SpriteDir, string[]>
   /** Rows 14–15 per walk frame, in place of {@link LEGS}. */
   legs: Record<SpriteDir, [string[], string[]]>
+  /**
+   * Artwork from a sheet instead of from the grids above — see {@link file://./spriteSheet.ts}.
+   *
+   * A costume is already a whole-silhouette replacement, so this is the one avatar field a sheet
+   * can stand in for cleanly: there is no skin, hair or shirt showing through to reconcile with
+   * artwork that knows nothing about them. Used when the file is on disk, and the grids are the
+   * fallback when it isn't.
+   */
+  sheets?: { idle: SheetSpec, walk: SheetSpec }
 }
 
 /**
@@ -1249,6 +1260,36 @@ const DEVIL: Costume = {
   },
 }
 
+/**
+ * Espurr Suit: a soft grey onesie with big cream-lined ears and two flat lilac eyes.
+ *
+ * Slots: `G` grey, `C` the cream at the ears and chest, `I` the eye, `P` its one highlight,
+ * `d` the dark paws. The eyes are deliberately enormous and deliberately blank — a small grey
+ * animal with a normal-sized face is a mouse, and it's the stare that makes this one funny.
+ */
+const ESPURR_SUIT: Costume = {
+  label: 'Espurr Suit',
+  blurb: 'A soft grey onesie with big ears and an unblinking stare',
+  covered: true,
+  paint: { G: '#b9b6c4', C: '#e8dfc6', I: '#a982c9', P: '#f3e6ff', d: '#6a6676' },
+  // The same sheets the pet uses: wearing the suit and walking one on a lead are the same
+  // creature, so there is no second set of artwork to keep in step.
+  sheets: {
+    idle: { name: 'espurr/Idle', columns: 4, scale: 1.7 },
+    walk: { name: 'espurr/Walk', columns: 4, scale: 1.7 },
+  },
+  body: {
+    down: ['.....G....G.....', '....GGo..oGG....', '....oGGGGGGo....', '...oGGGGGGGGo...', '...oGIIGGIIGo...', '...oGIPGGPIGo...', '...oGGGGGGGGo...', '....oGGGGGGo....', '.....oCCCCo.....', '...oGGGGGGGGo...', '..oGGGGGGGGGGo..', '..oGGGGGGGGGGo..', '..oGGGGGGGGGGo..', '...oGGGGGGGGo...'],
+    up: ['.....G....G.....', '....GGo..oGG....', '....oGGGGGGo....', '...oGGGGGGGGo...', '...oGGGGGGGGo...', '...oGGGGGGGGo...', '...oGGGGGGGGo...', '....oGGGGGGo....', '.....oCCCCo.....', '...oGGGGGGGGo...', '..oGGGGGGGGGGo..', '..oGGGGGGGGGGo..', '..oGGGGGGGGGGo..', '...oGGGGGGGGo...'],
+    right: ['.......G........', '......GGo.......', '....oGGGGGGo....', '...oGGGGGGGGo...', '...oGIIGGGGo....', '...oGIPGGGGo....', '...oGGGGGGGo....', '....oGGGGGo.....', '.....oCCCCo.....', '....oGGGGGGo....', '...oGGGGGGGGo...', '...oGGGGGGGGo...', '...oGGGGGGGGo...', '....oGGGGGGo....'],
+  },
+  legs: {
+    down: [['...oGGGooGGGo...', '....odd..ddo....'], ['...oGGGGGGGGo...', '...odd....ddo...']],
+    up: [['...oGGGooGGGo...', '....odd..ddo....'], ['...oGGGGGGGGo...', '...odd....ddo...']],
+    right: [['....oGGGGGo.....', '.....oddo.......'], ['...oGGGGGo......', '...odd..ddo.....']],
+  },
+}
+
 const COSTUME_ART: Record<Exclude<CostumeKind, 'none'>, Costume> = {
   cantor: CANTOR,
   sentinel: SENTINEL,
@@ -1265,6 +1306,7 @@ const COSTUME_ART: Record<Exclude<CostumeKind, 'none'>, Costume> = {
   robot: ROBOT,
   witch: WITCH,
   devil: DEVIL,
+  espurr: ESPURR_SUIT,
 }
 
 /** Names and one-liners for the picker, including the one for wearing nothing. */
@@ -1285,6 +1327,7 @@ export const COSTUME_META: Record<CostumeKind, { label: string, blurb: string }>
   robot: { label: ROBOT.label, blurb: ROBOT.blurb },
   witch: { label: WITCH.label, blurb: WITCH.blurb },
   devil: { label: DEVIL.label, blurb: DEVIL.blurb },
+  espurr: { label: ESPURR_SUIT.label, blurb: ESPURR_SUIT.blurb },
 }
 
 /** The costume being worn, or null for none — the one place the `none` string is unpacked. */
@@ -1358,12 +1401,51 @@ export function drawTrainer(
   px: number,
   py: number,
   size: number,
-  opts: { look: AvatarLook, hue: number, self: boolean, walking: boolean, phase: number },
+  opts: { look: AvatarLook, hue: number, self: boolean, walking: boolean, phase: number, sitting?: boolean },
 ): void {
   const dir: SpriteDir = who.facing === 'up' ? 'up' : who.facing === 'down' ? 'down' : 'right'
   const frame: 0 | 1 = opts.walking && opts.phase % 2 === 1 ? 1 : 0
   const look = opts.look
   const paint = palette(look, opts.hue, opts.self)
+
+  /*
+   * A costume with real artwork behind it draws from the sheet and skips everything below.
+   *
+   * Nothing is layered over it — no hair, no shirt colour, no `self` tint. Those exist to
+   * compose *our* grids, and painting them onto a drawing somebody else made would be the
+   * "costume drawn on a person" failure this whole branch avoids. The sheet is the sprite.
+   */
+  const dressed = costumeOf(look)
+
+  if (dressed?.sheets) {
+    const spec = opts.walking ? dressed.sheets.walk : dressed.sheets.idle
+
+    if (sheetReady(spec)) {
+      // The sheet's own cycle, at the pace the grid sprites flip: `phase` already advances on a
+      // shared ~6Hz clock, so costumes and hand-drawn bodies stay in step with each other.
+      const at = opts.walking ? opts.phase : 0
+      const y = py + size * 0.35 + (opts.sitting ? size * 0.2 : 0)
+
+      if (!opts.sitting) {
+        drawSheetFrame(ctx, spec, at, sheetRow(who.facing), px, y, size)
+
+        return
+      }
+
+      // Sitting: the same sink-and-clip the grid sprites get, for the same reason — there is no
+      // seated frame on the sheet either.
+      const h = size * spec.scale
+
+      ctx.save()
+      ctx.beginPath()
+      ctx.rect(px - h, y - h, h * 2, h * 0.82)
+      ctx.clip()
+      drawSheetFrame(ctx, spec, 0, sheetRow(who.facing), px, y, size)
+      ctx.restore()
+
+      return
+    }
+  }
 
   const key = [
     'trainer',
@@ -1391,7 +1473,27 @@ export function drawTrainer(
   // A shade over one tile, so a sprite reads as a person in a room rather than as a tile.
   const drawn = size * 1.5
 
-  blit(ctx, canvas, px, py + size * 0.35, drawn, drawn, who.facing === 'left')
+  if (!opts.sitting) return blit(ctx, canvas, px, py + size * 0.35, drawn, drawn, who.facing === 'left')
+
+  /*
+   * Sitting, from a sprite sheet that has no sitting frame.
+   *
+   * There is no honest way to draw a seated 16×16 trainer without a seated 16×16 trainer, so
+   * this doesn't try to invent one. It does the two things that actually read as "in the chair"
+   * at this size: the figure drops a few pixels, so their head sits below where a standing
+   * person's would be and level with the back of the couch; and the bottom fifth is clipped
+   * away, so no legs dangle through the seat. Behind the clip the sprite is unchanged, which is
+   * why every costume and hairstyle sits down correctly without artwork of its own.
+   */
+  const sunk = size * 0.2
+  const legs = drawn * 0.18
+
+  ctx.save()
+  ctx.beginPath()
+  ctx.rect(px - drawn / 2, py - drawn + size * 0.35 + sunk, drawn, drawn - legs)
+  ctx.clip()
+  blit(ctx, canvas, px, py + size * 0.35 + sunk, drawn, drawn, who.facing === 'left')
+  ctx.restore()
 }
 
 /**

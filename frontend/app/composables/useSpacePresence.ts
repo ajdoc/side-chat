@@ -56,6 +56,8 @@ interface MovePayload {
   facing: Facing
   look?: AvatarLook
   pet?: PetKind | null
+  /** The furniture they're sitting on, if any — see Occupant.seatedOn. */
+  seat?: string | null
 }
 
 type RemoteOccupant = Occupant & { tx: number, ty: number, at: number }
@@ -279,6 +281,82 @@ export function useSpacePresence(channelId: number, map: Ref<SpaceMap | null>) {
     })
   }
 
+  // --- sitting ---
+
+  /**
+   * Where you were standing when you sat down.
+   *
+   * Getting up has to put you somewhere you can actually be, and the seat itself usually isn't:
+   * a couch is solid, so the tile you're sitting on is one you could never have walked onto.
+   * Remembering the tile you came from means standing up returns you to the floor you were on a
+   * moment ago, which is both correct and what it looks like should happen.
+   */
+  let stoodAt: { x: number, y: number } | null = null
+
+  /**
+   * Sit down on a piece of furniture.
+   *
+   * Bypasses collision on purpose — that's the point of a seat. Everything that keeps this from
+   * being a way to stand inside a wall is upstream, in the catalogue: only a piece marked as a
+   * seat ever gets here, and where on it you land is {@link seatOn}'s decision, not a
+   * coordinate anybody sent.
+   */
+  function sit(objectId: string, at: { x: number, y: number, facing: Facing }) {
+    if (!me.value || me.value.seatedOn) return
+
+    stoodAt = { x: me.value.x, y: me.value.y }
+    // Sitting down ends whatever walk was in progress. Without this, a tap-to-walk target that
+    // was still live would drag you straight back off the couch.
+    steer = null
+    held.clear()
+    moving.value = false
+
+    me.value = { ...me.value, x: at.x, y: at.y, facing: at.facing, seatedOn: objectId }
+    whisperMove(true)
+    persist()
+  }
+
+  /**
+   * Get up. Back to the tile you sat down from, or the nearest floor if the room has been
+   * rebuilt around you in the meantime.
+   */
+  function stand() {
+    const m = map.value
+    if (!me.value?.seatedOn || !m) return
+
+    const back = stoodAt && isWalkable(m, stoodAt.x, stoodAt.y) ? stoodAt : nearestFloor(m, me.value)
+    stoodAt = null
+
+    me.value = { ...me.value, x: back.x, y: back.y, seatedOn: null }
+    whisperMove(true)
+    persist()
+  }
+
+  const seated = computed(() => !!me.value?.seatedOn)
+
+  /**
+   * The closest tile you could stand on, searched outwards in rings.
+   *
+   * Only ever reached when the seat you're on has stopped having floor beside it — somebody
+   * rebuilt the room while you sat in it. Falls back to the entrance, which is where the room
+   * puts anybody it can't otherwise place.
+   */
+  function nearestFloor(m: SpaceMap, from: { x: number, y: number }): { x: number, y: number } {
+    const cx = Math.round(from.x)
+    const cy = Math.round(from.y)
+
+    for (let r = 1; r <= 6; r++) {
+      for (let dy = -r; dy <= r; dy++) {
+        for (let dx = -r; dx <= r; dx++) {
+          if (Math.max(Math.abs(dx), Math.abs(dy)) !== r) continue
+          if (isWalkable(m, cx + dx, cy + dy)) return { x: cx + dx, y: cy + dy }
+        }
+      }
+    }
+
+    return spawnPoint(m)
+  }
+
   /**
    * Teleport, and tell the room at once.
    *
@@ -288,7 +366,10 @@ export function useSpacePresence(channelId: number, map: Ref<SpaceMap | null>) {
    */
   function warp(x: number, y: number) {
     if (!me.value) return
-    me.value = { ...me.value, x, y }
+    // Being whisked across the room is being got up: a game that moves everybody to one spot
+    // must not leave somebody still nominally sitting on a couch two rooms away.
+    stoodAt = null
+    me.value = { ...me.value, x, y, seatedOn: null }
     whisperMove(true)
   }
 
@@ -456,6 +537,18 @@ export function useSpacePresence(channelId: number, map: Ref<SpaceMap | null>) {
     let dy = (held.has('arrowdown') || held.has('s') ? 1 : 0) - (held.has('arrowup') || held.has('w') ? 1 : 0)
     let pointed = false
 
+    /*
+     * Sitting is a state you leave by trying to move, which is the rule every game with a chair
+     * in it uses and the one nobody has to be taught. Standing up happens *this* frame and the
+     * walking starts on the next one, so getting up is a beat of its own rather than a person
+     * teleporting off the couch mid-stride.
+     */
+    if (me.value.seatedOn) {
+      if (dx !== 0 || dy !== 0 || steer) stand()
+
+      return
+    }
+
     // No key down, but a pointer has asked for somewhere: head for it. The direction is recomputed
     // every frame rather than once on the tap, so walking round a couch still ends up where you
     // pointed instead of alongside it.
@@ -546,6 +639,7 @@ export function useSpacePresence(channelId: number, map: Ref<SpaceMap | null>) {
       facing: me.value.facing,
       look: me.value.look,
       pet: me.value.pet ?? null,
+      seat: me.value.seatedOn ?? null,
     } satisfies MovePayload)
   }
 
@@ -566,6 +660,7 @@ export function useSpacePresence(channelId: number, map: Ref<SpaceMap | null>) {
       // in for anyone to see it. Mutated in place, like the position, so it costs no re-render.
       if (payload.look) existing.look = payload.look
       existing.pet = payload.pet ?? null
+      existing.seatedOn = payload.seat ?? null
       if (existing.pet && !existing.petAt) {
         existing.petAt = { x: payload.x, y: payload.y, facing: payload.facing }
       }
@@ -596,6 +691,7 @@ export function useSpacePresence(channelId: number, map: Ref<SpaceMap | null>) {
         look,
         pet: payload.pet ?? null,
         petAt: { x: payload.x - 0.6, y: payload.y + 0.3, facing: payload.facing },
+        seatedOn: payload.seat ?? null,
         at: Date.now(),
       },
     }
@@ -902,6 +998,9 @@ export function useSpacePresence(channelId: number, map: Ref<SpaceMap | null>) {
     tick,
     walkTo,
     stopWalking,
+    sit,
+    stand,
+    seated,
     isWalking,
     subscribe,
     unsubscribe,

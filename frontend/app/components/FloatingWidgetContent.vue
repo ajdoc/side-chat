@@ -8,14 +8,19 @@ import type { Widget } from '~/types'
  * only an id and refetches the state — exactly what a timeline card does when it arrives as a
  * reference. State stays current by listening for `.WidgetUpdated` on the widget's own channel
  * stream and refetching; the handler is kept so teardown removes *only ours*, leaving the
- * timeline's listener (useMessages) on the same channel object untouched. See useMusicPin,
- * which does the same dance for the one music widget that gets a dedicated dock.
+ * timeline's listener (useMessages) on the same channel object untouched.
+ *
+ * The stream is *held* rather than merely joined ({@link useEchoStream}), and that is what makes
+ * a floated widget stay live once you walk away from the channel it came from. Without the hold,
+ * the timeline's `echo.leave` on the way out took this window's listener with it — the board sat
+ * there showing the state it had when you left, and only caught up if you went back to its
+ * channel, which is precisely what a floating window is supposed to save you from.
  */
 const props = defineProps<{ win: FloatingWidgetWindow }>()
 
 const { close } = useFloatingWindows()
 const api = useApi()
-const echo: any = import.meta.client ? useNuxtApp().$echo : null
+const { hold, release } = useEchoStream()
 
 const widget = ref<Widget | null>(null)
 const gone = ref(false)
@@ -34,16 +39,21 @@ async function refresh() {
   }
 }
 
+const streamName = `channel.${props.win.channelId}`
+
 onMounted(async () => {
+  // Held before the fetch resolves, not after: a hold taken late is a window that misses
+  // every update landing in the gap, and re-syncing from HTTP would only paper over it.
+  channel = hold(streamName)
+  channel?.listen('.WidgetUpdated', onUpdated)
+
   await refresh()
-  if (echo && !gone.value) {
-    channel = echo.private(`channel.${props.win.channelId}`)
-    channel.listen('.WidgetUpdated', onUpdated)
-  }
 })
 onBeforeUnmount(() => {
-  if (channel) channel.stopListening('.WidgetUpdated', onUpdated)
+  if (!channel) return
+  channel.stopListening('.WidgetUpdated', onUpdated)
   channel = null
+  release(streamName)
 })
 </script>
 

@@ -48,9 +48,9 @@ final class Avatars
      * characters are ours.
      */
     public const COSTUMES = [
-        'none', 'cantor', 'sentinel', 'merc', 'cactus', 'guard', 'colossus', 
+        'none', 'cantor', 'sentinel', 'merc', 'cactus', 'guard', 'colossus',
         'plush', 'bunny', 'faceless', 'mummy', 'jackoghost', 'pirate', 'robot',
-        'witch', 'devil'
+        'witch', 'devil', 'espurr',
     ];
 
     /**
@@ -69,6 +69,8 @@ final class Avatars
             'sprigling' => ['label' => 'Sprigling', 'element' => 'grass', 'region' => 'second'],
             'cinderkit' => ['label' => 'Cinderkit', 'element' => 'fire', 'region' => 'second'],
             'snapling' => ['label' => 'Snapling', 'element' => 'water', 'region' => 'second'],
+            // Neither trio, and not an element the others use — a visitor rather than a starter.
+            'espurr' => ['label' => 'Espurr', 'element' => 'psychic', 'region' => 'guest'],
         ];
     }
 

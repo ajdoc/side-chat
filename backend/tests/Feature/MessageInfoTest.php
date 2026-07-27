@@ -1,5 +1,6 @@
 <?php
 
+use App\Models\Conversation;
 use App\Models\Message;
 use App\Models\Thread;
 use App\Models\User;
@@ -110,4 +111,28 @@ it('forbids non-members from opening message info', function () {
     Passport::actingAs(User::factory()->create());
 
     $this->getJson("/api/messages/{$message->id}/info")->assertForbidden();
+});
+
+/*
+ * A group chat owns its channel exactly as a server does, and the panel used to ask the
+ * channel for its *server* — which in a chat is null, so every "Seen by" in a group chat
+ * was a 500. It asks the container now.
+ */
+it('splits seen and unseen across a group chat', function () {
+    [$alice, $bob] = twoMembers();
+    $carol = User::factory()->create(['name' => 'Carol']);
+    $conversation = Conversation::factory()->group()->withMembers([$alice, $bob, $carol])->create();
+    $channel = $conversation->channel;
+
+    $message = Message::factory()->create(['channel_id' => $channel->id, 'user_id' => $alice->id]);
+
+    Passport::actingAs($bob);
+    $this->postJson("/api/channels/{$channel->id}/read", ['message_id' => $message->id])->assertOk();
+
+    Passport::actingAs($alice);
+    $response = $this->getJson("/api/messages/{$message->id}/info")->assertOk();
+
+    // The sender is in neither list; Bob has read it, Carol hasn't.
+    expect(collect($response->json('data.seen_by'))->pluck('user.id')->all())->toBe([$bob->id])
+        ->and(collect($response->json('data.not_seen_by'))->pluck('id')->all())->toBe([$carol->id]);
 });

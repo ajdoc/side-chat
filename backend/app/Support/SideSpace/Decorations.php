@@ -67,11 +67,17 @@ final class Decorations
     /**
      * Every kind, keyed by the value a saved map may use.
      *
-     * @return array<string, array{label: string, w: int, h: int, solid: bool, mount: string, interact: string|null, verb: string|null}>
+     * @return array<string, array{label: string, w: int, h: int, solid: bool, mount: string, interact: string|null, verb: string|null, door: bool}>
      */
     public static function all(): array
     {
         return [
+            // --- doors ---
+            // Solid, like a wall, and that is the *stored* truth about them: a door's opening is
+            // a moment, not a property, and nothing here knows where anybody is standing. See
+            // the note on `door` in self::kind().
+            'door' => self::kind('Door', door: true),
+            'gate' => self::kind('Gate', w: 2, door: true),
             // --- interactive: furniture that opens something ---
             'speaker' => self::kind('Speaker', interact: 'music', verb: 'Put something on'),
             'tv' => self::kind('TV', w: 2, interact: 'video', verb: 'Watch something'),
@@ -144,6 +150,7 @@ final class Decorations
         string $mount = self::MOUNT_FLOOR,
         ?string $interact = null,
         ?string $verb = null,
+        bool $door = false,
     ): array {
         return [
             'label' => $label,
@@ -153,7 +160,26 @@ final class Decorations
             'mount' => $mount,
             'interact' => $interact,
             'verb' => $verb,
+            /*
+             * A door opens by itself when somebody who may pass walks up to it, which makes it
+             * the one piece of furniture whose solidity is a *function of the moment* rather
+             * than a fact about the kind.
+             *
+             * The server keeps calling it solid anyway, and that is not a compromise. Everything
+             * the server judges is about the room at rest — is spawn somewhere you can stand,
+             * does this zone contain a standable tile, does that couch overlap anything — and
+             * for every one of those questions the honest answer treats a door as shut. Nobody
+             * is standing in a map being validated. Only the browser, which knows where everyone
+             * is this frame, opens them; see lib/spaceDoors.ts.
+             */
+            'door' => $door,
         ];
+    }
+
+    /** Is this kind a door — something that opens rather than something you walk round? */
+    public static function isDoor(string $kind): bool
+    {
+        return self::find($kind)['door'] ?? false;
     }
 
     /** @return array<int, string> */

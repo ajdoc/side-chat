@@ -2,7 +2,7 @@
 
 namespace App\Http\Requests\SideSpace;
 
-use App\Http\Requests\ServerOwnerRequest;
+use App\Http\Requests\MemberRequest;
 use App\Models\SideSpaceMap;
 use App\Support\SideSpace\Decorations;
 use App\Support\SideSpace\Tiles;
@@ -10,12 +10,20 @@ use Illuminate\Validation\Rule;
 use Illuminate\Validation\Validator;
 
 /**
- * Saving a Side Space's map. Owner only.
+ * Saving a Side Space's map. Any member of the channel's server.
  *
- * Membership isn't enough here, for the same reason it isn't enough to delete a channel: this
- * doesn't add something alongside what everyone else has, it *replaces the room they are
- * standing in*. Painting a wall through somebody is not an edit you want any member to be able
- * to make. See {@see ServerOwnerRequest}.
+ * This used to be owner-only, on the grounds that rebuilding the room replaces the place
+ * everybody is standing in rather than adding something beside it. True, and not the point: a
+ * Side Space is a room a group builds, and a room only one person may lay a floor in is one
+ * person's room that the others visit. The furniture layer was already open to everybody
+ * ({@see UpdateSpaceObjectsRequest}) and the walls being the owner's alone was the seam that
+ * showed.
+ *
+ * What keeps a shared room habitable is not the gate but the *rules*, and those are all in
+ * {@see after()} and unchanged: the grid is the size it claims, spawn is somewhere you can
+ * stand, a zone is somewhere reachable. A member cannot save a room that traps anyone, because
+ * nobody can. Vandalism is left where the rest of the app leaves it — visible, attributed
+ * (`updated_by`), and undone by editing it back.
  *
  * The scalar rules below only get as far as "these are numbers and strings of the right sort".
  * The part that matters — that the grid is exactly the size it claims, that its characters are
@@ -24,7 +32,7 @@ use Illuminate\Validation\Validator;
  * the length: this is user-authored geometry that every other client in the room will render
  * and collide against, so a malformed map is everyone's problem, not just its author's.
  */
-class UpdateSideSpaceMapRequest extends ServerOwnerRequest
+class UpdateSideSpaceMapRequest extends MemberRequest
 {
     /** @return array<string, mixed> */
     public function rules(): array

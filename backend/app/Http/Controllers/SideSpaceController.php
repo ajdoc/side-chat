@@ -3,7 +3,11 @@
 namespace App\Http\Controllers;
 
 use App\Events\SideSpaceMapUpdated;
+use App\Http\Requests\SideSpace\AssignSpaceRoomOwnerRequest;
+use App\Http\Requests\SideSpace\DestroySpaceLockRequest;
+use App\Http\Requests\SideSpace\IndexSpaceLocksRequest;
 use App\Http\Requests\SideSpace\InteractWithSpaceObjectRequest;
+use App\Http\Requests\SideSpace\StoreSpaceLockRequest;
 use App\Http\Requests\SideSpace\ShowSideSpaceMapRequest;
 use App\Http\Requests\SideSpace\UpdateSideSpaceMapRequest;
 use App\Http\Requests\SideSpace\UpdateSpaceObjectsRequest;
@@ -15,7 +19,11 @@ use App\Models\SideSpaceMap;
 use App\Models\VoiceParticipant;
 use App\Services\Widgets\WidgetService;
 use App\Support\DeskApps;
+use App\Models\SideSpaceLock;
+use App\Models\SideSpaceRoom;
+use App\Models\User;
 use App\Support\SideSpace\Decorations;
+use App\Support\SideSpace\Doors;
 use App\Support\SideSpace\MapPresets;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Response;
@@ -232,6 +240,219 @@ class SideSpaceController extends Controller
 
         abort_if($map === null, 404);
 
-        return $map;
+        // Rooms and locks ride along with every read of the map. The browser needs them to
+        // decide whether a door opens, which is a question it answers per frame and cannot go
+        // and ask about. See SideSpaceMapResource.
+        return $map->load('rooms.owner', 'locks.creator');
+    }
+
+    // --- rooms and their doors ---
+
+    /**
+     * Set who is in charge of a room — none, one, or several people.
+     *
+     * Server owner only ({@see AssignSpaceRoomOwnerRequest}), and the root of every other
+     * permission in this file: a room owner may lock their room's doors, so being able to
+     * appoint one is being able to lock anything.
+     *
+     * Takes the whole set and replaces it, rather than adding or removing one at a time. Two
+     * reasons, and the second is the one that matters: it makes "remove Alice" the same call as
+     * "add Bob", so there is one code path instead of three; and it means two people editing the
+     * list can't interleave into a state neither of them asked for — the last writer's list is
+     * simply the list.
+     *
+     * The zone has to exist *now* — appointing somebody to a room that was erased is a row that
+     * could never resolve, and refusing it is a much clearer answer than accepting it and having
+     * nothing happen. Owners have to be members for the same reason a lock's key-holders do: an
+     * owner who can't get into the server can't get into the room.
+     */
+    public function assignRoom(AssignSpaceRoomOwnerRequest $request, Channel $channel, string $zone): JsonResponse
+    {
+        $map = $this->mapFor($channel);
+
+        abort_unless(collect($map->zones ?? [])->contains(fn ($z) => (string) ($z['id'] ?? '') === $zone), 404);
+
+        $ownerIds = collect($request->validated('owner_ids', []))
+            ->map(fn ($id) => (int) $id)
+            ->unique()
+            ->values();
+
+        // Every one of them, before any of them: a partly-applied list would leave the room in a
+        // state the caller never asked for and can only fix by guessing what landed.
+        $members = User::query()->whereIn('id', $ownerIds)->get();
+
+        abort_unless(
+            $members->count() === $ownerIds->count() && $members->every(fn ($u) => $channel->hasMember($u)),
+            422,
+        );
+
+        // Replace the set. Rows for people no longer on the list go, rather than lingering as
+        // owners nobody meant to leave in charge.
+        SideSpaceRoom::query()
+            ->where('side_space_map_id', $map->id)
+            ->where('zone_id', $zone)
+            ->whereNotIn('owner_id', $ownerIds)
+            ->delete();
+
+        foreach ($ownerIds as $ownerId) {
+            SideSpaceRoom::firstOrCreate(
+                ['side_space_map_id' => $map->id, 'zone_id' => $zone, 'owner_id' => $ownerId],
+                ['assigned_by' => $request->user()?->id],
+            );
+        }
+
+        return $this->announce($map);
+    }
+
+    /**
+     * Lock a door, or change who may come through one that's already locked.
+     *
+     * Two gates, and only the first is in the request class. Membership gets you here; whether
+     * you may lock *this* door depends on the room it turns out to guard, which needs the map,
+     * so it's asked here — of the same {@see Doors::mayAdminister} the listing and the removal
+     * ask, because three different answers to "is this your door" is three different bugs.
+     *
+     * The room is worked out once, now, and stored on the lock. It is not recomputed later: a
+     * wall that moves must not quietly transfer somebody's lock to a room they have nothing to
+     * do with.
+     */
+    public function lockDoor(StoreSpaceLockRequest $request, Channel $channel, string $object): JsonResponse
+    {
+        $map = $this->mapFor($channel);
+        $door = Doors::all($map)[$object] ?? null;
+
+        // Not a door, or not there any more. The room may have been rebuilt between the panel
+        // being drawn and the button being pressed, which is a 404 rather than anybody's mistake.
+        abort_if($door === null, 404);
+
+        $zone = Doors::zoneFor($map, $door);
+
+        abort_unless(Doors::mayAdminister($map, $request->user(), $zone), 403);
+
+        SideSpaceLock::updateOrCreate(
+            ['side_space_map_id' => $map->id, 'object_id' => $object],
+            [
+                'zone_id' => $zone,
+                'created_by' => $request->user()?->id,
+                // Only the explicit key-holders. The three who can always pass are resolved on
+                // the way out — see Doors::keyholders.
+                'allowed' => array_values(array_unique(array_map('intval', $request->validated('allowed', [])))),
+            ],
+        );
+
+        return $this->announce($map);
+    }
+
+    /**
+     * Unlock a door.
+     *
+     * Deleting the row *is* unlocking: there is no such thing as an unlocked lock, so a flag
+     * would only be a second way to spell "no row".
+     *
+     * Answers on a door that is already unlocked rather than 404ing — the end state the caller
+     * asked for is the end state they get, and racing two people pressing unlock should not make
+     * one of them wrong.
+     */
+    public function unlockDoor(DestroySpaceLockRequest $request, Channel $channel, string $object): JsonResponse
+    {
+        $map = $this->mapFor($channel);
+        $lock = $map->locks->firstWhere('object_id', $object);
+
+        if ($lock === null) {
+            return $this->announce($map);
+        }
+
+        // Judged on the room the lock was *set* against, not on where the door is now: that is
+        // the room whose owner took responsibility for it, whatever has been built since.
+        abort_unless(Doors::mayAdminister($map, $request->user(), $lock->zone_id), 403);
+
+        $lock->delete();
+
+        return $this->announce($map);
+    }
+
+    /**
+     * The locks somebody is entitled to manage.
+     *
+     * The scoping *is* the feature:
+     *
+     *   - the **server's owner** sees every lock in the space, theirs and everybody else's. It's
+     *     their server, and a lock they can't see is a room they can't get back.
+     *   - a **room owner** sees the locks they set. Not every lock in their room — a lock the
+     *     server owner put on their door is not theirs to remove, and listing it would only
+     *     offer them a button that 403s.
+     *   - **everybody else** sees an empty list.
+     *
+     * Stale rows are included and flagged rather than hidden. A lock whose door has since been
+     * taken out of the wall is exactly the thing somebody needs to see in order to tidy it up;
+     * silently filtering it would leave a row nobody could reach.
+     */
+    public function locks(IndexSpaceLocksRequest $request, Channel $channel): JsonResponse
+    {
+        $map = $this->mapFor($channel);
+        $user = $request->user();
+        $isServerOwner = Doors::isServerOwner($map, $user);
+
+        $rows = $map->locks
+            ->when(! $isServerOwner, fn ($locks) => $locks->where('created_by', $user?->id))
+            ->values();
+
+        $doors = Doors::all($map);
+        $zones = collect($map->zones ?? [])->keyBy('id');
+        $names = User::query()
+            ->whereIn('id', $rows->flatMap(fn ($lock) => Doors::keyholders($map, $lock))->unique())
+            ->pluck('name', 'id');
+
+        return response()->json([
+            'data' => $rows->map(fn (SideSpaceLock $lock) => [
+                'object_id' => $lock->object_id,
+                'door' => Decorations::find((string) ($doors[$lock->object_id]['kind'] ?? ''))['label'] ?? null,
+                // Null once the door has been removed from the map — the row is stale, and the
+                // client says so rather than drawing a lock on nothing.
+                'present' => isset($doors[$lock->object_id]),
+                'zone_id' => $lock->zone_id,
+                'room' => $zones[$lock->zone_id]['name'] ?? null,
+                'created_by' => $lock->creator?->name,
+                'mine' => $lock->created_by === $user?->id,
+                // Everybody who may pass, resolved — for showing.
+                'allowed' => collect(Doors::keyholders($map, $lock))
+                    ->map(fn (int $id) => ['id' => $id, 'name' => $names[$id] ?? null])
+                    ->values(),
+                /*
+                 * The keys actually *stored* on this lock — for editing.
+                 *
+                 * Sent apart from `allowed` because the two are different questions and the
+                 * client needs both. Editing must send back the explicit list alone: fold the
+                 * resolved people into it and the room's current owners get written into the row,
+                 * where they'd stay as standing keys after the room changed hands. Deriving one
+                 * from the other client-side means guessing which of the names it can see were
+                 * granted, which is exactly the sort of guess that quietly stops being right.
+                 */
+                'granted' => array_values(array_map('intval', $lock->allowed ?? [])),
+                'created_at' => $lock->created_at,
+            ]),
+            // What the panel needs to know about *itself*: whether to offer the rooms tab, and
+            // which rooms this person may lock doors in.
+            'can_manage_rooms' => $isServerOwner,
+            'my_rooms' => $isServerOwner
+                ? collect($map->zones ?? [])->pluck('id')->values()
+                : $map->rooms->where('owner_id', $user?->id)->pluck('zone_id')->unique()->values(),
+        ]);
+    }
+
+    /**
+     * Hand back the map, and tell everyone standing in it.
+     *
+     * Every write above changes what a door will do, and a door that opens on one screen and not
+     * another is the one failure this whole feature has to avoid. So they all broadcast the map,
+     * exactly as moving a couch does — the locks travel inside it.
+     */
+    private function announce(SideSpaceMap $map): JsonResponse
+    {
+        $fresh = $map->fresh(['rooms.owner', 'locks.creator', 'editor']);
+
+        broadcast(new SideSpaceMapUpdated($fresh));
+
+        return response()->json(['data' => (new SideSpaceMapResource($fresh))->resolve()]);
     }
 }

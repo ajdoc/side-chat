@@ -34,6 +34,8 @@ export function useMusicPin() {
   // Captured here, in setup, rather than reached for inside the callbacks below: those run
   // from clicks and sockets, where the Nuxt instance isn't guaranteed to be current.
   const echo: any = import.meta.client ? useNuxtApp().$echo : null
+  // The dock outlives every timeline, so it keeps its own hold on the widget's stream.
+  const { hold, release } = useEchoStream()
   const widget = useState<Widget | null>('music:pinned', () => null)
   // Which widgets this viewer has opted in to hearing ("Listen along"). Global so the opt-in
   // survives the hand-off between the timeline card and the dock — being made to click
@@ -52,9 +54,18 @@ export function useMusicPin() {
     }
   }
 
+  /**
+   * Listen on the pinned widget's channel — and *hold* that channel open.
+   *
+   * The hold is what lets the dock outlive the timeline it was pinned from. `echo.leave` takes
+   * a whole subscription with it, so for a long time changing channel struck the dock deaf and
+   * it had to be handed its listener back afterwards. Counting the holders removes the need for
+   * that dance entirely: the timeline's release simply isn't the last one. See useEchoStream.
+   */
   function listen(channelId: number | null) {
     if (!echo || listeningOn === channelId) return
     if (channel && handler) channel.stopListening('.WidgetUpdated', handler)
+    if (listeningOn != null) release(`channel.${listeningOn}`)
     channel = null
     handler = null
     listeningOn = channelId
@@ -63,7 +74,7 @@ export function useMusicPin() {
       if (ref.id !== widget.value?.id) return
       void fetchWidget(ref.id).then((w) => { if (w && widget.value?.id === w.id) widget.value = w })
     }
-    channel = echo.private(`channel.${channelId}`)
+    channel = hold(`channel.${channelId}`)
     channel.listen('.WidgetUpdated', handler)
   }
 
@@ -97,25 +108,6 @@ export function useMusicPin() {
     if (w && widget.value?.id === w.id) widget.value = w
   }
 
-  /**
-   * Put our listener back on the pinned widget's channel.
-   *
-   * `echo.leave()` is all-or-nothing: when the timeline closes (useMessages.unsubscribe) it
-   * takes the whole channel subscription with it, ours included — and a dock that stops
-   * hearing `.WidgetUpdated` freezes on its last state, which looks exactly like the
-   * transport buttons having stopped working. So the code that leaves calls this after.
-   * A no-op unless the pinned widget actually lives on `channelId`.
-   */
-  function rejoin(channelId: number) {
-    if (widget.value?.channel_id !== channelId) return
-    channel = null
-    handler = null
-    listeningOn = null
-    listen(channelId)
-    // The gap between leaving and re-joining can swallow an update — resync from HTTP.
-    void refresh()
-  }
-
   const isPinned = (id: number) => widget.value?.id === id
   const toggle = (w: Widget) => (isPinned(w.id) ? unpin() : pin(w))
 
@@ -132,5 +124,5 @@ export function useMusicPin() {
     if (!hasJoined(id)) joinedIds.value = [...joinedIds.value, id]
   }
 
-  return { widget, pin, unpin, toggle, isPinned, restore, refresh, rejoin, hasJoined, markJoined }
+  return { widget, pin, unpin, toggle, isPinned, restore, refresh, hasJoined, markJoined }
 }

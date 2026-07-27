@@ -13,6 +13,9 @@ import type { SpaceDocument } from '~/types'
 export function useDocuments(basePath: string, streamName: string) {
   const api = useApi()
   const echo: any = useNuxtApp().$echo
+  // Held for as long as this view is on screen, so the surface's own message stream
+  // leaving the channel can't take our listeners with it. See useEchoStream.
+  const { hold, release } = useEchoStream()
 
   const documents = ref<SpaceDocument[]>([])
   const uploading = ref(false)
@@ -64,7 +67,7 @@ export function useDocuments(basePath: string, streamName: string) {
 
   function subscribe() {
     if (!echo) return
-    channel = echo.private(streamName)
+    channel = hold(streamName)
     channel
       .listen('.SpaceDocumentAdded', (doc: SpaceDocument) => {
         // Broadcast documents are always shelf uploads; key against those to avoid an id
@@ -82,6 +85,7 @@ export function useDocuments(basePath: string, streamName: string) {
       ?.stopListening('.SpaceDocumentAdded')
       .stopListening('.SpaceDocumentRemoved')
     channel = null
+    release(streamName)
   }
 
   return { documents, uploading, load, upload, remove, sendToChat, subscribe, unsubscribe }

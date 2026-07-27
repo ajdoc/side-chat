@@ -8,9 +8,33 @@ const CURSOR_TTL = 4000
 /** Hard cap on points in a *live preview* whisper, so a long path never nears Reverb's limit. */
 const LIVE_POINT_CAP = 300
 
+/**
+ * A detached copy of a stroke's payload.
+ *
+ * `structuredClone` is the obvious tool and the wrong one: a payload reached through
+ * `strokes.value` is a Vue reactive *proxy*, and the structured-clone algorithm refuses proxies
+ * outright — "could not be cloned", thrown from the middle of drawing. A payload is plain JSON
+ * by construction (numbers, strings, a list of points), so a round trip through JSON is both
+ * sufficient and immune to what it's wrapped in.
+ */
+export function snapshot(payload: WhiteboardStrokePayload): WhiteboardStrokePayload {
+  return JSON.parse(JSON.stringify(payload))
+}
+
 /** A remote person's live, in-progress stroke or cursor — ephemeral, never persisted. */
 export interface RemoteCursor { id: number, name: string, x: number, y: number, at: number }
 export interface LiveStroke { id: number, name: string, stroke: { kind: WhiteboardStrokeKind, payload: WhiteboardStrokePayload } }
+
+export type BoardOp =
+  /** A mark I made. Forward: draw it. Back: delete it. */
+  | { op: 'add', clientId: string, kind: WhiteboardStrokeKind, payload: WhiteboardStrokePayload }
+  /** A mark I erased, snapshotted so going back can put it there again. */
+  | { op: 'erase', clientId: string, kind: WhiteboardStrokeKind, payload: WhiteboardStrokePayload }
+  /** A mark I moved, resized or painted — both sides of the change. */
+  | { op: 'edit', clientId: string, before: WhiteboardStrokePayload, after: WhiteboardStrokePayload }
+
+/** What one gesture did, in the order it did it. */
+export type BoardEntry = BoardOp[]
 
 /**
  * A shared whiteboard: the persistent board (over HTTP + broadcast) and the live layer (over
@@ -32,6 +56,9 @@ export interface LiveStroke { id: number, name: string, stroke: { kind: Whiteboa
 export function useWhiteboard(basePath: string, streamName: string) {
   const api = useApi()
   const echo: any = useNuxtApp().$echo
+  // Held for as long as this view is on screen, so the surface's own message stream
+  // leaving the channel can't take our listeners with it. See useEchoStream.
+  const { hold, release } = useEchoStream()
   const { user } = useAuth()
 
   const strokes = ref<WhiteboardStroke[]>([])
@@ -166,7 +193,7 @@ export function useWhiteboard(basePath: string, streamName: string) {
 
   function subscribe() {
     if (!echo) return
-    channel = echo.private(streamName)
+    channel = hold(streamName)
 
     channel
       .listen('.WhiteboardStrokeAdded', (s: WhiteboardStroke) => {
@@ -223,13 +250,186 @@ export function useWhiteboard(basePath: string, streamName: string) {
       .stopListeningForWhisper('wb-cursor')
       .stopListeningForWhisper('wb-move')
     channel = null
+    release(streamName)
+  }
+
+  // --- undo / redo ---
+
+  /*
+   * A board is shared, so "undo" has to mean something narrower than "put the board back how it
+   * was a second ago" — the second ago in question may contain three other people's marks. It
+   * means *take back what I just did*, and the way to take something back on a shared surface is
+   * to perform its inverse through the very same API, so everyone else sees the correction land
+   * exactly as they saw the mistake.
+   *
+   * Hence a log of my own operations rather than a stack of board snapshots. Each entry is the
+   * set of primitives one gesture amounted to — usually one, but the paint bucket on bare board
+   * is "add a backdrop, remove the old ones", and undoing half of that would be worse than not
+   * undoing it at all.
+   *
+   * Marks are tracked by `client_id`, never by server id, because that is the only name for a
+   * mark that survives the round trip: undo an `add` and the row is deleted, redo it and the
+   * server hands back a *different* id. The client id is the drawer's own and we re-use it, so a
+   * mark can go and come back any number of times and every later entry still points at it.
+   */
+
+  const past = ref<BoardEntry[]>([])
+  const future = ref<BoardEntry[]>([])
+  /** True while an undo or redo is being applied, so its own writes aren't logged as new ones. */
+  let replaying = false
+
+  /**
+   * How far back the board remembers. Deep enough to cover any plausible "no, not that" and
+   * shallow enough that a long session's log stays a log rather than a second copy of the board.
+   */
+  const HISTORY_LIMIT = 100
+
+  const canUndo = computed(() => past.value.length > 0)
+  const canRedo = computed(() => future.value.length > 0)
+
+  /**
+   * Log a gesture. Doing anything new abandons the redo branch — the ordinary rule, and the only
+   * honest one: once you've drawn over the thing you undid, there is no "forward" left to go.
+   */
+  function record(entry: BoardEntry) {
+    if (replaying || entry.length === 0) return
+
+    past.value = [...past.value, entry].slice(-HISTORY_LIMIT)
+    future.value = []
+  }
+
+  function strokeFor(clientId: string): WhiteboardStroke | undefined {
+    return strokes.value.find(s => s.client_id === clientId)
+  }
+
+  /** Draw a mark and remember that I did. The path every committed stroke should take. */
+  async function draw(kind: WhiteboardStrokeKind, payload: WhiteboardStrokePayload, clientId = crypto.randomUUID()) {
+    await addStroke(kind, payload, clientId)
+    record([{ op: 'add', clientId, kind, payload: snapshot(payload) }])
+  }
+
+  /** Erase a mark and remember it whole, so undo can put it back rather than approximate it. */
+  async function erase(stroke: WhiteboardStroke) {
+    // Snapshotted *before* the delete: afterwards there is nothing left to copy.
+    const erased: BoardOp = {
+      op: 'erase',
+      clientId: stroke.client_id,
+      kind: stroke.kind,
+      payload: snapshot(stroke.payload),
+    }
+    await removeStroke(stroke)
+    record([erased])
+  }
+
+  /**
+   * Persist a move, resize or recolour and remember both sides of it.
+   *
+   * `before` has to come from the caller: the payload has already been mutated in place for
+   * instant feedback by the time anybody thinks about saving it, so this is the last moment the
+   * old geometry still exists anywhere, and it exists only where it was copied.
+   */
+  async function editStroke(stroke: WhiteboardStroke, before: WhiteboardStrokePayload) {
+    const entry: BoardEntry = [{
+      op: 'edit',
+      clientId: stroke.client_id,
+      before: snapshot(before),
+      after: snapshot(stroke.payload),
+    }]
+    await updateStroke(stroke)
+    record(entry)
+  }
+
+  /** Several primitives that must undo together — the paint bucket on bare board. */
+  async function asOneGesture(steps: () => Promise<BoardEntry>) {
+    const entry = await steps()
+    record(entry)
+  }
+
+  /** Put a payload back on a mark that is currently on the board. */
+  async function restore(clientId: string, payload: WhiteboardStrokePayload) {
+    const stroke = strokeFor(clientId)
+    if (!stroke) return
+
+    stroke.payload = snapshot(payload)
+    await updateStroke(stroke)
+  }
+
+  async function applyOp(op: BoardOp, direction: 'back' | 'forward') {
+    if (op.op === 'add') {
+      if (direction === 'forward') await addStroke(op.kind, op.payload, op.clientId)
+      else {
+        const stroke = strokeFor(op.clientId)
+        if (stroke) await removeStroke(stroke)
+      }
+
+      return
+    }
+
+    if (op.op === 'erase') {
+      // Going back re-draws it under the *undoer's* name, because re-creating a row is the only
+      // way to un-delete one. Erasing somebody else's mark and taking it back therefore leaves
+      // it authored by you — which is a fair price for the mark being there again at all, on a
+      // board where anybody may erase anything.
+      if (direction === 'back') await addStroke(op.kind, op.payload, op.clientId)
+      else {
+        const stroke = strokeFor(op.clientId)
+        if (stroke) await removeStroke(stroke)
+      }
+
+      return
+    }
+
+    await restore(op.clientId, direction === 'back' ? op.before : op.after)
+  }
+
+  /**
+   * Take back the last gesture, or put it back.
+   *
+   * The ops of one gesture are undone in reverse and redone in order, for the reason every
+   * transaction log is replayed that way: "add the new backdrop, then remove the old" only
+   * un-does correctly as "put the old back, then remove the new".
+   *
+   * A failed step reloads from the board of record rather than guessing, and the entry is
+   * consumed either way — an undo that can't be applied and stays at the top of the stack is an
+   * undo the user will press again, to no effect, forever.
+   */
+  async function stepHistory(direction: 'back' | 'forward') {
+    const from = direction === 'back' ? past : future
+    const to = direction === 'back' ? future : past
+    const entry = from.value.at(-1)
+    if (!entry) return
+
+    from.value = from.value.slice(0, -1)
+    replaying = true
+
+    try {
+      const ops = direction === 'back' ? [...entry].reverse() : entry
+      for (const op of ops) await applyOp(op, direction)
+      to.value = [...to.value, entry]
+    } catch {
+      await load()
+    } finally {
+      replaying = false
+    }
+  }
+
+  const undo = () => stepHistory('back')
+  const redo = () => stepHistory('forward')
+
+  /** Wiping the board for everyone leaves nothing for a personal history to point at. */
+  async function clearAll() {
+    await clear()
+    past.value = []
+    future.value = []
   }
 
   onBeforeUnmount(() => clearInterval(pruneTimer))
 
   return {
     strokes, liveStrokes, cursors,
-    load, addStroke, updateStroke, removeStroke, clear,
+    load, addStroke, updateStroke, removeStroke,
+    draw, erase, editStroke, asOneGesture, clear: clearAll,
+    undo, redo, canUndo, canRedo,
     whisperLive, whisperCursor, whisperMove,
     subscribe, unsubscribe,
   }

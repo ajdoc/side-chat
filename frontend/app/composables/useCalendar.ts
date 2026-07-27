@@ -19,6 +19,9 @@ export const DEFAULT_EVENT_COLOR: CalendarEventColor = 'primary'
 export function useCalendar(basePath: string, streamName: string) {
   const api = useApi()
   const echo: any = useNuxtApp().$echo
+  // Held for as long as this view is on screen, so the surface's own message stream
+  // leaving the channel can't take our listeners with it. See useEchoStream.
+  const { hold, release } = useEchoStream()
 
   const { state, attach } = useSurfaceStore('calendar', basePath, () => ({
     events: ref<CalendarEvent[]>([]),
@@ -111,7 +114,7 @@ export function useCalendar(basePath: string, streamName: string) {
       void load()
 
       if (!echo) return
-      const channel = echo.private(streamName)
+      const channel = hold(streamName)
       channel
         .listen('.CalendarEventSaved', (e: CalendarEvent) => upsert(e))
         .listen('.CalendarEventRemoved', (p: { id: number }) => {
@@ -120,6 +123,7 @@ export function useCalendar(basePath: string, streamName: string) {
 
       return () => {
         channel.stopListening('.CalendarEventSaved').stopListening('.CalendarEventRemoved')
+        release(streamName)
       }
     })
   }
