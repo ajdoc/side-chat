@@ -47,7 +47,7 @@ final class Avatars
      * hooded figure in a painted mask, and a suit of powered armour. The genre is borrowed; the
      * characters are ours.
      */
-    public const COSTUMES = ['none', 'cantor', 'sentinel'];
+    public const COSTUMES = ['none', 'cantor', 'sentinel', 'merc', 'cactus', 'guard', 'colossus'];
 
     /**
      * The starters, keyed by what a saved pet stores.
