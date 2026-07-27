@@ -553,8 +553,8 @@ const HAIR_ART: Record<HairKind, Record<SpriteDir, string[]>> = {
  * its chunky outline, without reproducing anyone's particular design.
  */
 
-export type CostumeKind = 'none' | 'cantor' | 'sentinel' | 'merc' | 'cactus' | 'guard' | 'colossus'
-export const COSTUMES: CostumeKind[] = ['none', 'cantor', 'sentinel', 'merc', 'cactus', 'guard', 'colossus']
+export type CostumeKind = 'none' | 'cantor' | 'sentinel' | 'merc' | 'cactus' | 'guard' | 'colossus' | 'plush' | 'bunny' | 'faceless' | 'mummy' | 'jackoghost' | 'pirate' | 'robot' | 'witch' | 'devil'
+export const COSTUMES: CostumeKind[] = ['none', 'cantor', 'sentinel', 'merc', 'cactus', 'guard', 'colossus', 'plush', 'bunny', 'faceless', 'mummy', 'jackoghost', 'pirate', 'robot', 'witch', 'devil']
 
 interface Costume {
   label: string
@@ -1069,6 +1069,186 @@ const COLOSSUS: Costume = {
   },
 }
 
+/**
+ * Plush Hood: a soft pink hood with fur trim and bunny ears, a face still visible underneath.
+ */
+const PLUSH: Costume = {
+  label: 'Plush Hood',
+  blurb: 'A soft pink hood with fur trim and bunny ears',
+  covered: true,
+  paint: { P: '#f3b6c9', W: '#fbeee6', Y: '#ffffff', b: '#e8869f', e: '#2a2020' },
+  body: {
+    down: ['.....Y....Y.....', '....YYo..oYY....', '....oPPPPPPo....', '...oPPWWWWPPo...', '...oPWeWWeWPo...', '...oPWbWWbWPo...', '...oPPWWWWPPo...', '....oPPPPPPo....', '.....oYYYYo.....', '...oPPPPPPPPo...', '..oPPPPPPPPPPo..', '..oPPPPPPPPPPo..', '..oPPPPPPPPPPo..', '...oPPPPPPPPo...'],
+    up: ['.....Y....Y.....', '....YYo..oYY....', '....oPPPPPPo....', '...oPPPPPPPPo...', '...oPPPPPPPPo...', '...oPPPPPPPPo...', '...oPPPPPPPPo...', '....oPPPPPPo....', '.....oYYYYo.....', '...oPPPPPPPPo...', '..oPPPPPPPPPPo..', '..oPPPPPPPPPPo..', '..oPPPPPPPPPPo..', '...oPPPPPPPPo...'],
+    right: ['.......Y........', '......YYo.......', '....oPPPPPPo....', '...oPPWWWWPo....', '...oPWeWbWPo....', '...oPWWWWWPo....', '...oPPWWWWPo....', '....oPPPPPo.....', '.....oYYYYo.....', '....oPPYYPPo....', '...oPPPYYPPPo...', '...oPPPPPPPPo...', '....oPPPPPPo....', '.....oPPPPo.....'],
+  },
+  legs: {
+    down: [['...oPPPooPPPo...', '....oYYooYYo....'], ['...oPPPPPPPPo...', '...oYYo..oYYo...']],
+    up: [['...oPPPooPPPo...', '....oYYooYYo....'], ['...oPPPPPPPPo...', '...oYYo..oYYo...']],
+    right: [['....oPPPPPo.....', '.....oYYYo......'], ['...oPPPPPo......', '...oYYo.oYYo....']],
+  },
+}
+
+/**
+ * Bunny Buddy: fluffy ears, a soft modest onesie, and a little cotton tail visible from behind.
+ */
+const BUNNY: Costume = {
+  label: 'Bunny Buddy',
+  blurb: 'Fluffy ears, a soft onesie, and a little cotton tail',
+  covered: true,
+  paint: { F: '#faf6f2', E: '#e8a3c0', S: '#f3cfae', e: '#2a2020', C: '#e7dcc8', T: '#ffffff', B: '#5a4632' },
+  body: {
+    down: ['.....F....F.....', '....FFo..oFF....', '....oSSSSSSo....', '...oSSeSSeSSo...', '...oSSSSSSSSo...', '....oSSSSSSo....', '.....oFFFFo.....', '...oCCCCCCCCo...', '..oCCCCCCCCCCo..', '..oCCCCCCCCCCo..', '..oCCCCCCCCCCo..', '..oCCCCCCCCCCo..', '..oCCCCCCCCCCo..', '...oCCCCCCCCo...'],
+    up: ['.....F....F.....', '....FFo..oFF....', '....oSSSSSSo....', '...oSSSSSSSSo...', '...oSSSSSSSSo...', '....oSSSSSSo....', '.....oFFFFo.....', '...oCCCCCCCCo...', '..oCCCCCCCCCCo..', '..oCCCCCCCCCCo..', '..oCCCCTTCCCCo..', '..oCCCCTTCCCCo..', '..oCCCCCCCCCCo..', '...oCCCCCCCCo...'],
+    right: ['.......F........', '......FFo.......', '....oSSSSSSo....', '...oSSeSSSSo....', '...oSSSSSSFo....', '...oSSSFFSSo....', '...oSSSSSSSo....', '...oSSSSSSSo....', '....oFFFFFo.....', '.....oCCCCo.....', '....oCCCCCCo....', '...oCCCCCCCCo...', '...oCCCCCCCCo...', '....oCCCCCCo....'],
+  },
+  legs: {
+    down: [['.oCCCCCCCCCCCCo.', '...oBBooooBBo...'], ['.oCCCCCCCCCCCCo.', '...oBBo..oBBo...']],
+    up: [['.oCCCCCCCCCCCCo.', '...oBBooooBBo...'], ['.oCCCCCCCCCCCCo.', '...oBBo..oBBo...']],
+    right: [['....oCCCCCo.....', '.....oBBBo......'], ['...oCCCCCo......', '...oBBo.oBBo....']],
+  },
+}
+
+/**
+ * Faceless Suit: a plain black suit and a blank pale face, nothing more.
+ */
+const FACELESS: Costume = {
+  label: 'Faceless Suit',
+  blurb: 'A plain black suit and a blank pale face, no other details',
+  covered: true,
+  paint: { W: '#e4d9c8' },
+  body: {
+    down: ['................', '.....oooooo.....', '....oWWWWWWo....', '....oWWWWWWo....', '...ooWWWWWWoo...', '...oWWWWWWWWo...', '...oWWWWWWWWo...', '...oWWWWWWWWo...', '....oWWWWWWo....', '.....oooooo.....', '...oooooooooo...', '..oooooooooooo..', '..oooooooooooo..', '...oooooooooo...'],
+    up: ['................', '.....oooooo.....', '....oWWWWWWo....', '....oWWWWWWo....', '...ooWWWWWWoo...', '...oWWWWWWWWo...', '...oWWWWWWWWo...', '...oWWWWWWWWo...', '....oWWWWWWo....', '.....oooooo.....', '...oooooooooo...', '..oooooooooooo..', '..oooooooooooo..', '...oooooooooo...'],
+    right: ['................', '.....oooooo.....', '....oWWWWWWo....', '....oWWWWWWWo...', '...ooWWWWWWo....', '...oWWWWWWWo....', '...oWWWWWWWo....', '...oWWWWWWWo....', '....oWWWWWo.....', '.....oooooo.....', '....oooooooo....', '...ooooooooo....', '...ooooooooo....', '....ooooooo.....'],
+  },
+  legs: {
+    down: [['....oooooooo....', '....oooooooo....'], ['....oooooooo....', '...ooo..ooo...']],
+    up: [['....oooooooo....', '....oooooooo....'], ['....oooooooo....', '...ooo..ooo...']],
+    right: [['.....ooooo......', '.....ooooo......'], ['....oooooo......', '...ooo.ooo....']],
+  },
+}
+
+/**
+ * Wrapped Mummy: head-to-toe bandages with dark hollow eyes.
+ */
+const MUMMY: Costume = {
+  label: 'Wrapped Mummy',
+  blurb: 'Head-to-toe bandages with dark hollow eyes',
+  covered: true,
+  paint: { M: '#d9c49a', m: '#b89b6c', d: '#1c1a1f' },
+  body: {
+    down: ['................', '.....oooooo.....', '....oMMMMMMo....', '....oMMMMMMo....', '...ooMMMMMMoo...', '...oMMMMMMMMo...', '...oMddMMddMo...', '...oMMMMMMMMo...', '....oMMMMMMo....', '.....oooooo.....', '...omMMMMMMmo...', '..ommMMMMMMmmo..', '..oMmMMMMMMmMo..', '...ooMMMMMMoo...'],
+    up: ['................', '.....oooooo.....', '....oMMMMMMo....', '....oMMMMMMo....', '...ooMMMMMMoo...', '...oMMMMMMMMo...', '...oMMMMMMMMo...', '...oMMMMMMMMo...', '....oMMMMMMo....', '.....oooooo.....', '...omMMMMMMmo...', '..ommMMMMMMmmo..', '..oMmMMMMMMmMo..', '...ooMMMMMMoo...'],
+    right: ['................', '.....oooooo.....', '....oMMMMMMo....', '....oMMMMMMMo...', '...ooMMMMMMo....', '...oMMMMMMMo....', '...oMMMddMMo....', '...oMMMMMMMo....', '....oMMMMMo.....', '.....oooooo.....', '....oMMMMMMo....', '...ommMMMMMo....', '...ommMMMMMo....', '....ooMMMMo.....'],
+  },
+  legs: {
+    down: [['....oMMooMMo....', '....ommoommo....'], ['....oMMMMMMo....', '...ommo..ommo...']],
+    up: [['....oMMooMMo....', '....ommoommo....'], ['....oMMMMMMo....', '...ommo..ommo...']],
+    right: [['.....oMMMo......', '.....ommmo......'], ['....oMMMMo......', '...ommo.ommo....']],
+  },
+}
+
+/**
+ * Jack-o Ghost: a grinning pumpkin head floating over a tattered grey robe.
+ */
+const JACKOGHOST: Costume = {
+  label: 'Jack-o Ghost',
+  blurb: 'A grinning pumpkin head floating over a tattered grey robe',
+  covered: true,
+  paint: { O: '#e8862f', d: '#3a2410', Y: '#aab0b8', b: '#5a4632' },
+  body: {
+    down: ['......bb........', '....oOOOOOOo....', '...oOOOOOOOOo...', '...oOdOOOOdOo...', '...oOOddddOOo...', '....oOOOOOOo....', '.....oYYYYo.....', '...oYYYYYYYYo...', '....oYYYYYYo....', '.....oYYYYo.....', '...oYYYYYYYYo...', '..oYYYYYYYYYYo..', '..oYYYYYYYYYYo..', '...oYYYYYYYYo...'],
+    up: ['......bb........', '....oOOOOOOo....', '...oOOOOOOOOo...', '...oOOOOOOOOo...', '...oOOOOOOOOo...', '....oOOOOOOo....', '.....oYYYYo.....', '...oYYYYYYYYo...', '....oYYYYYYo....', '.....oYYYYo.....', '...oYYYYYYYYo...', '..oYYYYYYYYYYo..', '..oYYYYYYYYYYo..', '...oYYYYYYYYo...'],
+    right: ['.......bb.......', '....oOOOOOOo....', '...oOOOOOOOOo...', '...oOdOOOOo....', '...oOOddOOo....', '....oOOOOOo.....', '.....oYYYo......', '...oYYYYYYYo....', '....oYYYYYo.....', '.....oYYYo......', '...oYYYYYYYo....', '..oYYYYYYYYYo...', '..oYYYYYYYYYo...', '...oYYYYYYYo....'],
+  },
+  legs: {
+    down: [['..oYYYYYYYYYYo..', '.oYYYYYYYYYYYYo.'], ['..oYYYYYYYYYYo..', '.oYYYYYYYYYYYYo.']],
+    up: [['..oYYYYYYYYYYo..', '.oYYYYYYYYYYYYo.'], ['..oYYYYYYYYYYo..', '.oYYYYYYYYYYYYo.']],
+    right: [['..oYYYYYYYYYo...', '.oYYYYYYYYYYYo..'], ['..oYYYYYYYYYo...', '.oYYYYYYYYYYYo..']],
+  },
+}
+
+/**
+ * Sea Rover: a tricorn hat, a weathered coat, and gold buttons.
+ */
+const PIRATE: Costume = {
+  label: 'Sea Rover',
+  blurb: 'A tricorn hat, a weathered coat, and gold buttons',
+  covered: true,
+  paint: { H: '#25324a', T: '#d9a06a', e: '#2a1c14', N: '#f0e6d2', C: '#8a5a34', Y: '#d9a83c', B: '#3a281c' },
+  body: {
+    down: ['..HHHHHHHHHHHH..', '.HHHHHHHHHHHHHH.', '..HHoTTTTTToHH..', '...oTTeTTeTTo...', '...oTTTTTTTTo...', '....oTTTTTTo....', '.....oNNNNo.....', '...oCCCCCCCCo...', '..oCCCCCCCCCCo..', '..oCCCYCCCYCCo..', '..oCCCCCCCCCCo..', '..oCCCCCCCCCCo..', '...oCCCCCCCCo...', '...oCCCCCCCCo...'],
+    up: ['..HHHHHHHHHHHH..', '.HHHHHHHHHHHHHH.', '..HHoTTTTTToHH..', '...oTTTTTTTTo...', '...oTTTTTTTTo...', '....oTTTTTTo....', '.....oNNNNo.....', '...oCCCCCCCCo...', '..oCCCCCCCCCCo..', '..oCCCCCCCCCCo..', '..oCCCCCCCCCCo..', '..oCCCCCCCCCCo..', '...oCCCCCCCCo...', '...oCCCCCCCCo...'],
+    right: ['...HHHHHHHHH....', '..HHHHHHHHHHH...', '..HHoTTTTTo.....', '...oTTeTTTo.....', '...oTTTTTTTo....', '....oTTTTTo.....', '.....oNNNo......', '....oCCCCCCo....', '...oCCCCCCCCo...', '...oCCCYCCCo....', '...oCCCCCCCCo...', '...oCCCCCCCCo...', '....oCCCCCCo....', '....oCCCCCCo....'],
+  },
+  legs: {
+    down: [['...oCCCooCCCo...', '....oBBooBBo....'], ['...oCCCCCCCCo...', '...oBBo..oBBo...']],
+    up: [['...oCCCooCCCo...', '....oBBooBBo....'], ['...oCCCCCCCCo...', '...oBBo..oBBo...']],
+    right: [['....oCCCCCo.....', '.....oBBBo......'], ['...oCCCCCo......', '...oBBo.oBBo....']],
+  },
+}
+
+/**
+ * Tin Automaton: a boxy chassis with a single glowing visor.
+ */
+const ROBOT: Costume = {
+  label: 'Tin Automaton',
+  blurb: 'A boxy chassis with a single glowing visor',
+  covered: true,
+  paint: { R: '#b7bdc6', r: '#8a9099', V: '#6fd6e0' },
+  body: {
+    down: ['....oooooooo....', '...oRRRRRRRRo...', '...oRVVVVVVRo...', '...oRRRRRRRRo...', '....oRRRRRRo....', '.....oRRRRo.....', '...oRRRRRRRRo...', '..oRRRRRRRRRRo..', '..oRRrRRRRrRRo..', '..oRRRRRRRRRRo..', '..oRRRRRRRRRRo..', '..oRRRRRRRRRRo..', '...oRRRRRRRRo...', '...oRRRRRRRRo...'],
+    up: ['....oooooooo....', '...oRRRRRRRRo...', '...oRRRRRRRRo...', '...oRRRRRRRRo...', '....oRRRRRRo....', '.....oRRRRo.....', '...oRRRRRRRRo...', '..oRRRRRRRRRRo..', '..oRRRRRRRRRRo..', '..oRRRRRRRRRRo..', '..oRRRRRRRRRRo..', '..oRRRRRRRRRRo..', '...oRRRRRRRRo...', '...oRRRRRRRRo...'],
+    right: ['...oooooooo.....', '..oRRRRRRRRo....', '..oRVVVVVVRo....', '..oRRRRRRRRo....', '...oRRRRRRo.....', '....oRRRRo......', '..oRRRRRRRRo....', '.oRRRRRRRRRRo...', '.oRRrRRRRrRRo...', '.oRRRRRRRRRRo...', '.oRRRRRRRRRRo...', '.oRRRRRRRRRRo...', '..oRRRRRRRRo....', '..oRRRRRRRRo....'],
+  },
+  legs: {
+    down: [['...oRRRooRRRo...', '....orroorro....'], ['...oRRRRRRRRo...', '...orro..orro...']],
+    up: [['...oRRRooRRRo...', '....orroorro....'], ['...oRRRRRRRRo...', '...orro..orro...']],
+    right: [['...oRRRRRo......', '.....orrro......'], ['..oRRRRRo.......', '...orro.orro....']],
+  },
+}
+
+/**
+ * Hedge Witch: a pointed hat and a flowing purple dress.
+ */
+const WITCH: Costume = {
+  label: 'Hedge Witch',
+  blurb: 'A pointed hat and a flowing purple dress',
+  covered: true,
+  paint: { H: '#22202a', T: '#e8bd93', e: '#2a1c14', P: '#5a3f7a', B: '#1c1a1f' },
+  body: {
+    down: ['......HH........', '....oHHHHHHo....', '..oHHHHHHHHHHo..', '...oTTTTTTTTo...', '...oTTeTTeTTo...', '....oTTTTTTo....', '.....oPPPPo.....', '...oPPPPPPPPo...', '..oPPPPPPPPPPo..', '..oPPPPPPPPPPo..', '.oPPPPPPPPPPPPo.', '.oPPPPPPPPPPPPo.', 'oPPPPPPPPPPPPPPo', 'oPPPPPPPPPPPPPPo'],
+    up: ['......HH........', '....oHHHHHHo....', '..oHHHHHHHHHHo..', '...oTTTTTTTTo...', '...oTTTTTTTTo...', '....oTTTTTTo....', '.....oPPPPo.....', '...oPPPPPPPPo...', '..oPPPPPPPPPPo..', '..oPPPPPPPPPPo..', '.oPPPPPPPPPPPPo.', '.oPPPPPPPPPPPPo.', 'oPPPPPPPPPPPPPPo', 'oPPPPPPPPPPPPPPo'],
+    right: ['.....HH.........', '...oHHHHHHo.....', '.oHHHHHHHHHHo...', '..oTTTTTTTo.....', '..oTTeTTTo......', '...oTTTTTo......', '....oPPPo.......', '..oPPPPPPPo.....', '.oPPPPPPPPPo....', '.oPPPPPPPPPo....', 'oPPPPPPPPPPPo...', 'oPPPPPPPPPPPo...', 'oPPPPPPPPPPPPo..', 'oPPPPPPPPPPPPo..'],
+  },
+  legs: {
+    down: [['oPPPPPPPPPPPPPPo', '.oBBo......oBBo.'], ['oPPPPPPPPPPPPPPo', '..oBBo....oBBo..']],
+    up: [['oPPPPPPPPPPPPPPo', '.oBBo......oBBo.'], ['oPPPPPPPPPPPPPPo', '..oBBo....oBBo..']],
+    right: [['oPPPPPPPPPPPo...', '.oBBo......o....'], ['oPPPPPPPPPPPo...', '.oBBo......o....']],
+  },
+}
+
+/**
+ * Little Devil: small horns, a red hide, and a pointed tail.
+ */
+const DEVIL: Costume = {
+  label: 'Little Devil',
+  blurb: 'Small horns, a red hide, and a pointed tail',
+  covered: true,
+  paint: { H: '#2a1c14', R: '#c0392f', e: '#1c1a1f', t: '#8a231d' },
+  body: {
+    down: ['.....H....H.....', '....HHo..oHH....', '....oRRRRRRo....', '...oRReRReRRo...', '...oRRRRRRRRo...', '....oRRRRRRo....', '.....oRRRRo.....', '...oRRRRRRRRo...', '..oRRRRRRRRRRo..', '..oRRRRRRRRRRo..', '..oRRRRRRRRRRo..', '..oRRRRRRRRRRo..', '...oRRRRRRRRo...', '...oRRRRRRRRo...'],
+    up: ['.....H....H.....', '....HHo..oHH....', '....oRRRRRRo....', '...oRRRRRRRRo...', '...oRRRRRRRRo...', '....oRRRRRRo....', '.....oRRRRo.....', '...oRRRRRRRRo...', '..oRRRRRRRRRRo..', '..oRRRRRRRRRRo..', '..oRRRRttRRRRo..', '..oRRRRttRRRRo..', '...oRRRRRRRRo...', '...oRRRRRRRRo...'],
+    right: ['......HHo.......', '....oRRRRRRo....', '...oRReRRRRo....', '...oRRRRRRRo....', '....oRRRRRo.....', '.....oRRRo......', '...oRRRRRRRo....', '..oRRRRRRRRRo...', '..oRRRRRRRRRo...', '..oRRRRRRRRRo...', '..oRRRRRRRRRo...', '..oRRRRRRRRRo...', '...oRRRRRRRo....', '...oRRRRRRRo....'],
+  },
+  legs: {
+    down: [['...oRRRooRRRo...', '....oRRooRRo....'], ['...oRRRRRRRRo...', '...oRRo..oRRo...']],
+    up: [['...oRRRooRRRo...', '....oRRooRRo....'], ['...oRRRRRRRRo...', '...oRRo..oRRo...']],
+    right: [['....oRRRRRo.....', '.....oRRRo......'], ['...oRRRRRo......', '...oRRo.oRRo....']],
+  },
+}
+
 const COSTUME_ART: Record<Exclude<CostumeKind, 'none'>, Costume> = {
   cantor: CANTOR,
   sentinel: SENTINEL,
@@ -1076,6 +1256,15 @@ const COSTUME_ART: Record<Exclude<CostumeKind, 'none'>, Costume> = {
   cactus: CACTUS,
   guard: GUARD,
   colossus: COLOSSUS,
+  plush: PLUSH,
+  bunny: BUNNY,
+  faceless: FACELESS,
+  mummy: MUMMY,
+  jackoghost: JACKOGHOST,
+  pirate: PIRATE,
+  robot: ROBOT,
+  witch: WITCH,
+  devil: DEVIL,
 }
 
 /** Names and one-liners for the picker, including the one for wearing nothing. */
@@ -1087,6 +1276,15 @@ export const COSTUME_META: Record<CostumeKind, { label: string, blurb: string }>
   cactus: { label: CACTUS.label, blurb: CACTUS.blurb },
   guard: { label: GUARD.label, blurb: GUARD.blurb },
   colossus: { label: COLOSSUS.label, blurb: COLOSSUS.blurb },
+  plush: { label: PLUSH.label, blurb: PLUSH.blurb },
+  bunny: { label: BUNNY.label, blurb: BUNNY.blurb },
+  faceless: { label: FACELESS.label, blurb: FACELESS.blurb },
+  mummy: { label: MUMMY.label, blurb: MUMMY.blurb },
+  jackoghost: { label: JACKOGHOST.label, blurb: JACKOGHOST.blurb },
+  pirate: { label: PIRATE.label, blurb: PIRATE.blurb },
+  robot: { label: ROBOT.label, blurb: ROBOT.blurb },
+  witch: { label: WITCH.label, blurb: WITCH.blurb },
+  devil: { label: DEVIL.label, blurb: DEVIL.blurb },
 }
 
 /** The costume being worn, or null for none — the one place the `none` string is unpacked. */
