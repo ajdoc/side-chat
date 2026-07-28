@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { CheckCircle2, ChevronLeft, Info, LayoutPanelLeft, Loader2, MessageSquare, MessageSquareText, MessagesSquare, Pencil, Pin, Plus, Reply, Rocket, Smile, Tag, Trash2, UserPlus, Users, X } from 'lucide-vue-next'
+import { CheckCircle2, ChevronDown, ChevronLeft, ChevronRight, ChevronUp, FolderTree, Info, LayoutPanelLeft, Loader2, MessageSquare, MessageSquareText, MessagesSquare, Pencil, Pin, Plus, Reply, Rocket, Smile, Tag, Trash2, UserPlus, Users, X } from 'lucide-vue-next'
 import type { GifResult, Message, SideChat, SideDeskAppId } from '~/types'
 // Aliased on import: this file already has a `deskApp` of its own (the active tab), and the
 // auto-imported registry lookup of the same name would be shadowed by it.
@@ -29,7 +29,9 @@ const props = defineProps<{ channelId: number }>()
 // whole screen instead, and its own close button is the way back.
 const { narrow } = useNavDrawer()
 const { width: panelWidth, startResize } = useResizable('side-chat', 380, { min: 300, max: 720 })
-const route = useRoute()
+// The URL on the page you're on, a docked pane's own state inside one. See useSurfaceRoute.
+const surface = useSurfaceRoute()
+const query = surface.query
 const { user } = useAuth()
 
 const { sideChats, tagCounts, loadSideChats, createSideChat, join, leave } = useSideChats()
@@ -64,6 +66,70 @@ const shownTags = computed(() => {
   return active && !head.includes(active) ? [...head, active] : head
 })
 const hiddenTagCount = computed(() => Math.max(0, tagCounts.value.length - shownTags.value.length))
+
+// --- the forum index: groups ---------------------------------------------
+/**
+ * Groups and tags are the list's two axes and they compose rather than compete: the tag
+ * filter narrows *which posts*, the groups decide *where each one sits*. So the grouping is
+ * applied to the already-filtered list, and filtering by a tag leaves the headings in
+ * place — you can still see that three of the four "bug" posts are in Triage.
+ */
+const {
+  forums, canManageForums, loadForums, createForum, renameForum, removeForum, moveForum,
+  isGroupOpen, toggleGroup, groupPosts,
+} = useSideChatForums()
+
+const groups = computed(() => groupPosts(visibleSideChats.value))
+
+// --- managing the groups themselves --------------------------------------
+// One inline editor rather than a dialog: creating a group is a name and nothing else, and
+// a modal for one text field puts a door in front of a doormat.
+const forumsOpen = ref(false)
+const newForumName = ref('')
+const forumBusy = ref(false)
+const renamingForumId = ref<number | null>(null)
+const renameDraft = ref('')
+
+async function submitForum() {
+  const name = newForumName.value.trim()
+  if (!name || forumBusy.value) return
+  forumBusy.value = true
+  try {
+    await createForum(props.channelId, name)
+    newForumName.value = ''
+  } finally {
+    forumBusy.value = false
+  }
+}
+
+async function submitRename(forumId: number) {
+  const name = renameDraft.value.trim()
+  if (!name || forumBusy.value) return
+  forumBusy.value = true
+  try {
+    await renameForum(forumId, name)
+    renamingForumId.value = null
+  } finally {
+    forumBusy.value = false
+  }
+}
+
+/**
+ * Delete a group. Unconfirmed on purpose, unlike deleting a post: nothing is lost. The
+ * posts inside reappear under Uncategorised (the foreign key nulls rather than cascades),
+ * so the worst case is retyping a name.
+ */
+async function dropForum(forumId: number) {
+  if (forumBusy.value) return
+  forumBusy.value = true
+  try {
+    await removeForum(forumId)
+    // Any post that was in it has to be re-read to learn it's now ungrouped.
+    await loadSideChats(props.channelId)
+  } finally {
+    forumBusy.value = false
+  }
+}
 
 const reactionTotal = (s: SideChat) => (s.reactions ?? []).reduce((sum, r) => sum + r.count, 0)
 const commentTotal = (s: SideChat) => (s.comments ?? []).reduce((sum, c) => sum + c.count, 0)
@@ -106,13 +172,13 @@ const {
 } = useTyping()
 
 const mode = computed<'list' | 'create' | 'view' | null>(() => {
-  if (route.query.sidechats === '1') return 'list'
-  if (route.query.sidechat === 'new') return 'create'
-  if (route.query.sidechat) return 'view'
+  if (query.value.sidechats === '1') return 'list'
+  if (query.value.sidechat === 'new') return 'create'
+  if (query.value.sidechat) return 'view'
   return null
 })
-const activeId = computed(() => (mode.value === 'view' ? Number(route.query.sidechat) : null))
-const fromMessageId = computed(() => (route.query.from ? Number(route.query.from) : null))
+const activeId = computed(() => (mode.value === 'view' ? Number(query.value.sidechat) : null))
+const fromMessageId = computed(() => (query.value.from ? Number(query.value.from) : null))
 
 // --- managing the open post (the OP's, or a server admin's) ---
 const editing = ref(false)
@@ -138,7 +204,7 @@ const TABS = [
   { key: 'desk', label: 'Desk', icon: LayoutPanelLeft },
 ] as const
 const sctab = computed<'chat' | 'info' | 'desk'>(() => {
-  const t = route.query.sctab
+  const t = query.value.sctab
   return t === 'info' || t === 'desk' ? t : 'chat'
 })
 
@@ -147,7 +213,7 @@ const sctab = computed<'chat' | 'info' | 'desk'>(() => {
 // names would bounce every widget app back to the canvas. SideDesk handles an id this surface
 // doesn't have on its strip, which is where the strip is actually known.
 const deskApp = computed<SideDeskAppId>(() => {
-  const s = route.query.desktab
+  const s = query.value.desktab
   return typeof s === 'string' && deskApp_(s as SideDeskAppId) ? (s as SideDeskAppId) : 'canvas'
 })
 function setDeskApp(app: SideDeskAppId) {
@@ -202,21 +268,15 @@ async function onScrollStart() {
 }
 
 /** Replace the whole query — for entering/leaving the workspace outright. */
-function goto(query: Record<string, string>) {
-  navigateTo({ path: route.path, query })
+function goto(next: Record<string, string>) {
+  surface.replace(next)
 }
 /** Merge into the current query — so a thread column can stay open alongside a tab switch. */
 function setQuery(patch: Record<string, string | null>) {
-  const q: Record<string, string> = {}
-  for (const [k, v] of Object.entries(route.query)) if (typeof v === 'string') q[k] = v
-  for (const [k, v] of Object.entries(patch)) {
-    if (v === null) delete q[k]
-    else q[k] = v
-  }
-  navigateTo({ path: route.path, query: q })
+  surface.patch(patch)
 }
 function close() {
-  navigateTo({ path: route.path, query: {} })
+  surface.replace({})
 }
 
 // --- replying to the post itself ----------------------------------------
@@ -239,8 +299,8 @@ function replyToPost() {
  * box on landing. The flag is dropped straight away: it describes how you got here, not
  * where you are, and leaving it in the URL would re-open the box on every tab switch.
  */
-watch([activeId, () => route.query.screply], () => {
-  if (activeId.value && route.query.screply === '1') {
+watch([activeId, () => query.value.screply], () => {
+  if (activeId.value && query.value.screply === '1') {
     replyToPost()
     setQuery({ screply: null })
   }
@@ -292,6 +352,9 @@ function onOpenThread(id: number) {
 // lowercases and dedupes, so these chips are a preview of what it will store.
 const newTags = ref<string[]>([])
 const newTagDraft = ref('')
+// Which group the new post is filed under. A string because that's what `<select>` binds;
+// `''` is Uncategorised.
+const newForumId = ref('')
 
 function addNewTag(raw: string) {
   const tag = raw.trim().toLowerCase()
@@ -318,9 +381,11 @@ async function submitCreate() {
       name,
       message_id: fromMessageId.value ?? null,
       tags: newTags.value,
+      side_chat_forum_id: newForumId.value ? Number(newForumId.value) : null,
     })
     newName.value = ''
     newTags.value = []
+    newForumId.value = ''
     goto({ sidechat: String(s.id) })
   } finally {
     creating.value = false
@@ -377,7 +442,13 @@ watch(
     postReplyOpen.value = false
     postReply.value = ''
     if (mode.value === 'list') {
-      await loadSideChats(props.channelId)
+      // Both together: the list is drawn *as* its groups, so posts arriving before the
+      // headings would flash through Uncategorised on their way to the right place.
+      await Promise.all([loadSideChats(props.channelId), loadForums(props.channelId)])
+    } else if (mode.value === 'create') {
+      // The create form offers the groups to file into, so it needs them too — and it can
+      // be reached straight from a message without passing through the list.
+      await loadForums(props.channelId)
     } else if (mode.value === 'view' && activeId.value) {
       await loadSideChat(activeId.value)
       subscribe(activeId.value)
@@ -496,6 +567,26 @@ function relTime(iso: string) {
           <Plus class="h-4 w-4" /> New side chat
         </Button>
 
+        <!-- Making a group is the staff's; filing a post into one is everyone's, and that
+             lives on the post. Folded away by default so the ordinary reader's toolbar is
+             still "new post, filter by tag" and nothing else. -->
+        <div v-if="canManageForums">
+          <button
+            class="flex w-full items-center gap-1.5 rounded px-1 py-1 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground hover:bg-muted hover:text-foreground"
+            @click="forumsOpen = !forumsOpen"
+          >
+            <FolderTree class="h-3 w-3" />
+            <span>Groups</span>
+            <ChevronDown v-if="forumsOpen" class="ml-auto h-3 w-3" />
+            <ChevronRight v-else class="ml-auto h-3 w-3" />
+          </button>
+
+          <form v-if="forumsOpen" class="mt-1 flex gap-1" @submit.prevent="submitForum">
+            <Input v-model="newForumName" placeholder="New group, e.g. Bugs" class="h-7 text-xs" />
+            <Button type="submit" size="sm" class="h-7 shrink-0 px-2 text-xs" :disabled="!newForumName.trim() || forumBusy">Add</Button>
+          </form>
+        </div>
+
         <!-- Only drawn once something is actually tagged: an empty filter row is a
              control that does nothing. -->
         <div v-if="tagCounts.length">
@@ -553,17 +644,64 @@ function relTime(iso: string) {
         </div>
       </div>
 
-      <!-- The posts themselves, scrolling under the toolbar. -->
+      <!-- The posts themselves, scrolling under the toolbar, cut into their groups. -->
       <div class="min-h-0 flex-1 overflow-y-auto p-2">
 
-      <!-- A row, not a <button>: it carries its own edit/delete controls, and a button
-           inside a button is invalid markup that browsers resolve by dropping one of them.
-           The title is the clickable part; the controls sit beside it. -->
-      <div
-        v-for="s in visibleSideChats"
-        :key="s.id"
-        class="group/row rounded p-2 hover:bg-muted"
-      >
+      <div v-for="g in groups" :key="g.forum?.id ?? 'none'" class="mb-2">
+        <!-- The group heading. Folds its own posts away; the count is what tells you what
+             you folded. Uncategorised gets the same heading as any other group but none of
+             the controls — it isn't a row anybody made, so it isn't a row anybody renames. -->
+        <div class="group/forum flex items-center gap-1 rounded px-1 py-1 hover:bg-muted/60">
+          <button
+            type="button"
+            class="flex min-w-0 flex-1 items-center gap-1 text-left text-[11px] font-semibold uppercase tracking-wide text-muted-foreground hover:text-foreground"
+            :title="isGroupOpen(channelId, g.forum?.id ?? null) ? 'Collapse' : 'Expand'"
+            @click="toggleGroup(channelId, g.forum?.id ?? null)"
+          >
+            <ChevronDown v-if="isGroupOpen(channelId, g.forum?.id ?? null)" class="h-3 w-3 shrink-0" />
+            <ChevronRight v-else class="h-3 w-3 shrink-0" />
+            <span class="truncate">{{ g.forum?.name ?? 'Uncategorised' }}</span>
+            <span class="shrink-0 tabular-nums opacity-60">{{ g.posts.length }}</span>
+          </button>
+
+          <span
+            v-if="g.forum && canManageForums"
+            class="flex shrink-0 items-center gap-0.5"
+            :class="coarse ? '' : 'opacity-0 group-hover/forum:opacity-100'"
+          >
+            <button class="rounded p-1 text-muted-foreground hover:text-foreground disabled:opacity-30" title="Move up" :aria-label="`Move ${g.forum.name} up`" @click="moveForum(channelId, g.forum!.id, -1)">
+              <ChevronUp class="h-3 w-3" />
+            </button>
+            <button class="rounded p-1 text-muted-foreground hover:text-foreground disabled:opacity-30" title="Move down" :aria-label="`Move ${g.forum.name} down`" @click="moveForum(channelId, g.forum!.id, 1)">
+              <ChevronDown class="h-3 w-3" />
+            </button>
+            <button class="rounded p-1 text-muted-foreground hover:text-foreground" title="Rename group" :aria-label="`Rename ${g.forum.name}`" @click="renamingForumId = g.forum!.id; renameDraft = g.forum!.name">
+              <Pencil class="h-3 w-3" />
+            </button>
+            <!-- No confirmation: the posts inside survive, so there is nothing to lose. -->
+            <button class="rounded p-1 text-muted-foreground hover:text-destructive" title="Delete group (its posts move to Uncategorised)" :aria-label="`Delete ${g.forum.name}`" @click="dropForum(g.forum!.id)">
+              <Trash2 class="h-3 w-3" />
+            </button>
+          </span>
+        </div>
+
+        <form v-if="g.forum && renamingForumId === g.forum.id" class="mb-1 flex gap-1 px-1" @submit.prevent="submitRename(g.forum.id)">
+          <Input v-model="renameDraft" class="h-7 text-xs" autofocus @keydown.esc="renamingForumId = null" />
+          <Button type="submit" size="sm" class="h-7 px-2 text-xs" :disabled="!renameDraft.trim() || forumBusy">Save</Button>
+          <Button type="button" size="sm" variant="ghost" class="h-7 px-2 text-xs" @click="renamingForumId = null">Cancel</Button>
+        </form>
+
+        <template v-if="isGroupOpen(channelId, g.forum?.id ?? null)">
+          <p v-if="!g.posts.length" class="px-3 py-1.5 text-xs text-muted-foreground">Nothing filed here yet.</p>
+
+          <!-- A row, not a <button>: it carries its own edit/delete controls, and a button
+               inside a button is invalid markup that browsers resolve by dropping one of them.
+               The title is the clickable part; the controls sit beside it. -->
+          <div
+            v-for="s in g.posts"
+            :key="s.id"
+            class="group/row rounded p-2 hover:bg-muted"
+          >
         <div class="flex items-start gap-1">
           <button class="min-w-0 flex-1 truncate text-left text-sm font-medium" @click="goto({ sidechat: String(s.id) })">
             {{ s.name }}
@@ -638,6 +776,8 @@ function relTime(iso: string) {
             <Button size="sm" variant="ghost" @click.stop="deletingRow = null">Cancel</Button>
           </div>
         </div>
+          </div>
+        </template>
       </div>
 
         <p v-if="!sideChats.length" class="p-3 text-sm text-muted-foreground">No side chats yet.</p>
@@ -655,6 +795,19 @@ function relTime(iso: string) {
         {{ fromMessageId ? 'Spin a side chat off this message.' : 'Start a new side chat in this channel.' }}
       </p>
       <Input v-model="newName" placeholder="e.g. Dashboard Redesign" autofocus />
+
+      <!-- Only offered where there is somewhere to file it. -->
+      <div v-if="forums.length">
+        <label for="new-side-chat-forum" class="mb-1 block text-xs font-semibold uppercase tracking-wide text-muted-foreground">Group</label>
+        <select
+          id="new-side-chat-forum"
+          v-model="newForumId"
+          class="w-full rounded-lg border bg-background px-2 py-2 text-sm outline-none focus:ring-1 focus:ring-ring"
+        >
+          <option value="">Uncategorised</option>
+          <option v-for="f in forums" :key="f.id" :value="String(f.id)">{{ f.name }}</option>
+        </select>
+      </div>
 
       <!-- Tags at creation, not as an afterthought: a post filed the moment it's opened is
            a post the list can find. Same free-text entry as the edit dialog. -->

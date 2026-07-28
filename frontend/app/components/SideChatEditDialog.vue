@@ -23,9 +23,18 @@ const emit = defineEmits<{ close: [], saved: [SideChat] }>()
 // with a click instead of retyped — the difference between a tag list and a pile of
 // near-duplicate spellings of the same word.
 const { updateSideChat, tagCounts } = useSideChats()
+// The groups this channel offers. Only listed here — creating one is the staff's, and it
+// happens in the panel's toolbar, not inside an edit-a-post dialog.
+const { forums } = useSideChatForums()
 
 const name = ref(props.sideChat.name)
 const tags = ref<string[]>([...(props.sideChat.tags ?? [])])
+/**
+ * Which group the post is filed under. Bound as a string because that's what a `<select>`
+ * gives back; `''` is the empty option, which means Uncategorised — a real choice, and the
+ * one every post starts with.
+ */
+const forumId = ref(props.sideChat.side_chat_forum_id ? String(props.sideChat.side_chat_forum_id) : '')
 const draft = ref('')
 const saving = ref(false)
 const error = ref<string | null>(null)
@@ -63,7 +72,13 @@ async function save() {
     // Fold in whatever is still sitting in the input: nobody expects a tag they typed to
     // be dropped because they pressed Save instead of Enter.
     if (draft.value.trim()) { addTag(draft.value); draft.value = '' }
-    const next = await updateSideChat(props.sideChat.id, { name: trimmed, tags: tags.value })
+    const next = await updateSideChat(props.sideChat.id, {
+      name: trimmed,
+      tags: tags.value,
+      // Always sent, null included: null is "move it back to Uncategorised", which has to
+      // be as expressible as filing it. Same argument as tags, above.
+      side_chat_forum_id: forumId.value ? Number(forumId.value) : null,
+    })
     emit('saved', next)
     emit('close')
   } catch {
@@ -86,6 +101,20 @@ async function save() {
 
       <label class="mb-1 block text-xs font-semibold uppercase tracking-wide text-muted-foreground">Title</label>
       <Input v-model="name" placeholder="Side chat title" autofocus />
+
+      <!-- Only offered where there is somewhere to file it: with no groups made yet this is
+           a control whose every option is "no". -->
+      <template v-if="forums.length">
+        <label for="side-chat-forum" class="mb-1 mt-4 block text-xs font-semibold uppercase tracking-wide text-muted-foreground">Group</label>
+        <select
+          id="side-chat-forum"
+          v-model="forumId"
+          class="w-full rounded-lg border bg-background px-2 py-2 text-sm outline-none focus:ring-1 focus:ring-ring"
+        >
+          <option value="">Uncategorised</option>
+          <option v-for="f in forums" :key="f.id" :value="String(f.id)">{{ f.name }}</option>
+        </select>
+      </template>
 
       <label class="mb-1 mt-4 block text-xs font-semibold uppercase tracking-wide text-muted-foreground">
         Tags <span class="normal-case font-normal">({{ tags.length }}/{{ MAX_TAGS }})</span>

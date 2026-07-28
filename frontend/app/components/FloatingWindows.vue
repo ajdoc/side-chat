@@ -57,7 +57,7 @@ onMounted(() => {
         <FloatingMusicContent v-if="w.kind === 'widget' && w.widgetType === 'music'" :win="w" />
         <FloatingWidgetContent v-else-if="w.kind === 'widget'" :win="w" />
         <FloatingSurfaceContent v-else-if="w.kind === 'surface'" :win="w" />
-        <FloatingConversationContent v-else :win="w" />
+        <FloatingConversationContent v-else :channel-id="w.channelId" :title="w.title" />
       </FloatingFrame>
     </div>
   </ClientOnly>

@@ -8,6 +8,7 @@ use App\Models\Conversation;
 use App\Models\Message;
 use App\Models\Server;
 use App\Models\SideChat;
+use App\Models\SideChatForum;
 use App\Models\Thread;
 use App\Models\Widget;
 use Illuminate\Foundation\Http\FormRequest;
@@ -77,6 +78,11 @@ abstract class MemberRequest extends FormRequest
         $sideChat = $this->route('sideChat');
         if ($sideChat instanceof SideChat) {
             return $sideChat->loadMissing('channel')->channel;
+        }
+
+        $forum = $this->route('forum');
+        if ($forum instanceof SideChatForum) {
+            return $forum->loadMissing('channel')->channel;
         }
 
         $widget = $this->route('widget');

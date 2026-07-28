@@ -42,7 +42,14 @@ const props = defineProps<{
 
 const emit = defineEmits<{ read: [] }>()
 
-const route = useRoute()
+/**
+ * Which side columns are open, and how opening one is expressed.
+ *
+ * The URL when this is the page you're on; the docked pane's own in-memory state when it
+ * isn't. Everything below reads and writes it identically either way — see useSurfaceRoute.
+ */
+const surface = useSurfaceRoute()
+const query = surface.query
 const { user } = useAuth()
 const { messages, hasMore, loadingOlder, load, loadOlder, ensureLoaded, send, edit, remove, toggleReaction, togglePin, subscribe, unsubscribe } = useMessages()
 const {
@@ -86,16 +93,16 @@ const daySeparators = useDaySeparators(messages)
 // threads live under `scthread`/`scthreads` (see SideChatPanel), a separate namespace — which
 // is the whole reason a main-chat thread and a side chat can now stand open at the same time
 // instead of the one being read as a thread of the other.
-const threadPanelOpen = computed(() => !!(route.query.thread || route.query.threads))
-const sideChatThreadPanelOpen = computed(() => !!(route.query.scthread || route.query.scthreads))
-const sideChatPanelOpen = computed(() => !!(route.query.sidechat || route.query.sidechats))
-const infoPanelOpen = computed(() => route.query.info === '1')
-const deskPanelOpen = computed(() => !!route.query.desk)
+const threadPanelOpen = computed(() => !!(query.value.thread || query.value.threads))
+const sideChatThreadPanelOpen = computed(() => !!(query.value.scthread || query.value.scthreads))
+const sideChatPanelOpen = computed(() => !!(query.value.sidechat || query.value.sidechats))
+const infoPanelOpen = computed(() => query.value.info === '1')
+const deskPanelOpen = computed(() => !!query.value.desk)
 // The open side chat's id, when one is in view mode — it scopes an alongside thread column
 // to that side chat rather than the channel.
 const activeSideChatId = computed(() => {
-  const s = route.query.sidechat
-  return typeof s === 'string' && s !== 'new' ? Number(s) : null
+  const s = query.value.sidechat
+  return s && s !== 'new' ? Number(s) : null
 })
 
 const sending = ref(false)
@@ -182,7 +189,7 @@ async function onJumpToReply(id: number) {
  * surfaces, are always cleared here — a thread or side chat takes precedence over them.
  */
 function patchQuery(patch: Record<string, string | null>) {
-  navigateTo({ path: route.path, query: mergeQuery(route.query, { info: null, desk: null, ...patch }) })
+  surface.patch({ info: null, desk: null, ...patch })
 }
 
 function onCreateThread(messageId: number) {

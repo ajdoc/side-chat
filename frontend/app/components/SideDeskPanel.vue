@@ -14,7 +14,8 @@ import type { SideDeskAppId } from '~/types'
 const props = defineProps<{ channelId: number }>()
 // Docs' "Jump to message" — the panel has no timeline of its own, so it passes the ask on.
 const emit = defineEmits<{ jump: [messageId: number] }>()
-const route = useRoute()
+// The URL on the page you're on, a docked pane's own state inside one. See useSurfaceRoute.
+const surface = useSurfaceRoute()
 
 // Draggable, remembered width (its left border carries the handle) — beside the timeline on a
 // wide window, and irrelevant on a narrow one, where the desk covers the window instead.
@@ -30,21 +31,16 @@ const { narrow } = useNavDrawer()
  * strip is known.
  */
 const activeApp = computed<SideDeskAppId>(() => {
-  const s = route.query.desk
-  return typeof s === 'string' && deskApp(s as SideDeskAppId) ? (s as SideDeskAppId) : 'canvas'
+  const s = surface.query.value.desk
+  return s && deskApp(s as SideDeskAppId) ? (s as SideDeskAppId) : 'canvas'
 })
 
 function setApp(app: SideDeskAppId) {
-  const q: Record<string, string> = {}
-  for (const [k, v] of Object.entries(route.query)) if (typeof v === 'string') q[k] = v
-  q.desk = app
-  navigateTo({ path: route.path, query: q })
+  surface.patch({ desk: app })
 }
 
 function close() {
-  const q: Record<string, string> = {}
-  for (const [k, v] of Object.entries(route.query)) if (typeof v === 'string' && k !== 'desk') q[k] = v
-  navigateTo({ path: route.path, query: q })
+  surface.patch({ desk: null })
 }
 </script>
 

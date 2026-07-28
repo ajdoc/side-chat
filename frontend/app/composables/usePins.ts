@@ -17,9 +17,11 @@ interface Paginated<T> {
  */
 export function usePins() {
   const api = useApi()
-  const pins = useState<Message[]>('channel:pins', () => [])
-  const page = useState<number>('channel:pins:page', () => 1)
-  const lastPage = useState<number>('channel:pins:lastPage', () => 1)
+  // Prefixed so a docked split pane keeps its own list. See useChannelScope.
+  const scope = useChannelScope()
+  const pins = useState<Message[]>(`${scope}channel:pins`, () => [])
+  const page = useState<number>(`${scope}channel:pins:page`, () => 1)
+  const lastPage = useState<number>(`${scope}channel:pins:lastPage`, () => 1)
   const loading = ref(false)
 
   const hasMore = computed(() => page.value < lastPage.value)

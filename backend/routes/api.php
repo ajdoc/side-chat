@@ -33,6 +33,7 @@ use App\Http\Controllers\ReactionController;
 use App\Http\Controllers\ReadReceiptController;
 use App\Http\Controllers\ServerController;
 use App\Http\Controllers\SideChatController;
+use App\Http\Controllers\SideChatForumController;
 use App\Http\Controllers\SideChatMessageController;
 use App\Http\Controllers\SideSpaceController;
 use App\Http\Controllers\SpaceAppearanceController;
@@ -359,6 +360,18 @@ Route::middleware('auth:api')->group(function () {
     Route::get('channels/{channel}/side-chats', [SideChatController::class, 'index']);
     Route::post('channels/{channel}/side-chats', [SideChatController::class, 'store']);
     Route::get('side-chats/{sideChat}', [SideChatController::class, 'show']);
+    /*
+     * Forum groups: the headings the side chat list folds under. Reading them needs only
+     * channel membership; arranging them is the staff's (ManageSideChatForumRequest), on
+     * the same argument as the channels themselves — the layout of a shared place is not a
+     * passer-by's to rearrange. Filing your *own* post into a group is not here: that's
+     * `side_chat_forum_id` on the PATCH above, which the OP may send.
+     */
+    Route::get('channels/{channel}/side-chat-forums', [SideChatForumController::class, 'index']);
+    Route::post('channels/{channel}/side-chat-forums', [SideChatForumController::class, 'store']);
+    Route::put('channels/{channel}/side-chat-forums/order', [SideChatForumController::class, 'reorder']);
+    Route::patch('side-chat-forums/{forum}', [SideChatForumController::class, 'update']);
+    Route::delete('side-chat-forums/{forum}', [SideChatForumController::class, 'destroy']);
     /*
      * The forum layer. Retitling, retagging and deleting are the OP's or the staff's
      * (ManageSideChatRequest); reacting to the post is anyone in the channel's, because a

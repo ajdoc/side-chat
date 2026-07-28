@@ -72,9 +72,17 @@ class SideChatController extends Controller
         // distinction the action's null means.
         $tags = $request->has('tags') ? (array) $request->input('tags', []) : null;
 
+        // Same sent-vs-absent distinction, for the same reason: `null` here means "move it
+        // back to Uncategorised", so it can't also stand for "the dialog didn't touch it".
+        $validated = $request->validated();
+        $movesForum = array_key_exists('side_chat_forum_id', $validated);
+        $forumId = $movesForum && $validated['side_chat_forum_id'] !== null
+            ? (int) $validated['side_chat_forum_id']
+            : null;
+
         return new SideChatResource(
             $this->sideChats->loadForDisplay(
-                $action->handle($sideChat, $request->validated()['name'] ?? null, $tags)
+                $action->handle($sideChat, $validated['name'] ?? null, $tags, $movesForum, $forumId)
             )
         );
     }

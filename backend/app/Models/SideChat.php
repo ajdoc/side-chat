@@ -20,7 +20,7 @@ class SideChat extends Model
 
     public const MAX_TAG_LENGTH = 32;
 
-    protected $fillable = ['channel_id', 'user_id', 'message_id', 'name', 'tags', 'origin_author', 'origin_excerpt', 'desk_apps'];
+    protected $fillable = ['channel_id', 'side_chat_forum_id', 'user_id', 'message_id', 'name', 'tags', 'origin_author', 'origin_excerpt', 'desk_apps'];
 
     /** @return array<string, string> */
     protected function casts(): array
@@ -34,6 +34,17 @@ class SideChat extends Model
     public function channel(): BelongsTo
     {
         return $this->belongsTo(Channel::class);
+    }
+
+    /**
+     * The group this post is filed under, or null for "Uncategorised".
+     *
+     * Null is a first-class answer, not a missing one: every post ever made before forums
+     * existed has it, and a post whose forum is deleted goes back to it. See the migration.
+     */
+    public function forum(): BelongsTo
+    {
+        return $this->belongsTo(SideChatForum::class, 'side_chat_forum_id');
     }
 
     /** Who started it — the "started by" on the card, kept even after they leave. */

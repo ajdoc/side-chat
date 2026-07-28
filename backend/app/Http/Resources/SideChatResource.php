@@ -30,6 +30,9 @@ class SideChatResource extends JsonResource
             // The forum layer. Tags are plain lowercase strings (see UpdateSideChatAction);
             // null in the column means "never tagged", which the list reads as none.
             'tags' => $this->tags ?? [],
+            // Which group heading this post files under. Null is "Uncategorised" — the
+            // bucket the list synthesises rather than a row that could go missing.
+            'side_chat_forum_id' => $this->side_chat_forum_id,
             'reactions' => $this->whenLoaded('reactions', fn () => app(ReactionService::class)->summarize($this->resource)),
             // "Popular comments" on the post — the same chips a message carries, and the
             // same summariser, so a phrase groups identically wherever it was left.

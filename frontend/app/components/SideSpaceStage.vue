@@ -1733,7 +1733,7 @@ watch(inThisRoom, (now) => {
       <div class="flex min-w-0 items-center gap-2 text-sm">
         <MapIcon class="h-4 w-4 shrink-0 text-muted-foreground" />
         <span class="truncate font-medium">{{ map?.name ?? channel.name }}</span>
-        <AlphaBadge hint="Proximity audio and the room editor are still settling — expect rough edges." />
+        <AlphaBadge stage="Beta" hint="Proximity audio and the room editor are still settling — expect rough edges." />
         <span class="flex shrink-0 items-center gap-1 text-xs text-muted-foreground">
           <Users class="h-3.5 w-3.5" /> {{ occupantCount }}
         </span>

@@ -92,6 +92,12 @@ class Channel extends Model
         return $this->hasMany(SideChat::class)->latest();
     }
 
+    /** The groups the side chat list folds under, in the order they're shown. */
+    public function sideChatForums(): HasMany
+    {
+        return $this->hasMany(SideChatForum::class)->orderBy('position')->orderBy('id');
+    }
+
     /** The channel's interactive widgets — its music player, its kanban board. */
     public function widgets(): HasMany
     {

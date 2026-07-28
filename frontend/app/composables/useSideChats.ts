@@ -1,20 +1,22 @@
 import type { SideChat } from '~/types'
 
 /**
- * Side chats that belong to the open channel. Shared state ('channel:sideChats') so the
+ * Side chats that belong to the open channel. Shared state (scoped per column) so the
  * channel's real-time listener can keep each card's counts and roster fresh while the panel
  * and the timeline cards render them.
  */
 export function useSideChats() {
   const api = useApi()
-  const sideChats = useState<SideChat[]>('channel:sideChats', () => [])
+  // Prefixed so a docked split pane keeps its own list. See useChannelScope.
+  const scope = useChannelScope()
+  const sideChats = useState<SideChat[]>(`${scope}channel:sideChats`, () => [])
 
   async function loadSideChats(channelId: number) {
     const res = await api<{ data: SideChat[] }>(`/api/channels/${channelId}/side-chats`)
     sideChats.value = res.data
   }
 
-  async function createSideChat(channelId: number, payload: { name: string, message_id?: number | null, tags?: string[] }) {
+  async function createSideChat(channelId: number, payload: { name: string, message_id?: number | null, tags?: string[], side_chat_forum_id?: number | null }) {
     const res = await api<{ data: SideChat }>(`/api/channels/${channelId}/side-chats`, {
       method: 'POST',
       body: payload,
@@ -43,11 +45,14 @@ export function useSideChats() {
   }
 
   /**
-   * Retitle and/or retag a post. Sending `tags` at all replaces the whole set, including
-   * with an empty array — that's how you clear them — so the caller passes it only when
-   * the tags are actually part of this edit.
+   * Retitle, retag and/or refile a post. Sending `tags` at all replaces the whole set,
+   * including with an empty array — that's how you clear them — so the caller passes it
+   * only when the tags are actually part of this edit.
+   *
+   * `side_chat_forum_id` works the same way one rung down: sending `null` files the post
+   * back under Uncategorised, so it must be *omitted*, not nulled, to leave the group alone.
    */
-  async function updateSideChat(sideChatId: number, payload: { name?: string, tags?: string[] }) {
+  async function updateSideChat(sideChatId: number, payload: { name?: string, tags?: string[], side_chat_forum_id?: number | null }) {
     const res = await api<{ data: SideChat }>(`/api/side-chats/${sideChatId}`, {
       method: 'PATCH',
       body: payload,

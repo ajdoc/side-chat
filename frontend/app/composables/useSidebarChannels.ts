@@ -1,5 +1,5 @@
 import { useLocalStorage } from '@vueuse/core'
-import type { Channel } from '~/types'
+import type { Channel, ChannelType } from '~/types'
 
 interface Paginated<T> {
   data: T[]
@@ -37,6 +37,40 @@ export function useSidebarChannels() {
   }
   function isLoading(serverId: number) {
     return loadingIds.value.has(serverId)
+  }
+
+  /**
+   * The channel-type sections (Text / Voice / Side Spaces) inside an unfolded server.
+   *
+   * Stored as the *collapsed* set, not the expanded one, and keyed `serverId:type`. Both
+   * halves of that are deliberate, and both are the lesson of the server-fold bug this file
+   * already carries a note about:
+   *
+   *  - Keyed by server, so folding #general's Text section shut in one server doesn't fold
+   *    it in the next. State that isn't keyed by what it describes is state that leaks the
+   *    moment you navigate.
+   *  - Collapsed-set rather than expanded-set, so *absence means open*. A server you've
+   *    never visited, a type that appears for the first time when somebody adds the server's
+   *    first voice channel, a browser with a cleared localStorage — all default to showing
+   *    their channels. An expanded-set would default every one of those to hidden, which is
+   *    a channel list that appears empty.
+   *
+   * And nothing here is touched by the route: no watcher opens or closes a section when you
+   * switch servers, so the shape you left a server in is the shape you come back to.
+   */
+  const collapsedSections = useLocalStorage<string[]>('sidebar:collapsedSections', [])
+
+  const sectionKey = (serverId: number, type: ChannelType) => `${serverId}:${type}`
+
+  function isSectionOpen(serverId: number, type: ChannelType) {
+    return !collapsedSections.value.includes(sectionKey(serverId, type))
+  }
+
+  function toggleSection(serverId: number, type: ChannelType) {
+    const key = sectionKey(serverId, type)
+    collapsedSections.value = collapsedSections.value.includes(key)
+      ? collapsedSections.value.filter(k => k !== key)
+      : [...collapsedSections.value, key]
   }
 
   /** Fetch a server's channels into the cache (first page — 200 — is the whole tree here). */
@@ -91,5 +125,8 @@ export function useSidebarChannels() {
     loadChannels,
     cache,
     channelsFor,
+    collapsedSections,
+    isSectionOpen,
+    toggleSection,
   }
 }

@@ -1,29 +1,37 @@
 <script setup lang="ts">
 import { ArrowDown, Loader2 } from 'lucide-vue-next'
-import type { FloatingConversationWindow } from '~/composables/useFloatingWindows'
 import type { GifResult, Message } from '~/types'
 import { mentionNamesKey, useChannelMembers } from '~/composables/useChannelMembers'
 
 /**
- * A conversation, floated. Every conversation — server channel, DM, group — is a channel, so
- * this is a compact {@link ChannelView}: its own {@link useMessages} instance (the composable
- * holds message state in plain refs, one set per call), a scrollable list of {@link MessageItem}
- * and a {@link MessageComposer}. Threads, side chats and the Side Desk aren't offered here —
- * those are full-column surfaces that belong to the main view, not a 360px window — so the
- * message rows are opened without those actions.
+ * A conversation, rendered away from its own page. Every conversation — server channel, DM,
+ * group — is a channel, so this is a compact {@link ChannelView}: its own {@link useMessages}
+ * instance (the composable holds message state in plain refs, one set per call), a scrollable
+ * list of {@link MessageItem} and a {@link MessageComposer}. Threads, side chats and the Side
+ * Desk aren't offered here — those are full-column surfaces that belong to the main view — so
+ * the message rows are opened without those actions.
  *
- * It runs its own live subscription on the channel stream. Floating a chat you're *also* looking
- * at in the main column is pointless and not the use case (you float one to keep half an eye on
+ * Two things mount it: the floating-window shelf, and the split view's docked pane. It takes a
+ * channel id and a title rather than either one's window object, which is what lets the second
+ * use exist at all — the content never needed to know it was in a *window*.
+ *
+ * It runs its own live subscription on the channel stream. Showing a chat you're *also* looking
+ * at in the main column is pointless and not the use case (you dock one to keep half an eye on
  * it while you're elsewhere), so the rare double-subscribe isn't worth guarding against.
  */
-const props = defineProps<{ win: FloatingConversationWindow }>()
+const props = defineProps<{
+  /** Every conversation — server channel, DM, group — is addressed by its channel id. */
+  channelId: number
+  /** What this conversation is called, for the empty state and the composer placeholder. */
+  title: string
+}>()
 
 const { user } = useAuth()
 const { messages, hasMore, loadingOlder, load, loadOlder, ensureLoaded, send, edit, remove, toggleReaction, togglePin, subscribe, unsubscribe } = useMessages()
 const { members: mentionMembers, names: mentionNames, load: loadMembers } = useChannelMembers()
 provide(mentionNamesKey, mentionNames)
 
-const channelId = computed(() => props.win.channelId)
+const channelId = computed(() => props.channelId)
 
 const scroller = ref<HTMLElement | null>(null)
 const sending = ref(false)
@@ -115,7 +123,7 @@ onBeforeUnmount(() => { if (openedId) closeChannel(openedId) })
         <Loader2 class="h-4 w-4 animate-spin text-muted-foreground" />
       </div>
       <p v-if="!messages.length" class="p-3 text-xs text-muted-foreground">
-        This is the beginning of <span class="font-medium">{{ win.title }}</span>. Say hello 👋
+        This is the beginning of <span class="font-medium">{{ title }}</span>. Say hello 👋
       </p>
       <div v-for="m in messages" :key="m.id" :data-mid="m.id">
         <MessageItem
@@ -150,7 +158,7 @@ onBeforeUnmount(() => { if (openedId) closeChannel(openedId) })
         <button class="hover:text-foreground" @click="replyingTo = null">✕</button>
       </div>
       <MessageComposer
-        :placeholder="`Message ${win.title}`"
+        :placeholder="`Message ${title}`"
         :sending="sending"
         :channel-id="channelId"
         :mention-members="mentionMembers"

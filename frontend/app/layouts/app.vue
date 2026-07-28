@@ -59,7 +59,125 @@ const { hasDraft } = useDrafts()
 const { nameFor } = useNicknames()
 const { mode, color, setMode, setColor } = useTheme()
 const { participantsIn } = useVoiceRoster()
-const { expandedIds, isExpanded, isLoading, expand: expandServer, toggle: toggleServer, loadChannels, cache: cacheChannels, channelsFor } = useSidebarChannels()
+const { expandedIds, isExpanded, isLoading, expand: expandServer, toggle: toggleServer, loadChannels, cache: cacheChannels, channelsFor, isSectionOpen, toggleSection } = useSidebarChannels()
+
+/**
+ * Split view: the second conversation docked beside the page. See useSplitView for why the
+ * route keeps the left half and why there are two panes rather than a tiling grid.
+ */
+const { pane, ratio, openSplit, closeSplit, setRatioFromX, writeDragPayload, readDragPayload, isChannelDrag } = useSplitView()
+const splitArea = ref<HTMLElement | null>(null)
+const dropActive = ref(false)
+const draggingDivider = ref(false)
+
+function onSplitDragOver(e: DragEvent) {
+  if (!isChannelDrag(e)) return
+  // Without preventDefault the browser refuses the drop outright — this is what makes the
+  // area a drop target at all, not merely a decoration.
+  e.preventDefault()
+  if (e.dataTransfer) e.dataTransfer.dropEffect = 'copy'
+  dropActive.value = true
+}
+
+function onSplitDragLeave(e: DragEvent) {
+  // Dragging across a child element fires `dragleave` on the parent; only a pointer that has
+  // actually left the area counts, or the zone flickers off under the cursor.
+  if (e.relatedTarget instanceof Node && splitArea.value?.contains(e.relatedTarget)) return
+  dropActive.value = false
+}
+
+function onSplitDrop(e: DragEvent) {
+  dropActive.value = false
+  const payload = readDragPayload(e)
+  if (!payload) return
+  e.preventDefault()
+  // Dropping the channel you're already in would split the window between a thing and
+  // itself; navigating there is what the click on that row does anyway.
+  if (payload.channelId === activeChannelId.value) return
+  openSplit(payload)
+}
+
+/**
+ * Swap the panes: the docked conversation becomes the page, and the page you were on takes
+ * the dock. Nearly always what "open this properly" means — you were watching it because
+ * you were about to need it.
+ */
+function promotePane() {
+  const docked = pane.value
+  if (!docked) return
+  const current = currentPaneTarget()
+  navigateTo(docked.path)
+  // Null when the page isn't a conversation (a settings screen, the requests list): there's
+  // nothing to put in the dock, so the split simply closes.
+  if (current) openSplit(current)
+  else closeSplit()
+}
+
+/** The page you're standing on, as a pane — or null if it isn't a conversation. */
+function currentPaneTarget() {
+  const channel = channels.value.find(c => c.id === activeChannelId.value)
+  if (channel && server.value) {
+    return {
+      channelId: channel.id,
+      title: channel.name,
+      type: channel.type,
+      path: `/servers/${server.value.id}/channels/${channel.id}`,
+    }
+  }
+
+  const conversation = conversations.value.find(c => c.id === activeConversationId.value)
+  if (conversation) {
+    return {
+      channelId: conversation.channel_id,
+      title: chatTitle(conversation),
+      type: 'text' as const,
+      path: `/chats/${conversation.id}`,
+    }
+  }
+
+  return null
+}
+
+/**
+ * The divider drag. Pointer events with capture rather than mousemove on the window: the
+ * pointer keeps reporting to the divider even when it outruns it, which a 4px target it
+ * very much does.
+ */
+function startDividerDrag(e: PointerEvent) {
+  const el = splitArea.value
+  if (!el) return
+  const target = e.currentTarget as HTMLElement
+  target.setPointerCapture(e.pointerId)
+  draggingDivider.value = true
+
+  const box = el.getBoundingClientRect()
+  const move = (ev: PointerEvent) => setRatioFromX(ev.clientX, box.left, box.width)
+  const up = () => {
+    draggingDivider.value = false
+    target.removeEventListener('pointermove', move)
+    target.removeEventListener('pointerup', up)
+    target.removeEventListener('pointercancel', up)
+  }
+  target.addEventListener('pointermove', move)
+  target.addEventListener('pointerup', up)
+  target.addEventListener('pointercancel', up)
+}
+
+// A split needs two columns' worth of room. Below `md` there is one, so the dock is simply
+// not drawn — it isn't closed, so widening the window brings it back where you left it.
+
+/**
+ * The channel-type sections, in the order a server's tree draws them.
+ *
+ * A constant rather than three hand-written blocks, because the three sections differ only
+ * in which channels they hold and what they're called — writing them out three times is
+ * three places for the next kind of channel to be forgotten.
+ */
+const CHANNEL_SECTIONS = [
+  { type: 'text', label: 'Text' },
+  { type: 'voice', label: 'Voice' },
+  { type: 'space', label: 'Side Spaces' },
+] as const
 const userStream = useUserStream()
 const { ensurePermission: ensureNotifyPermission } = useDesktopNotifications()
 // Global online/idle presence — joined once here, since this layout is the one thing mounted
@@ -202,12 +320,6 @@ const rows = computed(() => {
           : { id: `l-channels-${s.id}`, kind: 'empty', indent: true, label: 'Loading channels…' })
       }
 
-      const text = rowChannels.filter(c => c.type === 'text')
-      const voice = rowChannels.filter(c => c.type === 'voice')
-      // Side Spaces sit with the voice channels, under the text ones: they're the other kind
-      // of place you *go into* rather than read, and they carry the same head-count.
-      const spaces = rowChannels.filter(c => c.type === 'space')
-
       // Inline rename/delete only on the active server: those edits flow through useServer,
       // which holds *its* channels, so a cached (non-active) server's tree couldn't be kept
       // in step with them. You manage a server's channels from inside it.
@@ -215,14 +327,44 @@ const rows = computed(() => {
       // be around for the server's shape to change. `is_staff` falls back to `is_owner` for
       // a server payload cached from before roles existed.
       const canEdit = isActive && (s.is_staff ?? s.is_owner)
-      for (const c of text) {
-        list.push({ id: `c-${c.id}`, kind: 'channel', channel: c, voice: [], isOwner: canEdit })
-      }
-      for (const c of voice) {
-        list.push({ id: `c-${c.id}`, kind: 'channel', channel: c, voice: participantsIn(c.id), isOwner: canEdit })
-      }
-      for (const c of spaces) {
-        list.push({ id: `c-${c.id}`, kind: 'channel', channel: c, voice: participantsIn(c.id), isOwner: canEdit })
+
+      /**
+       * The three kinds of place, each under its own foldable heading.
+       *
+       * Order is text → voice → Side Spaces: what you read, then the two kinds of room you
+       * *go into*, which both carry a head-count. A heading is only drawn when the server
+       * actually has that kind of channel — an empty "Voice" label is a promise of nothing.
+       *
+       * The open/shut state comes from useSidebarChannels, keyed by server, so folding a
+       * section in one server doesn't fold it in the next and nothing about the route
+       * touches it. See the note there.
+       */
+      for (const group of CHANNEL_SECTIONS) {
+        const groupChannels = rowChannels.filter(c => c.type === group.type)
+        if (!groupChannels.length) continue
+
+        const open = isSectionOpen(s.id, group.type)
+        list.push({
+          id: `sec-${s.id}-${group.type}`,
+          kind: 'channel-section',
+          server: s,
+          channelType: group.type,
+          label: group.label,
+          count: groupChannels.length,
+          open,
+        })
+        if (!open) continue
+
+        for (const c of groupChannels) {
+          list.push({
+            id: `c-${c.id}`,
+            kind: 'channel',
+            channel: c,
+            // Only the rooms have occupants to draw; a text channel's list is always empty.
+            voice: group.type === 'text' ? [] : participantsIn(c.id),
+            isOwner: canEdit,
+          })
+        }
       }
       list.push({ id: `add-channel-${s.id}`, kind: 'add-channel', server: s })
     }
@@ -514,7 +656,14 @@ onBeforeUnmount(() => { userStream.unsubscribe(); stopPresence() })
                 <NuxtLink
                   v-else-if="item.kind === 'chat'"
                   :to="`/chats/${item.conversation.id}`"
+                  draggable="true"
                   class="mx-2 flex items-center gap-2 rounded px-2 py-1.5 text-sm hover:bg-muted"
+                  @dragstart="writeDragPayload($event, {
+                    channelId: item.conversation.channel_id,
+                    title: chatTitle(item.conversation),
+                    type: 'text',
+                    path: `/chats/${item.conversation.id}`,
+                  })"
                   :class="item.conversation.id === activeConversationId
                     ? 'bg-muted font-medium text-foreground'
                     : item.conversation.unread_count
@@ -667,12 +816,37 @@ onBeforeUnmount(() => { userStream.unsubscribe(); stopPresence() })
                   </DropdownMenu>
                 </div>
 
+                <!-- The Text / Voice / Side Spaces heading inside an open server. Folds its
+                     own channels away; the count is what tells you what you folded. -->
+                <button
+                  v-else-if="item.kind === 'channel-section'"
+                  type="button"
+                  class="mx-2 mt-1 flex w-[calc(100%-1rem)] items-center gap-1 rounded py-1 pl-5 pr-2 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground transition hover:bg-muted hover:text-foreground"
+                  :title="item.open ? `Collapse ${item.label}` : `Expand ${item.label}`"
+                  @click="toggleSection(item.server.id, item.channelType)"
+                >
+                  <ChevronDown v-if="item.open" class="h-3 w-3 shrink-0" />
+                  <ChevronRight v-else class="h-3 w-3 shrink-0" />
+                  <span class="truncate">{{ item.label }}</span>
+                  <span class="ml-auto shrink-0 tabular-nums opacity-60">{{ item.count }}</span>
+                </button>
+
                 <!-- A channel inside the open server. -->
                 <div v-else-if="item.kind === 'channel'">
                   <div class="group/ch relative">
+                    <!-- Draggable onto the main area to open beside what you're reading.
+                         The link still navigates on a plain click; a drag is the other
+                         gesture the same row already invited. -->
                     <NuxtLink
                       :to="`/servers/${item.channel.server_id}/channels/${item.channel.id}`"
+                      draggable="true"
                       class="mx-2 flex items-center gap-2 rounded py-1.5 pl-7 pr-2 text-sm hover:bg-muted"
+                      @dragstart="writeDragPayload($event, {
+                        channelId: item.channel.id,
+                        title: item.channel.name,
+                        type: item.channel.type,
+                        path: `/servers/${item.channel.server_id}/channels/${item.channel.id}`,
+                      })"
                       :class="item.channel.id === activeChannelId
                         ? 'bg-muted font-medium text-foreground'
                         : item.channel.unread_count
@@ -862,10 +1036,57 @@ onBeforeUnmount(() => { userStream.unsubscribe(); stopPresence() })
       </div>
     </aside>
 
-    <!-- Main content -->
-    <main class="flex min-w-0 flex-1 flex-col">
-      <slot />
-    </main>
+    <!--
+      Main content, and — when you've dragged a channel onto it — the docked second pane.
+
+      The route always owns the *left* half: split view borrows the page that was already
+      there rather than taking over navigation, which is why every link, deep link and back
+      button carries on working without knowing this exists. See useSplitView.
+
+      The drop zone is the whole main area, lit only while one of our channel drags is over
+      it, so there's nothing to aim at until there's something to drop.
+    -->
+    <div
+      ref="splitArea"
+      class="relative flex min-w-0 flex-1"
+      @dragover="onSplitDragOver"
+      @dragleave="onSplitDragLeave"
+      @drop="onSplitDrop"
+    >
+      <main class="flex min-w-0 flex-1 flex-col">
+        <slot />
+      </main>
+
+      <template v-if="pane && !narrow">
+        <!-- The divider. `select-none` because a drag that starts on a 5px strip otherwise
+             ends up selecting the messages either side of it. -->
+        <div
+          class="w-1 shrink-0 cursor-col-resize select-none bg-border transition hover:bg-primary/60"
+          :class="draggingDivider && 'bg-primary/60'"
+          role="separator"
+          aria-label="Resize split view"
+          @pointerdown="startDividerDrag"
+        />
+        <SplitPane
+          :pane="pane"
+          :style="{ flex: `0 0 ${Math.round(ratio * 100)}%` }"
+          @close="closeSplit"
+          @promote="promotePane"
+        />
+      </template>
+
+      <!-- Where the dragged channel will land. Covers the right half only: the left half is
+           the page you're on, and dropping a channel onto it would mean navigating, which is
+           what the sidebar link you're dragging already does with a plain click. -->
+      <div
+        v-if="dropActive"
+        class="pointer-events-none absolute inset-y-0 right-0 z-40 flex w-1/2 items-center justify-center border-l-2 border-dashed border-primary bg-primary/10"
+      >
+        <span class="rounded-full bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground shadow">
+          Drop to open beside {{ activeChannelId ? 'this channel' : 'this chat' }}
+        </span>
+      </div>
+    </div>
 
     <!-- The ringing phone. Lives here, not in a page, because a call has to reach you
          wherever you are — including in a conversation you have never once opened. -->

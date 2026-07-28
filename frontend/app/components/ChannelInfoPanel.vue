@@ -49,7 +49,8 @@ function askNickname(member: { id: number, name: string }) {
   nicknameOpen.value = true
 }
 
-const route = useRoute()
+// The URL on the page you're on, a docked pane's own state inside one. See useSurfaceRoute.
+const surface = useSurfaceRoute()
 
 const { files, shelfDocs, hasMore, loading, load, loadMore } = useChannelFiles()
 const {
@@ -129,7 +130,7 @@ function formatSharedAt(iso: string) {
 }
 
 function close() {
-  navigateTo({ path: route.path, query: {} })
+  surface.replace({})
 }
 function formatSize(bytes: number) {
   if (bytes < 1024) return `${bytes} B`

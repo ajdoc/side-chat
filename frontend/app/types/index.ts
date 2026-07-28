@@ -808,6 +808,13 @@ export interface SideChat {
   name: string
   /** The forum layer's labels — lowercase, deduped, server-normalised. */
   tags?: string[]
+  /**
+   * The group heading this post is filed under, or null for "Uncategorised".
+   *
+   * A group and a tag answer different questions: a tag says what the post is *about* and
+   * any number may apply; a group says where in the list it lives and exactly one does.
+   */
+  side_chat_forum_id?: number | null
   /** Reactions to the *post*, same summary shape as a message's (see ReactionBar). */
   reactions?: Reaction[]
   /**
@@ -831,6 +838,21 @@ export interface SideChat {
   decisions_count?: number
   last_active_at: string
   created_at: string
+}
+
+/**
+ * A named group of side chats inside a channel — the heading the forum list folds under.
+ *
+ * "Uncategorised" is deliberately *not* one of these: it's the posts with no group at all,
+ * synthesised by the list. That's why it can't be renamed, reordered or deleted, and why it
+ * can never go missing.
+ */
+export interface SideChatForum {
+  id: number
+  channel_id: number
+  name: string
+  position: number
+  created_at?: string
 }
 
 /**

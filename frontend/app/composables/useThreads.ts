@@ -8,8 +8,10 @@ import type { Thread } from '~/types'
 // over each other. The ThreadPanel picks whichever list matches how it was opened.
 export function useThreads() {
   const api = useApi()
-  const threads = useState<Thread[]>('channel:threads', () => [])
-  const sideChatThreads = useState<Thread[]>('sidechat:threads', () => [])
+  // Prefixed so a docked split pane keeps its own lists. See useChannelScope.
+  const scope = useChannelScope()
+  const threads = useState<Thread[]>(`${scope}channel:threads`, () => [])
+  const sideChatThreads = useState<Thread[]>(`${scope}sidechat:threads`, () => [])
 
   async function loadThreads(channelId: number) {
     const res = await api<{ data: Thread[] }>(`/api/channels/${channelId}/threads`)

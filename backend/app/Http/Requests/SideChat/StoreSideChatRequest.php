@@ -18,6 +18,12 @@ class StoreSideChatRequest extends MemberRequest
                 'nullable',
                 Rule::exists('messages', 'id')->where('channel_id', $channel->id),
             ],
+            // Scoped to this channel's own groups: a forum id from elsewhere would file the
+            // post under a heading nobody reading this channel can see.
+            'side_chat_forum_id' => [
+                'nullable',
+                Rule::exists('side_chat_forums', 'id')->where('channel_id', $channel->id),
+            ],
         ]);
     }
 }

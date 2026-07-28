@@ -1,4 +1,4 @@
-import type { CommentSummary, GifResult, LinkPreview, Message, Reaction, SideChat, SideDeskAppId, StartedThread, Thread, Widget } from '~/types'
+import type { CommentSummary, GifResult, LinkPreview, Message, Reaction, SideChat, SideChatForum, SideDeskAppId, StartedThread, Thread, Widget } from '~/types'
 
 // Messages for one text channel, plus the real-time Reverb subscription.
 export function useMessages() {
@@ -9,9 +9,15 @@ export function useMessages() {
   const hasMore = ref(false) // older messages exist above the loaded window
   const loadingOlder = ref(false)
   // Shared with useThreads() so the Threads list stays in sync.
-  const threads = useState<Thread[]>('channel:threads', () => [])
+  // Every channel-scoped store here is prefixed, so the split view's docked pane keeps its
+  // own copies rather than fighting the main column over one. See useChannelScope.
+  const scope = useChannelScope()
+  const threads = useState<Thread[]>(`${scope}channel:threads`, () => [])
   // Likewise for side chats — the list panel and the timeline cards read the same state.
-  const sideChats = useState<SideChat[]>('channel:sideChats', () => [])
+  const sideChats = useState<SideChat[]>(`${scope}channel:sideChats`, () => [])
+  // And for the forum groups the side chat list folds under — this composable owns the
+  // channel stream, so it's the one that applies `.SideChatForumsUpdated`.
+  const forums = useState<SideChatForum[]>(`${scope}channel:sideChatForums`, () => [])
   // Likewise for the Pinned tab: this composable owns the channel stream, so it's the one
   // that folds a pin toggle into the shared list. See usePins().
   const { toggle: togglePinRequest, apply: applyPin } = usePins()
@@ -278,6 +284,17 @@ export function useMessages() {
     '.SideChatDeleted': (p: { side_chat_id: number, message_id: number | null }) => {
       setStartedSideChat(p.message_id, null)
       sideChats.value = sideChats.value.filter(s => s.id !== p.side_chat_id)
+    },
+    /**
+     * Somebody rearranged the forum groups — a heading added, renamed, reordered, removed.
+     *
+     * A straight replace, with no per-group permission to preserve: whether you may manage
+     * groups is a fact about the *channel*, not about any one heading, so it's fetched once
+     * into `channel:canManageForums` and a broadcast can't invalidate it. See
+     * {@link useSideChatForums}.
+     */
+    '.SideChatForumsUpdated': (p: { forums: SideChatForum[] }) => {
+      forums.value = p.forums
     },
   }
 

@@ -23,6 +23,7 @@ final class CreateSideChatAction
         $sideChat = $channel->sideChats()->create([
             'user_id' => $user->id,
             'message_id' => $data->message_id,
+            'side_chat_forum_id' => $data->side_chat_forum_id,
             'name' => $data->name,
             'tags' => SideChat::normalizeTags($data->tags ?? []),
             'origin_author' => $origin?->user?->name,

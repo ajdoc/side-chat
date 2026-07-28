@@ -106,7 +106,7 @@ function cancel() {
                 <span class="min-w-0">
                   <span class="flex items-center gap-1.5">
                     <span class="text-sm font-medium">{{ t.label }}</span>
-                    <AlphaBadge v-if="t.value === 'space'" />
+                    <AlphaBadge v-if="t.value === 'space'" stage="Beta" />
                   </span>
                   <span class="block text-xs text-muted-foreground">{{ t.hint }}</span>
                 </span>

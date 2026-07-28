@@ -12,7 +12,9 @@ import { Rocket } from 'lucide-vue-next'
  */
 defineProps<{ channelId: number }>()
 
-const route = useRoute()
+// The URL on the page you're on, a docked pane's own state inside one — so the same button
+// opens the list in whichever column it was pressed in. See useSurfaceRoute.
+const surface = useSurfaceRoute()
 const { sideChats } = useSideChats()
 
 const count = computed(() => sideChats.value.length)
@@ -23,11 +25,8 @@ function open() {
   // Open the side chats list *beside* whatever's already up — a channel thread the main
   // timeline has open stays put — while clearing any prior side chat selection and the
   // full-column Info / Side Desk surfaces.
-  navigateTo({
-    path: route.path,
-    query: mergeQuery(route.query, {
-      sidechats: '1', sidechat: null, scthread: null, scthreads: null, scfrom: null, info: null, desk: null,
-    }),
+  surface.patch({
+    sidechats: '1', sidechat: null, scthread: null, scthreads: null, scfrom: null, info: null, desk: null,
   })
 }
 </script>

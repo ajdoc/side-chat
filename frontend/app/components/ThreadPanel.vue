@@ -17,7 +17,8 @@ const props = defineProps<{ channelId: number, sideChatId?: number | null }>()
 // whole screen instead, and its own close button is the way back.
 const { narrow } = useNavDrawer()
 const { width: panelWidth, startResize } = useResizable('thread', 360, { min: 280, max: 640 })
-const route = useRoute()
+// The URL on the page you're on, a docked pane's own state inside one. See useSurfaceRoute.
+const surface = useSurfaceRoute()
 const { user } = useAuth()
 // Names follow whatever people are called in this server or chat — see useNicknames.
 const { nameFor } = useNicknames()
@@ -47,16 +48,16 @@ const keys = computed(() => (scoped.value
   : { view: 'thread', list: 'threads', from: 'from' }))
 
 const mode = computed<'list' | 'create' | 'view' | null>(() => {
-  const q = route.query
+  const q = surface.query.value
   if (q[keys.value.list] === '1') return 'list'
   if (q[keys.value.view] === 'new') return 'create'
   if (q[keys.value.view]) return 'view'
   return null
 })
-const activeThreadId = computed(() => (mode.value === 'view' ? Number(route.query[keys.value.view]) : null))
+const activeThreadId = computed(() => (mode.value === 'view' ? Number(surface.query.value[keys.value.view]) : null))
 const fromMessageId = computed(() => {
-  const v = route.query[keys.value.from]
-  return typeof v === 'string' ? Number(v) : null
+  const v = surface.query.value[keys.value.from]
+  return v ? Number(v) : null
 })
 
 const newName = ref('')
@@ -96,13 +97,7 @@ async function onScrollStart() {
 }
 /** Merge into the current query, so any other open column (a side chat, the other thread) stays. */
 function setQuery(patch: Record<string, string | null>) {
-  const q: Record<string, string> = {}
-  for (const [k, v] of Object.entries(route.query)) if (typeof v === 'string') q[k] = v
-  for (const [k, v] of Object.entries(patch)) {
-    if (v === null) delete q[k]
-    else q[k] = v
-  }
-  navigateTo({ path: route.path, query: q })
+  surface.patch(patch)
 }
 /** Open a thread in this scope's keys; merging leaves any other column standing. */
 function openThread(id: number) {
