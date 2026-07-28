@@ -16,9 +16,17 @@ use Illuminate\Support\Str;
 
 final class AttachmentService
 {
-    public const DISK = 'local';
-
     public function __construct(private readonly GifService $gifs) {}
+
+    /**
+     * The disk new attachments are written to — see config/uploads.php for why this is a
+     * setting rather than a constant. Read it at call time, never cache it in a property:
+     * under Octane a worker outlives the request that first asked.
+     */
+    public static function disk(): string
+    {
+        return (string) config('uploads.disk', 'local');
+    }
 
     /**
      * Store uploaded files against a message.
@@ -32,10 +40,11 @@ final class AttachmentService
                 continue;
             }
 
-            $path = $file->store("attachments/{$message->channel_id}", self::DISK);
+            $disk = self::disk();
+            $path = $file->store("attachments/{$message->channel_id}", $disk);
 
             $message->attachments()->create([
-                'disk' => self::DISK,
+                'disk' => $disk,
                 'path' => $path,
                 'name' => $file->getClientOriginalName(),
                 'mime_type' => $file->getMimeType() ?: 'application/octet-stream',
@@ -269,8 +278,15 @@ final class AttachmentService
             ->whereIn('message_id', Message::whereIn('channel_id', $channelIds)->select('id'))
             ->chunkById(500, fn (Collection $chunk) => $this->purge($chunk));
 
+        // The configured disk is where new files go, but a channel old enough to predate a disk
+        // change has bytes under the previous one too — and pass 1 only reaches files that still
+        // have a row. Sweeping both means a migration doesn't strand a channel's leftovers.
+        $disks = array_unique([self::disk(), 'local']);
+
         foreach ($channelIds as $channelId) {
-            Storage::disk(self::DISK)->deleteDirectory("attachments/{$channelId}");
+            foreach ($disks as $disk) {
+                Storage::disk($disk)->deleteDirectory("attachments/{$channelId}");
+            }
         }
     }
 

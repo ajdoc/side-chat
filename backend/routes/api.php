@@ -88,12 +88,15 @@ Route::middleware('auth:api')->group(function () {
 });
 
 /**
- * Large files, staged in pieces before a message claims them. Open an upload, post its chunks
- * in order, then hand the id to a send as `uploads[]` — see ChunkedUploadController.
+ * Large files, staged before a message claims them. Open an upload, get the bytes up, then hand
+ * the id to a send as `uploads[]`. Opening it answers with a `mode` saying which of the two ways
+ * to send the bytes applies: `direct` (PUT the file to the signed url, then post `complete`) or
+ * `chunked` (post the slices to `chunks` in order) — see ChunkedUploadController.
  */
 Route::middleware('auth:api')->group(function () {
     Route::post('uploads', [ChunkedUploadController::class, 'store']);
     Route::post('uploads/{upload:uuid}/chunks', [ChunkedUploadController::class, 'update']);
+    Route::post('uploads/{upload:uuid}/complete', [ChunkedUploadController::class, 'complete']);
     Route::delete('uploads/{upload:uuid}', [ChunkedUploadController::class, 'destroy']);
 });
 

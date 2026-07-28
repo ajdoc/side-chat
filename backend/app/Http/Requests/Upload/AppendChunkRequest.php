@@ -2,28 +2,18 @@
 
 namespace App\Http\Requests\Upload;
 
+use App\DTOs\Message\SendMessageData;
 use App\Models\ChunkedUpload;
-use Illuminate\Foundation\Http\FormRequest;
 
 /**
- * One piece of a staged file. Only the person who opened the upload may add to it (or cancel
- * it) — the uuid is a handle on bytes being assembled under someone's name, not a shared one.
+ * One piece of a staged file. Ownership is inherited from {@see OwnedUploadRequest}; what this
+ * adds is the chunk itself.
  */
-class AppendChunkRequest extends FormRequest
+class AppendChunkRequest extends OwnedUploadRequest
 {
-    public function authorize(): bool
-    {
-        $upload = $this->route('upload');
-        $user = $this->user();
-
-        return $upload instanceof ChunkedUpload
-            && $user !== null
-            && $upload->user_id === $user->id;
-    }
-
     /**
      * A chunk arrives as multipart/form-data, where every field is a string — so `index` shows
-     * up as "3", not 3. The same subtraction {@see \App\DTOs\Message\SendMessageData} makes for
+     * up as "3", not 3. The same subtraction {@see SendMessageData} makes for
      * `reply_to_id`, for the same reason. Only a genuinely numeric field is cast: anything else
      * is left alone so it fails validation rather than quietly becoming chunk zero.
      */

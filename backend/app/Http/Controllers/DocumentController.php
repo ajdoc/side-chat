@@ -12,6 +12,7 @@ use App\Models\Attachment;
 use App\Models\Message;
 use App\Models\SideChat;
 use App\Models\SpaceDocument;
+use App\Services\AttachmentService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Response;
 use Illuminate\Support\Collection;
@@ -52,11 +53,12 @@ class DocumentController extends Controller
     public function store(DocumentRequest $request, SideChat $sideChat): SpaceDocumentResource
     {
         $file = $request->file('file');
-        $path = $file->store("space-documents/sidechat/{$sideChat->id}", 'local');
+        $disk = AttachmentService::disk();
+        $path = $file->store("space-documents/sidechat/{$sideChat->id}", $disk);
 
         $document = $sideChat->spaceDocuments()->create([
             'user_id' => $request->user()->id,
-            'disk' => 'local',
+            'disk' => $disk,
             'path' => $path,
             'name' => $file->getClientOriginalName(),
             'mime_type' => $file->getMimeType() ?: 'application/octet-stream',

@@ -11,6 +11,7 @@ use App\Http\Resources\MessageResource;
 use App\Models\Attachment;
 use App\Models\Channel;
 use App\Services\AttachmentService;
+use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Resources\Json\AnonymousResourceCollection;
 use Symfony\Component\HttpFoundation\BinaryFileResponse;
 
@@ -21,18 +22,26 @@ class AttachmentController extends Controller
     public function __construct(private readonly AttachmentService $attachments) {}
 
     /** Inline (images render in <img>, PDFs open in the browser, video plays in <video>). Signed URL. */
-    public function show(Attachment $attachment): BinaryFileResponse
+    public function show(Attachment $attachment): BinaryFileResponse|RedirectResponse
     {
-        return response()->file($this->storedFilePath($attachment->disk, $attachment->path), [
-            'Content-Type' => $attachment->mime_type,
-            'Content-Disposition' => 'inline; filename="'.addslashes($attachment->name).'"',
-        ]);
+        return $this->storedFileResponse(
+            $attachment->disk,
+            $attachment->path,
+            $attachment->name,
+            $attachment->mime_type,
+        );
     }
 
     /** Forced download. Signed URL. Ranged too, so an interrupted download can resume. */
-    public function download(Attachment $attachment): BinaryFileResponse
+    public function download(Attachment $attachment): BinaryFileResponse|RedirectResponse
     {
-        return response()->download($this->storedFilePath($attachment->disk, $attachment->path), $attachment->name);
+        return $this->storedFileResponse(
+            $attachment->disk,
+            $attachment->path,
+            $attachment->name,
+            $attachment->mime_type,
+            download: true,
+        );
     }
 
     /** Files posted in a channel (Info > Files). */

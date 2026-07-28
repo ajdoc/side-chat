@@ -4,6 +4,7 @@ namespace App\Http\Controllers;
 
 use App\Http\Controllers\Concerns\ServesStoredFiles;
 use App\Models\SpaceDocument;
+use Illuminate\Http\RedirectResponse;
 use Symfony\Component\HttpFoundation\BinaryFileResponse;
 
 /**
@@ -16,17 +17,25 @@ class SpaceDocumentFileController extends Controller
     use ServesStoredFiles;
 
     /** Inline — a PDF renders in the browser; other kinds are fetched by their viewer. */
-    public function show(SpaceDocument $document): BinaryFileResponse
+    public function show(SpaceDocument $document): BinaryFileResponse|RedirectResponse
     {
-        return response()->file($this->storedFilePath($document->disk, $document->path), [
-            'Content-Type' => $document->mime_type,
-            'Content-Disposition' => 'inline; filename="'.addslashes($document->name).'"',
-        ]);
+        return $this->storedFileResponse(
+            $document->disk,
+            $document->path,
+            $document->name,
+            $document->mime_type,
+        );
     }
 
     /** Forced download. */
-    public function download(SpaceDocument $document): BinaryFileResponse
+    public function download(SpaceDocument $document): BinaryFileResponse|RedirectResponse
     {
-        return response()->download($this->storedFilePath($document->disk, $document->path), $document->name);
+        return $this->storedFileResponse(
+            $document->disk,
+            $document->path,
+            $document->name,
+            $document->mime_type,
+            download: true,
+        );
     }
 }

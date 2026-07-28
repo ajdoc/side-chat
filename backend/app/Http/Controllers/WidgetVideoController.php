@@ -5,6 +5,7 @@ namespace App\Http\Controllers;
 use App\Http\Controllers\Concerns\ServesStoredFiles;
 use App\Models\Widget;
 use App\Services\Widgets\VideoWidget;
+use Illuminate\Http\RedirectResponse;
 use Symfony\Component\HttpFoundation\BinaryFileResponse;
 
 /**
@@ -25,16 +26,18 @@ class WidgetVideoController extends Controller
 {
     use ServesStoredFiles;
 
-    public function show(Widget $widget, string $source): BinaryFileResponse
+    public function show(Widget $widget, string $source): BinaryFileResponse|RedirectResponse
     {
         abort_unless($widget->type === 'video', 404);
 
         $clip = $this->uploadedSource($widget, $source);
 
-        return response()->file($this->storedFilePath($clip['disk'], $clip['path']), [
-            'Content-Type' => $clip['mime'] ?? 'video/mp4',
-            'Content-Disposition' => 'inline; filename="'.addslashes((string) ($clip['title'] ?? 'video')).'"',
-        ]);
+        return $this->storedFileResponse(
+            $clip['disk'],
+            $clip['path'],
+            (string) ($clip['title'] ?? 'video'),
+            (string) ($clip['mime'] ?? 'video/mp4'),
+        );
     }
 
     /**
