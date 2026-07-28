@@ -2,6 +2,8 @@
 
 namespace App\Http\Resources;
 
+use App\Services\CommentService;
+use App\Services\ReactionService;
 use Illuminate\Http\Request;
 use Illuminate\Http\Resources\Json\JsonResource;
 
@@ -25,6 +27,15 @@ class SideChatResource extends JsonResource
             'channel_id' => $this->channel_id,
             'message_id' => $this->message_id,
             'name' => $this->name,
+            // The forum layer. Tags are plain lowercase strings (see UpdateSideChatAction);
+            // null in the column means "never tagged", which the list reads as none.
+            'tags' => $this->tags ?? [],
+            'reactions' => $this->whenLoaded('reactions', fn () => app(ReactionService::class)->summarize($this->resource)),
+            // "Popular comments" on the post — the same chips a message carries, and the
+            // same summariser, so a phrase groups identically wherever it was left.
+            'comments' => $this->whenLoaded('comments', fn () => app(CommentService::class)->summarize($this->resource)),
+            // May the asker retitle/retag/delete? Mirrors ManageSideChatRequest.
+            'can_manage' => $this->when($request->user() !== null, fn () => $this->resource->canManage($request->user())),
             'creator' => new UserResource($this->whenLoaded('creator')),
             'parent_message' => new MessageResource($this->whenLoaded('parentMessage')),
             // Frozen snapshot of the origin message, so "Started from" outlives its deletion.

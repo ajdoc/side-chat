@@ -120,8 +120,8 @@ final class NicknameService
     /**
      * May `$actor` set the *public* nickname of `$target` in `$place`?
      *
-     * Your own, always — your name here is yours. Somebody else's, only if you own the
-     * place, and only servers have an owner: a group chat's creator is not its boss, and
+     * Your own, always — your name here is yours. Somebody else's, only if you run the
+     * place, and only servers have staff: a group chat's creator is not its boss, and
      * a DM has nobody at all, so in a chat this is self-service or nothing.
      */
     public function canSetPublic(MessageContainer&Model $place, User $actor, User $target): bool
@@ -130,6 +130,6 @@ final class NicknameService
             return true;
         }
 
-        return $place instanceof Server && $place->owner_id === $actor->id;
+        return $place instanceof Server && $place->isStaff($actor);
     }
 }

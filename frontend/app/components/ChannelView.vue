@@ -195,7 +195,18 @@ function onCreateSideChat(messageId: number) {
   patchQuery({ sidechat: 'new', sidechats: null, from: String(messageId) })
 }
 function onOpenSideChat(id: number) {
-  patchQuery({ sidechat: String(id), sidechats: null, from: null })
+  patchQuery({ sidechat: String(id), sidechats: null, from: null, screply: null })
+}
+
+/**
+ * Open a side chat *and* its reply box — the card's "Reply".
+ *
+ * Carried in the URL rather than through a prop or an event bus, because the panel that
+ * has to act on it is a sibling: everything else about which side chat is open already
+ * lives in the query, and this is one more fact of the same kind.
+ */
+function onReplyToSideChat(id: number) {
+  patchQuery({ sidechat: String(id), sidechats: null, from: null, screply: '1' })
 }
 
 async function onScrollStart() {
@@ -400,6 +411,7 @@ onBeforeUnmount(() => {
                   @open-thread="onOpenThread"
                   @create-side-chat="onCreateSideChat"
                   @open-side-chat="onOpenSideChat"
+                  @reply-to-side-chat="onReplyToSideChat"
                   @jump-to-reply="onJumpToReply"
                   @toggle-reaction="toggleReaction"
                   @toggle-pin="togglePin"

@@ -4,6 +4,15 @@ import type { Reaction } from '~/types'
 const props = defineProps<{
   reactions: Reaction[]
   currentUserId: number | null
+  /**
+   * Keep the bar (and so the picker) on screen even with nothing reacted yet.
+   *
+   * A message doesn't need this: it has its own hover affordance for the first reaction
+   * (MessageReactPopover), and an empty row under every line would be noise. A side chat
+   * *post* has no such affordance — the card is the whole surface — so without this the
+   * first reaction would be unreachable.
+   */
+  alwaysShow?: boolean
 }>()
 
 const emit = defineEmits<{ toggle: [emoji: string] }>()
@@ -27,7 +36,7 @@ function listToText(names: string[]) {
 </script>
 
 <template>
-  <div v-if="reactions.length" class="mt-1 flex flex-wrap items-center gap-1">
+  <div v-if="reactions.length || alwaysShow" class="mt-1 flex flex-wrap items-center gap-1">
     <button
       v-for="reaction in reactions"
       :key="reaction.emoji"

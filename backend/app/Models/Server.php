@@ -17,6 +17,22 @@ class Server extends Model implements MessageContainer
     /** @use HasFactory<\Database\Factories\ServerFactory> */
     use HasFactory, HasNicknames;
 
+    /**
+     * What a member may be, on the `server_user.role` pivot.
+     *
+     * Deliberately two rungs rather than a permission matrix: an admin is "somebody the
+     * owner trusts to run the place", and the things that need trusting are all the same
+     * kind of thing — approving who gets in, shaping the channels, handing out rooms and
+     * call effects. Splitting those into toggles would be a lot of UI for a distinction
+     * nobody has asked to make. The owner is not a role: it's a column on the server, and
+     * it is the one thing an admin can't become or grant.
+     */
+    public const ROLE_MEMBER = 'member';
+
+    public const ROLE_ADMIN = 'admin';
+
+    public const ROLES = [self::ROLE_MEMBER, self::ROLE_ADMIN];
+
     protected $fillable = ['name', 'owner_id', 'invite_code'];
 
     public function owner(): BelongsTo
@@ -39,6 +55,36 @@ class Server extends Model implements MessageContainer
     public function hasMember(User $user): bool
     {
         return $this->members()->whereKey($user->getKey())->exists();
+    }
+
+    /** The one person the server belongs to. Not a role — see the ROLE_* constants. */
+    public function isOwner(User $user): bool
+    {
+        return $this->owner_id === $user->getKey();
+    }
+
+    /**
+     * May this person run the place? The owner, or anyone the owner has made an admin.
+     *
+     * This is the check behind every "owner only" endpoint bar two — deleting the server
+     * and changing who is an admin, which stay with the owner alone (see ServerOwnerRequest).
+     */
+    public function isStaff(User $user): bool
+    {
+        return $this->isOwner($user) || $this->members()
+            ->whereKey($user->getKey())
+            ->wherePivot('role', self::ROLE_ADMIN)
+            ->exists();
+    }
+
+    /** This member's role string — 'owner' for the owner, else the pivot value. */
+    public function roleFor(User $user): string
+    {
+        if ($this->isOwner($user)) {
+            return 'owner';
+        }
+
+        return (string) ($this->members()->whereKey($user->getKey())->first()?->pivot->role ?? self::ROLE_MEMBER);
     }
 
     public function broadcastChannel(): PrivateChannel
@@ -76,7 +122,9 @@ class Server extends Model implements MessageContainer
      */
     public function firstTextChannel(): ?Channel
     {
-        return $this->channels()->where('type', 'text')->first();
+        // Never a private one: "X joined the server" is for everybody, and posting it
+        // somewhere most of the server can't see would quietly lose it.
+        return $this->channels()->where('type', 'text')->where('is_private', false)->first();
     }
 
     /** A short, unique, URL-safe invite code. */

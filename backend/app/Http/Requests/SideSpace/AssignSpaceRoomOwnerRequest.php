@@ -2,7 +2,7 @@
 
 namespace App\Http\Requests\SideSpace;
 
-use App\Http\Requests\ServerOwnerRequest;
+use App\Http\Requests\ServerStaffRequest;
 
 /**
  * Putting somebody in charge of a room. The server's owner, and nobody else.
@@ -15,7 +15,7 @@ use App\Http\Requests\ServerOwnerRequest;
  *
  * An empty list un-assigns the room, which is how a room goes back to being nobody's.
  */
-class AssignSpaceRoomOwnerRequest extends ServerOwnerRequest
+class AssignSpaceRoomOwnerRequest extends ServerStaffRequest
 {
     /** @return array<string, mixed> */
     public function rules(): array

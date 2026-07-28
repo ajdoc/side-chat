@@ -24,6 +24,7 @@ final class CreateSideChatAction
             'user_id' => $user->id,
             'message_id' => $data->message_id,
             'name' => $data->name,
+            'tags' => SideChat::normalizeTags($data->tags ?? []),
             'origin_author' => $origin?->user?->name,
             'origin_excerpt' => $origin?->body ? Str::limit($origin->body, 280) : null,
         ]);

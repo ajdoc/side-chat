@@ -19,7 +19,20 @@ final class ChannelService
      */
     public function forServer(Server $server, ?User $user = null): LengthAwarePaginator
     {
-        $channels = $server->channels()->paginate(self::PER_PAGE);
+        $query = $server->channels();
+
+        // A private channel is absent from the sidebar of anyone not allowed in it, rather
+        // than present-but-locked: a locked door still tells you the room exists, and the
+        // point of the feature is that it doesn't. Staff see everything, since they're the
+        // ones who decide what's private. Done as a query rather than a filter on the page
+        // so pagination counts what the viewer can actually see.
+        if ($user !== null && ! $server->isStaff($user)) {
+            $query->where(fn ($q) => $q
+                ->where('is_private', false)
+                ->orWhereHas('allowedMembers', fn ($m) => $m->whereKey($user->getKey())));
+        }
+
+        $channels = $query->paginate(self::PER_PAGE);
 
         if ($user === null) {
             return $channels;

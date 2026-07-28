@@ -27,12 +27,22 @@ class MuteVoiceParticipantRequest extends VoiceChannelRequest
             return false;
         }
 
+        $user = $this->user();
         $container = $this->resolveContainer();
-        $ownerId = $container instanceof Server || $container instanceof Conversation
-            ? $container->owner_id
-            : null;
 
-        return $ownerId !== null && $ownerId === $this->user()?->id;
+        if ($user === null) {
+            return false;
+        }
+
+        // A server delegates this to its admins along with everything else they run; a
+        // group chat has no roles, so it stays with the person who made it.
+        if ($container instanceof Server) {
+            return $container->isStaff($user);
+        }
+
+        return $container instanceof Conversation
+            && $container->owner_id !== null
+            && $container->owner_id === $user->id;
     }
 
     /** @return array<string, mixed> */

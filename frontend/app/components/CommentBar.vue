@@ -1,9 +1,10 @@
 <script setup lang="ts">
 import { MessageSquareText } from 'lucide-vue-next'
+import type { CommentSubject } from '~/composables/useComments'
 import type { CommentSummary } from '~/types'
 
 /**
- * The "popular comments" strip under a message: word-reactions shown as chips, most
+ * The "popular comments" strip: word-reactions shown as chips, most
  * co-signed first — `✓ Looks good (18)`. Clicking a chip co-signs the phrase (or takes
  * your co-sign back), exactly like a reaction; the "Comment" pill opens the full composer.
  *
@@ -11,9 +12,23 @@ import type { CommentSummary } from '~/types'
  * over the same real-time stream that carries reactions, so nothing here holds local state.
  */
 const props = defineProps<{
-  messageId: number
+  /**
+   * What these chips are about — a message in a timeline, or a side chat *post*. The two
+   * are stored separately and read differently ("this line" vs "this topic"), so the bar
+   * is told which rather than inferring it from an id.
+   */
+  subject: CommentSubject
   comments: CommentSummary[]
   currentUserId: number | null
+  /**
+   * Keep the strip (and so the "+" pill) on screen with nothing commented yet.
+   *
+   * A message doesn't need it: MessageReactPopover is the hover affordance for the first
+   * comment, and an empty row under every line would be noise. A post has no hover
+   * affordance — the card *is* the surface — so without this the first comment would be
+   * unreachable. Same argument as ReactionBar's.
+   */
+  alwaysShow?: boolean
 }>()
 
 const emit = defineEmits<{ open: [] }>()
@@ -39,12 +54,12 @@ function listToText(names: string[]) {
 function onToggle(comment: CommentSummary) {
   // Fire-and-forget: the refreshed summary lands over the stream (we receive our own
   // broadcast too), so there's nothing to await here.
-  toggle(props.messageId, comment.body, comment.emoji)
+  toggle(props.subject, comment.body, comment.emoji)
 }
 </script>
 
 <template>
-  <div v-if="comments.length" class="mt-1 flex flex-wrap items-center gap-1">
+  <div v-if="comments.length || alwaysShow" class="mt-1 flex flex-wrap items-center gap-1">
     <MessageSquareText class="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
     <button
       v-for="comment in comments"

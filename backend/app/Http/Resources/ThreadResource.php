@@ -20,6 +20,9 @@ class ThreadResource extends JsonResource
             'name' => $this->name,
             'replies_count' => $this->whenCounted('messages'),
             'creator' => new UserResource($this->whenLoaded('creator')),
+            // May the person asking rename or delete this? Mirrors ThreadAuthorRequest —
+            // the client only draws the buttons the server would honour.
+            'can_manage' => $this->when($request->user() !== null, fn () => $this->canManage($request->user())),
             'parent_message' => new MessageResource($this->whenLoaded('parentMessage')),
             'created_at' => $this->created_at,
         ];

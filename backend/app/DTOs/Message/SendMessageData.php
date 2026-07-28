@@ -2,6 +2,7 @@
 
 namespace App\DTOs\Message;
 
+use WendellAdriel\ValidatedDTO\Casting\BooleanCast;
 use WendellAdriel\ValidatedDTO\Casting\IntegerCast;
 use WendellAdriel\ValidatedDTO\ValidatedDTO;
 
@@ -9,6 +10,17 @@ final class SendMessageData extends ValidatedDTO
 {
     public ?string $body;
     public ?int $reply_to_id;
+
+    /**
+     * Addressed at the side chat *post* rather than at another message. Only meaningful on
+     * the side-chat send path; nothing else sets it, and the request there is the only one
+     * that validates it. See the migration for why it isn't folded into `reply_to_id`.
+     *
+     * Nullable, not `bool`: the cast runs over the raw payload, and an absent (or
+     * explicitly null) field casts to null before the default can be applied — assigning
+     * that to a `bool` property is a TypeError. Readers coalesce; absent means "no".
+     */
+    public ?bool $replies_to_post;
 
     /**
      * A GIF picked from the provider (Giphy): `url` is the media URL we store as a remote
@@ -28,6 +40,7 @@ final class SendMessageData extends ValidatedDTO
         return [
             'body' => ['nullable', 'string', 'max:2000'],
             'reply_to_id' => ['nullable', 'integer'],
+            'replies_to_post' => ['nullable', 'boolean'],
             'gif' => ['nullable', 'array'],
             'gif.url' => ['required_with:gif', 'string', 'url', 'max:2048'],
             'gif.preview_url' => ['nullable', 'string', 'url', 'max:2048'],
@@ -46,7 +59,7 @@ final class SendMessageData extends ValidatedDTO
     /** @return array<string, mixed> */
     protected function defaults(): array
     {
-        return ['body' => null, 'reply_to_id' => null, 'gif' => null];
+        return ['body' => null, 'reply_to_id' => null, 'replies_to_post' => false, 'gif' => null];
     }
 
     /**
@@ -57,6 +70,7 @@ final class SendMessageData extends ValidatedDTO
      */
     protected function casts(): array
     {
-        return ['reply_to_id' => new IntegerCast()];
+        // Same reason for the boolean: over multipart it arrives as the string "1"/"0".
+        return ['reply_to_id' => new IntegerCast(), 'replies_to_post' => new BooleanCast()];
     }
 }

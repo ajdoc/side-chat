@@ -115,13 +115,27 @@ Route::middleware('auth:api')->group(function () {
      * alias is yours about anyone. The matching pair for chats sits with the conversation
      * routes below — same controller, because a nickname only knows about "the place".
      */
+    /*
+     * Server roles. Promoting a member to admin, or putting them back — owner only, since
+     * an admin who can appoint admins is an owner with extra steps. What being an admin
+     * *buys* is everywhere else: see ServerStaffRequest.
+     */
+    Route::patch('servers/{server}/members/{member}/role', [ServerController::class, 'updateRole']);
+
     Route::get('servers/{server}/nicknames', [NicknameController::class, 'indexForServer']);
     Route::put('servers/{server}/nicknames/{member}', [NicknameController::class, 'updateForServer']);
 
     Route::get('servers/{server}/channels', [ChannelController::class, 'index']);
     Route::post('servers/{server}/channels', [ChannelController::class, 'store']);
-    // Rename (name only — a channel's type is not editable). Owner only.
+    // Rename (name only — a channel's type is not editable). Staff only.
     Route::patch('channels/{channel}', [ChannelController::class, 'update']);
+    /*
+     * Who may be in the channel. Staff only, and split off the rename on purpose: one is
+     * cosmetic, the other decides who can read the history. Reading the allow-list is
+     * gated too — knowing exactly who is in a private channel is itself private.
+     */
+    Route::get('channels/{channel}/access', [ChannelController::class, 'showAccess']);
+    Route::put('channels/{channel}/access', [ChannelController::class, 'access']);
     // Owner only — deletes the channel's threads, messages and uploaded files.
     Route::delete('channels/{channel}', [ChannelController::class, 'destroy']);
 
@@ -286,6 +300,10 @@ Route::middleware('auth:api')->group(function () {
     Route::get('channels/{channel}/threads', [ThreadController::class, 'index']);
     Route::post('channels/{channel}/threads', [ThreadController::class, 'store']);
     Route::get('threads/{thread}', [ThreadController::class, 'show']);
+    // Retitle / delete. The thread's creator or the server's staff — see ThreadAuthorRequest.
+    // Deleting takes every reply (and their files) with it; the parent message stays put.
+    Route::patch('threads/{thread}', [ThreadController::class, 'update']);
+    Route::delete('threads/{thread}', [ThreadController::class, 'destroy']);
     Route::get('threads/{thread}/messages', [ThreadMessageController::class, 'index']);
     Route::post('threads/{thread}/messages', [ThreadMessageController::class, 'store']);
 
@@ -338,6 +356,22 @@ Route::middleware('auth:api')->group(function () {
     Route::get('channels/{channel}/side-chats', [SideChatController::class, 'index']);
     Route::post('channels/{channel}/side-chats', [SideChatController::class, 'store']);
     Route::get('side-chats/{sideChat}', [SideChatController::class, 'show']);
+    /*
+     * The forum layer. Retitling, retagging and deleting are the OP's or the staff's
+     * (ManageSideChatRequest); reacting to the post is anyone in the channel's, because a
+     * list you must join a post to vote on isn't a list.
+     */
+    Route::patch('side-chats/{sideChat}', [SideChatController::class, 'update']);
+    Route::delete('side-chats/{sideChat}', [SideChatController::class, 'destroy']);
+    Route::post('side-chats/{sideChat}/reactions', [SideChatController::class, 'react']);
+    /*
+     * Comments on the post — the co-signable phrase chips, not replies. Replying to a post
+     * *is* posting into its timeline (`side-chats/{id}/messages` below), which is why there
+     * is no separate reply endpoint here: a reply is a message, and always was.
+     */
+    Route::get('side-chats/{sideChat}/comments', [SideChatController::class, 'comments']);
+    Route::post('side-chats/{sideChat}/comments', [SideChatController::class, 'comment']);
+    Route::delete('side-chat-comments/{comment}', [SideChatController::class, 'destroyComment']);
     // Standing highlights: the side chat's decisions and pinned messages (the panel's card).
     Route::get('side-chats/{sideChat}/highlights', [SideChatController::class, 'highlights']);
     Route::post('side-chats/{sideChat}/join', [SideChatController::class, 'join']);

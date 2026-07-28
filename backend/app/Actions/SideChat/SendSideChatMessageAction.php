@@ -28,6 +28,10 @@ final class SendSideChatMessageAction
             'user_id' => $user->id,
             'body' => $data->body,
             'reply_to_id' => $data->reply_to_id,
+            // A reply aimed at the post itself rather than at another message — the
+            // forum's top-level reply. Mutually exclusive with reply_to_id; the request
+            // refuses both at once.
+            'replies_to_post' => $data->replies_to_post ?? false,
         ]);
 
         $this->attachments->storeFor($message, $files);

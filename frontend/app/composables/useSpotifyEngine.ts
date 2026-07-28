@@ -60,6 +60,10 @@ let loadedUri: string | null = null
 // End-of-track detection state — Spotify plays a single uri with no "up next", so it just
 // stops at the end and someone has to notice and advance the room, exactly once.
 const endedFor = new Set<string>()
+// The last position seen while actually playing. Reset on every track change: it is compared
+// against the *current* track's duration, so carrying the outgoing track's near-end reading
+// into the next one reads as "this one has already finished too" and skips it — the queue
+// advancing two at a time, which is what a Spotify playlist looked like it was doing.
 let lastPos = 0
 
 // 401 (token expired/invalid) or 403 (insufficient scope) from a playback call — the link is
@@ -198,8 +202,20 @@ async function reconcile(uri: string, trackId: string, targetPos: number, wantPl
   if (loadedUri !== uri) {
     loadedUri = uri
     endedFor.delete(trackId)
+    // Fresh track, fresh end-detection: both the remembered position *and* the stale
+    // playback state describe the track we're leaving, and either one alone is enough to
+    // make takeEndedTrack declare the incoming track finished before it has played a note.
+    lastPos = 0
+    playbackState.value = null
     await start(uri, targetPos, wantPlaying)
     return
+  }
+
+  // Same uri, but the room jumped backwards (loop=track, or a seek to the top). That's a
+  // replay, so the track is allowed to end again.
+  if (playbackState.value && playbackState.value.position - targetPos > 2) {
+    endedFor.delete(trackId)
+    lastPos = 0
   }
 
   // Coarse reconcile off the last polled state (getCurrentState is async — see poll()).
@@ -236,7 +252,9 @@ function takeEndedTrack(trackId: string | undefined): string | null {
   if (!trackId || !st || !st.duration || endedFor.has(trackId)) return null
   if (!st.paused) lastPos = st.position
   const nearEnd = st.duration - st.position < 1.2
-  const stoppedAtEnd = st.paused && lastPos > 0 && st.duration - lastPos < 2.5
+  // `lastPos` must plausibly belong to *this* track — a reading past its end is a leftover
+  // from the one before, not proof this one finished.
+  const stoppedAtEnd = st.paused && lastPos > 0 && lastPos <= st.duration + 1 && st.duration - lastPos < 2.5
   if ((!st.paused && nearEnd) || stoppedAtEnd) {
     endedFor.add(trackId)
     return trackId

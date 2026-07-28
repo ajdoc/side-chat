@@ -74,6 +74,16 @@ const { upload: uploadInChunks, cancel } = useChunkedUpload()
 const draft = ref(props.channelId != null ? getDraft(props.channelId) : '')
 const pending = ref<Pending[]>([])
 const fileInput = ref<HTMLInputElement | null>(null)
+const editor = ref<{ focus: () => void } | null>(null)
+
+/**
+ * Put the caret in the box.
+ *
+ * Forwarded from MarkdownEditor rather than reached for through a template ref chain, so a
+ * caller ("Reply to this post") can say what it means without knowing what the composer is
+ * built out of.
+ */
+defineExpose({ focus: () => editor.value?.focus() })
 
 const limit = computed(() => props.maxFiles ?? 10)
 /** A big file is still on its way up; sending now would post a message missing its attachment. */
@@ -263,6 +273,7 @@ onBeforeUnmount(() => {
       <input ref="fileInput" type="file" multiple class="hidden" @change="onPick">
 
       <MarkdownEditor
+        ref="editor"
         v-model="draft"
         :placeholder="placeholder ?? 'Message'"
         :mention-members="mentionMembers"

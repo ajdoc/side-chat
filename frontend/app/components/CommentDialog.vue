@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { Loader2, Trash2, X } from 'lucide-vue-next'
-import type { Comment, Message } from '~/types'
+import type { CommentSubject } from '~/composables/useComments'
+import type { Comment } from '~/types'
 import { Button } from '~/components/ui/button'
 import { Input } from '~/components/ui/input'
 import {
@@ -12,14 +13,23 @@ import {
 } from '~/components/ui/dialog'
 
 /**
- * The full comment list behind a message's chips, with a composer to add one.
+ * The full comment list behind a message's — or a side chat post's — chips, with a
+ * composer to add one.
  *
  * A comment is short by design — feedback, not a conversation — so the composer is a single
  * line with a hard 120-character cap and room for one leading emoji, nothing else. Posting
  * the same phrase twice just toggles it off, which is exactly how a chip behaves; the two
  * are the same action seen from two places.
  */
-const props = defineProps<{ message: Message }>()
+const props = defineProps<{
+  /** What's being commented on. See CommentBar for why this is a pair, not an id. */
+  subject: CommentSubject
+}>()
+
+/** Reads differently for the two: one annotates a line, the other a whole topic. */
+const blurb = computed(() => (props.subject.kind === 'message'
+  ? 'Leave a short piece of feedback on this message.'
+  : 'Leave a short piece of feedback on this side chat.'))
 
 const open = defineModel<boolean>('open', { default: false })
 
@@ -40,7 +50,7 @@ const remaining = computed(() => MAX - body.value.length)
 async function refresh() {
   loading.value = true
   try {
-    comments.value = await list(props.message.id)
+    comments.value = await list(props.subject)
   } finally {
     loading.value = false
   }
@@ -53,7 +63,7 @@ async function submit() {
   if (!text || text.length > MAX || posting.value) return
   posting.value = true
   try {
-    await toggle(props.message.id, text, emoji.value || null)
+    await toggle(props.subject, text, emoji.value || null)
     body.value = ''
     emoji.value = ''
     await refresh()
@@ -63,7 +73,7 @@ async function submit() {
 }
 
 async function onRemove(id: number) {
-  await remove(id)
+  await remove(props.subject, id)
   comments.value = comments.value.filter(c => c.id !== id)
 }
 
@@ -80,7 +90,7 @@ function formatTime(iso: string) {
     <DialogContent class="max-w-md">
       <DialogHeader>
         <DialogTitle>Comments</DialogTitle>
-        <DialogDescription>Leave a short piece of feedback on this message.</DialogDescription>
+        <DialogDescription>{{ blurb }}</DialogDescription>
       </DialogHeader>
 
       <!-- Composer -->

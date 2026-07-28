@@ -7,6 +7,7 @@ use Database\Factories\ChannelFactory;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Database\Eloquent\Relations\BelongsToMany;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Database\Eloquent\Relations\HasOne;
 
@@ -35,6 +36,7 @@ class Channel extends Model
         'conversation_id',
         'name',
         'type',
+        'is_private',
         'position',
         'join_effect',
         'leave_effect',
@@ -46,7 +48,7 @@ class Channel extends Model
     {
         // The Side Desk's tab strip, as an ordered array of app ids. Null until customised —
         // see the migration for why that isn't the same as storing the defaults.
-        return ['desk_apps' => 'array'];
+        return ['desk_apps' => 'array', 'is_private' => 'boolean'];
     }
 
     public function server(): BelongsTo
@@ -138,9 +140,42 @@ class Channel extends Model
         return $this->hasMany(VoiceParticipant::class);
     }
 
+    /**
+     * The channel's explicit allow-list. Only consulted when `is_private` — a public
+     * channel's roster is its container's, and keeping rows for that would be a second,
+     * silently-diverging copy of the server's membership.
+     */
+    public function allowedMembers(): BelongsToMany
+    {
+        return $this->belongsToMany(User::class)->withTimestamps();
+    }
+
+    /**
+     * May this person see (and therefore read, post in, subscribe to) this channel?
+     *
+     * Two gates, in order. Membership of the container is the one that has always been
+     * here: you must be in the server, the DM or the group chat. Private channels add a
+     * second: you must also be on the channel's own allow-list, unless you're the server's
+     * owner or one of its admins — the people who set the lock keep the key.
+     *
+     * Every path into a channel funnels through this method (the request layer, the
+     * broadcast auth in routes/channels.php, the sidebar listing), which is why the access
+     * rule could be added in one place rather than at each of them.
+     */
     public function hasMember(User $user): bool
     {
-        return (bool) $this->container()?->hasMember($user);
+        $container = $this->container();
+
+        if ($container === null || ! $container->hasMember($user)) {
+            return false;
+        }
+
+        if (! $this->is_private) {
+            return true;
+        }
+
+        return ($container instanceof Server && $container->isStaff($user))
+            || $this->allowedMembers()->whereKey($user->getKey())->exists();
     }
 
     public function isText(): bool

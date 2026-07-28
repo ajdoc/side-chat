@@ -3,7 +3,7 @@
 namespace App\Http\Requests\Voice;
 
 use App\DTOs\Voice\UpdateVoiceEffectsData;
-use App\Http\Requests\ServerOwnerRequest;
+use App\Http\Requests\ServerStaffRequest;
 use App\Models\Channel;
 use App\Models\User;
 use Illuminate\Validation\Validator;
@@ -20,7 +20,7 @@ use Illuminate\Validation\Validator;
  * ServerOwnerRequest resolves to null for a DM or group chat, so those are refused: a chat
  * has no owner to be, and its call is a conversation rather than a venue.
  */
-class UpdateVoiceEffectsRequest extends ServerOwnerRequest
+class UpdateVoiceEffectsRequest extends ServerStaffRequest
 {
     /** @return array<string, mixed> */
     public function rules(): array

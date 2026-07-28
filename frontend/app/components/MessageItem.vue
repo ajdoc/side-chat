@@ -36,6 +36,12 @@ const props = defineProps<{
   /** Whether the viewer has joined this side chat — gates the decision toggle. */
   joined?: boolean
   highlighted?: boolean
+  /**
+   * The side chat post's title, so a message marked `replies_to_post` can name what it's
+   * replying to. Passed in rather than looked up: the post lives one level up, and the
+   * timeline shouldn't have to know how to fetch it.
+   */
+  postTitle?: string
   /** People whose read marker rests on *this* message — see useReads().readersByMessage. */
   readers?: User[]
 }>()
@@ -48,6 +54,8 @@ const emit = defineEmits<{
   'open-thread': [threadId: number]
   'create-side-chat': [messageId: number]
   'open-side-chat': [sideChatId: number]
+  /** Open a side chat with its reply box already up — the card's "Reply". */
+  'reply-to-side-chat': [sideChatId: number]
   'toggle-decision': [messageId: number]
   'jump-to-reply': [messageId: number]
   'toggle-reaction': [messageId: number, emoji: string]
@@ -256,6 +264,16 @@ onBeforeUnmount(() => clearTimeout(copiedTimer))
         Forwarded<template v-if="forwardedFromName"> from <span class="font-medium not-italic">{{ forwardedFromName }}</span></template>
       </p>
 
+      <!-- A top-level reply to the side chat *post*. Not a jump target: it's addressed at
+           the title sitting at the top of this very panel, so there is nowhere to go. -->
+      <p
+        v-if="message.replies_to_post && postTitle"
+        class="mb-0.5 flex items-center gap-1 truncate text-xs text-muted-foreground"
+      >
+        <CornerUpLeft class="h-3 w-3 shrink-0" />
+        <span class="truncate font-medium">{{ postTitle }}</span>
+      </p>
+
       <!-- reply reference: click to jump to the original message -->
       <button
         v-if="message.reply_to"
@@ -336,7 +354,7 @@ onBeforeUnmount(() => clearTimeout(copiedTimer))
 
         <!-- "word-reactions": popular comment chips. Click one to co-sign it, or + to write. -->
         <CommentBar
-          :message-id="message.id"
+          :subject="{ kind: 'message', id: message.id }"
           :comments="message.comments ?? []"
           :current-user-id="currentUserId"
           @open="showComments = true"
@@ -361,6 +379,7 @@ onBeforeUnmount(() => clearTimeout(copiedTimer))
           :side-chat="message.started_side_chat"
           :current-user-id="currentUserId"
           @open="emit('open-side-chat', message.started_side_chat!.id)"
+          @reply="emit('reply-to-side-chat', message.started_side_chat!.id)"
         />
 
         <!-- who has read this far -->
@@ -468,7 +487,7 @@ onBeforeUnmount(() => clearTimeout(copiedTimer))
 
     <MessageInfoDialog v-if="showInfo" v-model:open="showInfo" :message="message" />
 
-    <CommentDialog v-if="showComments" v-model:open="showComments" :message="message" />
+    <CommentDialog v-if="showComments" v-model:open="showComments" :subject="{ kind: 'message', id: message.id }" />
 
     <AlertDialog v-model:open="showDelete">
       <AlertDialogContent>

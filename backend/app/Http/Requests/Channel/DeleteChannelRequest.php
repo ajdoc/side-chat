@@ -2,6 +2,6 @@
 
 namespace App\Http\Requests\Channel;
 
-use App\Http\Requests\ServerOwnerRequest;
+use App\Http\Requests\ServerStaffRequest;
 
-class DeleteChannelRequest extends ServerOwnerRequest {}
+class DeleteChannelRequest extends ServerStaffRequest {}

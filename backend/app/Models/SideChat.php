@@ -8,20 +8,27 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\BelongsToMany;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Database\Eloquent\Relations\HasOne;
+use Illuminate\Support\Str;
 
 class SideChat extends Model
 {
     /** @use HasFactory<\Database\Factories\SideChatFactory> */
     use HasFactory;
 
-    protected $fillable = ['channel_id', 'user_id', 'message_id', 'name', 'origin_author', 'origin_excerpt', 'desk_apps'];
+    /** How many tags a post may carry, and how long one may be. Enforced in the request. */
+    public const MAX_TAGS = 8;
+
+    public const MAX_TAG_LENGTH = 32;
+
+    protected $fillable = ['channel_id', 'user_id', 'message_id', 'name', 'tags', 'origin_author', 'origin_excerpt', 'desk_apps'];
 
     /** @return array<string, string> */
     protected function casts(): array
     {
         // The Side Desk's tab strip, as an ordered array of app ids. Null until customised —
         // see the migration for why that isn't the same as storing the defaults.
-        return ['desk_apps' => 'array'];
+        // `tags` is the forum layer's labels: a flat array of strings, order as typed.
+        return ['desk_apps' => 'array', 'tags' => 'array'];
     }
 
     public function channel(): BelongsTo
@@ -95,5 +102,65 @@ class SideChat extends Model
     public function hasParticipant(User $user): bool
     {
         return $this->participants()->whereKey($user->id)->exists();
+    }
+
+    /**
+     * Clean a list of tags as typed into the list this post will actually carry.
+     *
+     * Trimmed, lowercased, blanks dropped, duplicates collapsed, capped. Lowercasing is
+     * what makes "Bug" and "bug" one tag in the filter row rather than two that look
+     * identical — a tag exists to group posts, and a case-sensitive grouping doesn't.
+     *
+     * Lives here, next to the column, so creating a post and editing one normalise
+     * identically; the same reasoning as {@link Comment::normalize}.
+     *
+     * @param  array<int, string>  $tags
+     * @return array<int, string>
+     */
+    public static function normalizeTags(array $tags): array
+    {
+        return collect($tags)
+            ->map(fn ($tag) => Str::lower(trim((string) $tag)))
+            ->filter()
+            ->unique()
+            ->take(self::MAX_TAGS)
+            ->values()
+            ->all();
+    }
+
+    /** Reactions to the post itself — the forum list's 👍, not any message inside it. */
+    public function reactions(): HasMany
+    {
+        return $this->hasMany(SideChatReaction::class);
+    }
+
+    /**
+     * Comments ("word-reactions") on the post itself — `✓ Looks good (18)`.
+     *
+     * Distinct from *replying*, which is what the side chat's own timeline is for. A
+     * comment is a short co-signable phrase about the post; a reply is a conversation
+     * inside it. The forum list shows the first and links to the second.
+     */
+    public function comments(): HasMany
+    {
+        return $this->hasMany(SideChatComment::class);
+    }
+
+    /**
+     * May this person retitle, retag or delete the post? Its author (the OP), or the
+     * server's staff — the same shape as {@link Thread::canManage}, and for the same
+     * reason: the title is how everybody else finds it, so it isn't a passer-by's to change.
+     *
+     * A DM or group chat has no staff, so there it's the OP alone.
+     */
+    public function canManage(User $user): bool
+    {
+        if ($this->user_id === $user->getKey()) {
+            return true;
+        }
+
+        $container = $this->loadMissing('channel')->channel?->container();
+
+        return $container instanceof Server && $container->isStaff($user);
     }
 }

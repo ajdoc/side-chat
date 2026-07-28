@@ -92,11 +92,23 @@ export function useMusicPin() {
     floating.open({ kind: 'widget', widgetType: 'music', widgetId: w.id, channelId: w.channel_id, title: 'Music' })
   }
 
-  function unpin() {
-    const id = widget.value?.id
+  /**
+   * Drop the pin itself, without touching the shelf.
+   *
+   * Split out from {@link unpin} because the two directions have to meet in the middle: the
+   * pin is cleared when the *window* goes (the shelf calls this from `close`), and the window
+   * is closed when the *pin* goes. Keeping the shelf-facing half free of `floating.close` is
+   * what stops that from being a loop.
+   */
+  function clear() {
     widget.value = null
     savedId.value = 0
     listen(null)
+  }
+
+  function unpin() {
+    const id = widget.value?.id
+    clear()
     if (id != null) floating.close(`widget:${id}`)
   }
 
@@ -124,5 +136,5 @@ export function useMusicPin() {
     if (!hasJoined(id)) joinedIds.value = [...joinedIds.value, id]
   }
 
-  return { widget, pin, unpin, toggle, isPinned, restore, refresh, hasJoined, markJoined }
+  return { widget, pin, unpin, clear, toggle, isPinned, restore, refresh, hasJoined, markJoined }
 }

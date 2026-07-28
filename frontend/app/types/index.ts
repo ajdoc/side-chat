@@ -47,6 +47,10 @@ export interface Channel {
   name: string
   type: ChannelType
   position: number
+  /** Restricted to an allow-list rather than open to the whole server. */
+  is_private?: boolean
+  /** Who is on that allow-list. Only ever fetched by staff, from the access endpoint. */
+  member_ids?: number[]
   /** Messages from other people you haven't read. Only present on the channel list. */
   unread_count?: number
   /** An unread here named you (by @you or @all) — badge it louder than a plain unread. */
@@ -63,6 +67,8 @@ export interface ChannelMember {
   name: string
   email: string
   avatar: string | null
+  /** Server channels only — a chat has no roles, and the field is simply 'member' there. */
+  role?: ServerRole
 }
 
 export type ConversationType = 'dm' | 'group'
@@ -104,11 +110,18 @@ export interface IncomingCall {
   caller: User
 }
 
+/** What somebody may be in a server. 'owner' isn't a stored role — see the backend model. */
+export type ServerRole = 'owner' | 'admin' | 'member'
+
 export interface Server {
   id: number
   name: string
   owner_id: number
   is_owner: boolean
+  /** What *you* are here: 'owner', 'admin' or 'member'. */
+  role?: ServerRole
+  /** Owner or admin — the gate on every setting the two share. */
+  is_staff?: boolean
   invite_code: string
   invite_url: string
   pending_requests_count?: number
@@ -214,6 +227,11 @@ export interface Message {
   side_chat_id: number | null
   body: string | null
   type: 'user' | 'system' | 'widget'
+  /**
+   * A top-level reply to the side chat *post* — addressed at its title, not at another
+   * message. Distinct from `reply_to`, which names a message and shows its author and body.
+   */
+  replies_to_post?: boolean
   edited: boolean
   pinned: boolean
   pinned_at: string | null
@@ -605,6 +623,8 @@ export interface Thread {
   name: string
   replies_count?: number
   creator?: User
+  /** May *you* rename or delete it — the creator, or a server owner/admin. */
+  can_manage?: boolean
   parent_message?: Message | null
   created_at: string
 }
@@ -786,6 +806,17 @@ export interface SideChat {
   channel_id: number
   message_id: number | null
   name: string
+  /** The forum layer's labels — lowercase, deduped, server-normalised. */
+  tags?: string[]
+  /** Reactions to the *post*, same summary shape as a message's (see ReactionBar). */
+  reactions?: Reaction[]
+  /**
+   * "Popular comment" chips on the *post* — feedback about the topic, as opposed to a
+   * reply, which is a message in the side chat's own timeline.
+   */
+  comments?: CommentSummary[]
+  /** May *you* retitle, retag or delete it — the OP, or a server owner/admin. */
+  can_manage?: boolean
   creator?: User
   parent_message?: Message | null
   /** Frozen snapshot of the origin message, so "Started from" survives its deletion. */

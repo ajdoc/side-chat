@@ -39,7 +39,12 @@ class StoreSideChatMessageRequest extends FormRequest
             'reply_to_id' => [
                 'nullable',
                 Rule::exists('messages', 'id')->where('side_chat_id', $sideChat->id),
+                // One reply, one target. Being a reply to the post *and* to a message
+                // inside it has no coherent rendering — the chip would have to say two
+                // different things at once.
+                'prohibited_if:replies_to_post,1,true',
             ],
+            'replies_to_post' => ['nullable', 'boolean'],
         ]);
     }
 }

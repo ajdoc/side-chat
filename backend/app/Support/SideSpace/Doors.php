@@ -82,7 +82,10 @@ final class Doors
         return $doors;
     }
 
-    /** Does this server belong to them? The one permission that overrides every other here. */
+    /**
+     * Do they run this server — as owner, or as one of its admins? The one permission that
+     * overrides every other here: staff hold the master key to every locked door.
+     */
     public static function isServerOwner(SideSpaceMap $map, ?User $user): bool
     {
         if ($user === null) {
@@ -91,7 +94,7 @@ final class Doors
 
         $server = $map->loadMissing('channel.server')->channel?->server;
 
-        return $server !== null && $server->owner_id === $user->id;
+        return $server !== null && $server->isStaff($user);
     }
 
     /**

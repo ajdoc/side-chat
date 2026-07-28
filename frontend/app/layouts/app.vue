@@ -1,9 +1,9 @@
 <script setup lang="ts">
 import {
   AudioLines,
-  Check, ChevronDown, ChevronRight, Copy, DoorOpen, Hash, HeadphoneOff, LogOut,
+  Check, ChevronDown, ChevronRight, Copy, DoorOpen, Hash, HeadphoneOff, Lock, LogOut,
   Map as MapIcon,
-  MessageSquarePlus, MicOff, Monitor, Moon, Pencil, Phone, Plus, ScreenShare, Sun, Trash2,
+  MessageSquarePlus, MicOff, Monitor, Moon, Pencil, Phone, Plus, ScreenShare, Shield, Sun, Trash2,
   User, UserPlus, Users, Volume2,
 } from 'lucide-vue-next'
 import { useLocalStorage } from '@vueuse/core'
@@ -211,7 +211,10 @@ const rows = computed(() => {
       // Inline rename/delete only on the active server: those edits flow through useServer,
       // which holds *its* channels, so a cached (non-active) server's tree couldn't be kept
       // in step with them. You manage a server's channels from inside it.
-      const canEdit = isActive && s.is_owner
+      // Staff, not just the owner: an admin exists precisely so the owner doesn't have to
+      // be around for the server's shape to change. `is_staff` falls back to `is_owner` for
+      // a server payload cached from before roles existed.
+      const canEdit = isActive && (s.is_staff ?? s.is_owner)
       for (const c of text) {
         list.push({ id: `c-${c.id}`, kind: 'channel', channel: c, voice: [], isOwner: canEdit })
       }
@@ -292,6 +295,11 @@ const showDeleteServer = ref(false)
 const showDeleteChannel = ref(false)
 const showRenameServer = ref(false)
 const showRenameChannel = ref(false)
+// The two settings surfaces added with roles. Both are their own components rather than
+// more inline dialogs here: each fetches something (an allow-list, a roster with roles)
+// that only the people who can open it are allowed to see.
+const accessChannel = ref<Channel | null>(null)
+const rolesServer = ref<Server | null>(null)
 const showProfile = ref(false)
 const targetChannel = ref<Channel | null>(null)
 const targetServer = ref<Server | null>(null)
@@ -333,6 +341,10 @@ function askRenameChannel(channel: Channel) {
   nameDraft.value = channel.name
   actionError.value = ''
   showRenameChannel.value = true
+}
+
+function askChannelAccess(channel: Channel) {
+  accessChannel.value = channel
 }
 
 function askDeleteChannel(channel: Channel) {
@@ -619,8 +631,12 @@ onBeforeUnmount(() => { userStream.unsubscribe(); stopPresence() })
                           class="ml-auto rounded-full bg-primary px-1.5 text-[10px] font-semibold text-primary-foreground"
                         >{{ pendingCount }}</span>
                       </DropdownMenuItem>
-                      <DropdownMenuItem v-if="item.server.is_owner" @select="askRenameServer(item.server)">
+                      <DropdownMenuItem v-if="item.server.is_staff ?? item.server.is_owner" @select="askRenameServer(item.server)">
                         <Pencil class="mr-2 h-4 w-4" /> Rename server
+                      </DropdownMenuItem>
+                      <!-- Owner only: an admin who could appoint admins would be an owner. -->
+                      <DropdownMenuItem v-if="item.server.is_owner" @select="rolesServer = item.server">
+                        <Shield class="mr-2 h-4 w-4" /> Roles
                       </DropdownMenuItem>
                       <!-- What *you* are called in this server. Other people's nicknames
                            are set from the roster in the channel Info panel, where you can
@@ -667,6 +683,10 @@ onBeforeUnmount(() => { userStream.unsubscribe(); stopPresence() })
                       <Volume2 v-else-if="item.channel.type === 'voice'" class="h-4 w-4 shrink-0" />
                       <Hash v-else class="h-4 w-4 shrink-0" />
                       <span class="truncate">{{ item.channel.name }}</span>
+                      <!-- Restricted to an allow-list. Only the people who *can* see it ever
+                           see this row at all, so the lock reads as "not everyone is here"
+                           rather than as a door they might be turned away from. -->
+                      <Lock v-if="item.channel.is_private" class="h-3 w-3 shrink-0 text-muted-foreground" title="Only chosen members" />
                       <!-- Unsent text waiting in a channel you're not looking at (Viber-style). -->
                       <span
                         v-if="hasDraft(item.channel.id) && item.channel.id !== activeChannelId"
@@ -701,6 +721,14 @@ onBeforeUnmount(() => { userStream.unsubscribe(); stopPresence() })
                         @click.prevent="askRenameChannel(item.channel)"
                       >
                         <Pencil class="h-3.5 w-3.5" />
+                      </button>
+                      <button
+                        class="rounded text-muted-foreground hover:text-foreground"
+                        :class="coarse ? 'p-2' : 'p-1'"
+                        :title="`Who can see ${item.channel.name}`"
+                        @click.prevent="askChannelAccess(item.channel)"
+                      >
+                        <component :is="item.channel.is_private ? Lock : Users" class="h-3.5 w-3.5" />
                       </button>
                       <button
                         class="rounded text-muted-foreground hover:text-destructive"
@@ -862,6 +890,11 @@ onBeforeUnmount(() => { userStream.unsubscribe(); stopPresence() })
     <!-- Dragging windows around needs a pointer and room to put them, so the phone build
          does without the shelf entirely. Desktop keeps it. -->
     <FloatingWindows v-if="!isMobile" />
+
+    <!-- Who may be in a channel (staff), and who runs the server (owner). Mounted here
+         beside the shelf so they survive the sidebar row that opened them being re-rendered. -->
+    <ChannelAccessDialog v-if="accessChannel" :channel="accessChannel" @close="accessChannel = null" />
+    <ServerRolesDialog v-if="rolesServer" :server="rolesServer" :channel-id="activeChannelId ?? channels[0]?.id ?? null" @close="rolesServer = null" />
 
     <NewChatDialog v-model:open="showNewChat" />
 

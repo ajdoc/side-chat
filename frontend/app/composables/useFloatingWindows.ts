@@ -224,8 +224,14 @@ export function useFloatingWindows() {
   }
 
   function close(id: string) {
+    const going = windows.value.find(w => w.id === id)
     windows.value = windows.value.filter(w => w.id !== id)
     persist()
+    // Closing the music window is the gesture that means "stop the music" — the ✕ the old
+    // dock had. The pin has to go with it, or the shelf would come back on the next reload
+    // pointing at a widget nothing is pinned to. `clear` deliberately doesn't call back into
+    // close(), so unpin → close → clear terminates.
+    if (going?.kind === 'widget' && going.widgetType === 'music') useMusicPin().clear()
   }
 
   /** Patch geometry / collapsed state. Callers persist explicitly (e.g. on drag end). */

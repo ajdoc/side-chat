@@ -72,8 +72,11 @@ export function useMessages() {
       threads.value.splice(idx, 1, { ...threads.value[idx]!, replies_count: repliesCount, ...(name ? { name } : {}) })
     }
   }
-  /** Attach (or refresh) the living-object card on the message a side chat was spun off. */
-  function setStartedSideChat(messageId: number | null, sideChat: SideChat) {
+  /**
+   * Attach (or refresh) the living-object card on the message a side chat was spun off.
+   * `null` takes it off again — what a deleted post leaves behind is a plain message.
+   */
+  function setStartedSideChat(messageId: number | null, sideChat: SideChat | null) {
     if (!messageId) return
     const idx = messages.value.findIndex(m => m.id === messageId)
     if (idx !== -1) messages.value.splice(idx, 1, { ...messages.value[idx]!, started_side_chat: sideChat })
@@ -264,10 +267,17 @@ export function useMessages() {
       setStartedSideChat(s.message_id, s)
       upsertSideChat(s)
     },
-    // Its pulse changed (a message, a join, a decision) — refresh the card in place.
+    // Its pulse changed (a message, a join, a decision, a retitle, a reaction on the
+    // post) — refresh the card in place.
     '.SideChatActivity': (s: SideChat) => {
       setStartedSideChat(s.message_id, s)
       upsertSideChat(s)
+    },
+    // The post was deleted: drop it from the Side Chats list and take the card off the
+    // origin message, which goes on existing without it.
+    '.SideChatDeleted': (p: { side_chat_id: number, message_id: number | null }) => {
+      setStartedSideChat(p.message_id, null)
+      sideChats.value = sideChats.value.filter(s => s.id !== p.side_chat_id)
     },
   }
 

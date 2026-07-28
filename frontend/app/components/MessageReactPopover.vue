@@ -51,7 +51,7 @@ async function submitComment() {
   try {
     // Fire it through the same write path as the chips; the refreshed summary lands over
     // the stream. Toggling the same phrase again takes it back, exactly like a chip.
-    await toggle(props.messageId, text, null)
+    await toggle({ kind: 'message', id: props.messageId }, text, null)
     comment.value = ''
     open.value = false
   } finally {

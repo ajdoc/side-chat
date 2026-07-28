@@ -26,16 +26,70 @@ abstract class MemberRequest extends FormRequest
 {
     public function authorize(): bool
     {
-        $container = $this->resolveContainer();
         $user = $this->user();
 
-        return $container !== null && $user !== null && $container->hasMember($user);
+        if ($user === null) {
+            return false;
+        }
+
+        // When the route leads to a channel, ask the *channel*: it applies the container's
+        // membership rule and then its own access list on top (see Channel::hasMember).
+        // Falling through to the container would let anyone in the server into a private
+        // channel by addressing one of the things inside it — a thread, a message, a widget.
+        $channel = $this->resolveChannel();
+
+        if ($channel !== null) {
+            return $channel->hasMember($user);
+        }
+
+        $container = $this->resolveContainer();
+
+        return $container !== null && $container->hasMember($user);
     }
 
     /** @return array<string, mixed> */
     public function rules(): array
     {
         return [];
+    }
+
+    /**
+     * The channel this route is about, if any — walking up from whatever it bound.
+     *
+     * The mirror of {@link resolveContainer}, one rung lower. Everything a channel holds
+     * (threads, side chats, widgets, messages) leads back to exactly one channel, and that
+     * channel may be private, so the access check has to be reachable from all of them.
+     * Routes that bind only a server or a conversation return null and fall back to the
+     * container rule, which is the whole of the answer for a DM or a group chat.
+     */
+    protected function resolveChannel(): ?Channel
+    {
+        $channel = $this->route('channel');
+        if ($channel instanceof Channel) {
+            return $channel;
+        }
+
+        $thread = $this->route('thread');
+        if ($thread instanceof Thread) {
+            return $thread->loadMissing('channel')->channel;
+        }
+
+        $sideChat = $this->route('sideChat');
+        if ($sideChat instanceof SideChat) {
+            return $sideChat->loadMissing('channel')->channel;
+        }
+
+        $widget = $this->route('widget');
+        if ($widget instanceof Widget) {
+            return $widget->loadMissing('channel')->channel;
+        }
+
+        $message = $this->route('message');
+        if ($message instanceof Message) {
+            return $message->loadMissing('channel')->channel;
+        }
+
+        return null;
     }
 
     /** Walk up from whatever the route bound to the thing that owns it. */

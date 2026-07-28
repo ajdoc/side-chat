@@ -1,4 +1,4 @@
-import type { VoiceEffects } from '~/types'
+import type { ServerRole, VoiceEffects } from '~/types'
 
 /**
  * Deletions, as they happen to *other* people's screens.
@@ -15,7 +15,7 @@ export function useServerLifecycle() {
   const echo: any = useNuxtApp().$echo
   const route = useRoute()
   const { user } = useAuth()
-  const { channels, forgetChannel, patchChannel, patchServer } = useServer()
+  const { channels, refreshChannels, forgetChannel, patchChannel, patchServer } = useServer()
   const { forget: forgetServer, patch: patchServerInRail } = useServers()
   const { channelId: callChannelId, disconnect, applyChannelEffects } = useVoice()
 
@@ -53,6 +53,37 @@ export function useServerLifecycle() {
       .listen('.ServerUpdated', (p: { server_id: number, name: string }) => {
         patchServer(p.server_id, { name: p.name })
         patchServerInRail(p.server_id, { name: p.name })
+      })
+      /*
+       * A channel's access changed. The payload carries ids and nothing else — it goes to
+       * the whole server, and the allow-list of a private channel must not (see the
+       * backend's ChannelAccessUpdated). So this is a nudge to *ask again*: the channel
+       * list is answered per viewer, so refetching makes the channel appear, or stop
+       * appearing, for exactly the right people without any client being told about the
+       * others.
+       */
+      .listen('.ChannelAccessUpdated', async (p: { channel_id: number }) => {
+        await refreshChannels(serverId)
+
+        // Standing in a channel we've just been shut out of: leave before the timeline
+        // starts 403ing under them.
+        if (Number(route.params.channelId) === p.channel_id && !channels.value.some(c => c.id === p.channel_id)) {
+          if (callChannelId.value === p.channel_id) disconnect()
+          navigateTo(`/servers/${serverId}`)
+        }
+      })
+      /*
+       * Somebody's role changed. Only *our own* matters here: `is_staff` gates the settings
+       * this sidebar draws, and a freshly-promoted admin shouldn't have to reload to get
+       * them (or keep them, having just been demoted). Everyone else's badge is read from
+       * the roster, which the roles dialog refetches when it opens.
+       */
+      .listen('.ServerRoleUpdated', (p: { server_id: number, user_id: number, role: string }) => {
+        if (p.user_id !== user.value?.id) return
+
+        const fields = { role: p.role as ServerRole, is_staff: p.role === 'admin' }
+        patchServer(p.server_id, fields)
+        patchServerInRail(p.server_id, fields)
       })
       .listen('.ChannelDeleted', (p: { channel_id: number }) => {
         forgetChannel(p.channel_id)
@@ -93,6 +124,8 @@ export function useServerLifecycle() {
       .stopListening('.ChannelUpdated')
       .stopListening('.VoiceEffectsUpdated')
       .stopListening('.ServerUpdated')
+      .stopListening('.ChannelAccessUpdated')
+      .stopListening('.ServerRoleUpdated')
       .stopListening('.ChannelDeleted')
       .stopListening('.ServerDeleted')
       .stopListening('.MemberLeft')

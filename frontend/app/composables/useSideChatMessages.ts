@@ -17,6 +17,10 @@ export function useSideChatMessages() {
   // loaded message window, so they're fetched on their own and kept fresh over the stream.
   const highlights = ref<{ decisions: Message[], pinned: Message[] }>({ decisions: [], pinned: [] })
   const currentId = ref<number | null>(null)
+  // Set when the side chat is deleted out from under us — the panel watches it and leaves.
+  // Mirrors useThreadMessages' `gone`, for the same reason: the composable doesn't own the
+  // URL, so it reports rather than navigates.
+  const gone = ref(false)
 
   function pushUnique(m: Message) {
     if (!messages.value.some(x => x.id === m.id)) messages.value = [...messages.value, m]
@@ -39,6 +43,7 @@ export function useSideChatMessages() {
 
   async function loadSideChat(id: number) {
     currentId.value = id
+    gone.value = false // opening a live side chat clears a previous one's tombstone
     const [s, m] = await Promise.all([
       api<{ data: SideChat }>(`/api/side-chats/${id}`),
       api<{ data: Message[], has_more: boolean }>(`/api/side-chats/${id}/messages`),
@@ -78,9 +83,14 @@ export function useSideChatMessages() {
     return messages.value.some(m => m.id === id)
   }
 
-  /** A reply, split into a run of them if it's over the per-message limit — see useMessages(). */
-  async function send(sideChatId: number, body: string, replyToId?: number | null, files: File[] = [], gif?: GifResult | null, uploadIds: string[] = []) {
-    for (const payload of buildMessageParts({ body, replyToId, files, gif, uploadIds })) {
+  /**
+   * A reply, split into a run of them if it's over the per-message limit — see useMessages().
+   *
+   * `repliesToPost` marks it as addressed at the side chat's *post* rather than at another
+   * message: the forum's top-level reply, which renders a chip naming the post's title.
+   */
+  async function send(sideChatId: number, body: string, replyToId?: number | null, files: File[] = [], gif?: GifResult | null, uploadIds: string[] = [], repliesToPost = false) {
+    for (const payload of buildMessageParts({ body, replyToId, repliesToPost, files, gif, uploadIds })) {
       const res = await api<{ data: Message }>(`/api/side-chats/${sideChatId}/messages`, {
         method: 'POST',
         body: payload as any,
@@ -150,8 +160,12 @@ export function useSideChatMessages() {
         patchMessage(p.message.id, { pinned: p.pinned, pinned_at: p.message.pinned_at })
         refreshHighlights()
       })
-      // Roster/counts changed (someone joined, a decision was recorded) — refresh the header.
+      // Roster/counts changed (someone joined, a decision was recorded, the post was
+      // retitled, retagged or reacted to) — refresh the header from the whole card.
       .listen('.SideChatActivity', (s: SideChat) => { sideChat.value = s })
+      // The post was deleted out from under us. Flagged rather than acted on, the same way
+      // a deleted thread is: the panel owns the URL and decides how to leave.
+      .listen('.SideChatDeleted', () => { gone.value = true })
       // A thread was started off one of this side chat's messages — drop its indicator on
       // the message so the Chat tab shows "view thread" live, not only after a reload.
       .listen('.ThreadCreated', (t: { id: number, message_id: number | null, name: string, replies_count?: number }) => {
@@ -168,7 +182,7 @@ export function useSideChatMessages() {
   }
 
   return {
-    sideChat, messages, highlights, hasMore, loadingOlder,
+    sideChat, messages, highlights, gone, hasMore, loadingOlder,
     loadSideChat, loadOlder, ensureLoaded,
     send, edit, remove, toggleReaction, togglePin, toggleDecision,
     subscribe, unsubscribe,

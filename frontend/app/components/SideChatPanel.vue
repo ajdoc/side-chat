@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import { CheckCircle2, Info, LayoutPanelLeft, Loader2, MessageSquare, MessagesSquare, Pin, Plus, Rocket, UserPlus, Users, X } from 'lucide-vue-next'
-import type { GifResult, Message, SideDeskAppId } from '~/types'
+import { CheckCircle2, ChevronLeft, Info, LayoutPanelLeft, Loader2, MessageSquare, MessageSquareText, MessagesSquare, Pencil, Pin, Plus, Reply, Rocket, Smile, Tag, Trash2, UserPlus, Users, X } from 'lucide-vue-next'
+import type { GifResult, Message, SideChat, SideDeskAppId } from '~/types'
 // Aliased on import: this file already has a `deskApp` of its own (the active tab), and the
 // auto-imported registry lookup of the same name would be shadowed by it.
 import { deskApp as deskApp_ } from '~/composables/useDeskApps'
@@ -32,9 +32,64 @@ const { width: panelWidth, startResize } = useResizable('side-chat', 380, { min:
 const route = useRoute()
 const { user } = useAuth()
 
-const { sideChats, loadSideChats, createSideChat, join, leave } = useSideChats()
+const { sideChats, tagCounts, loadSideChats, createSideChat, join, leave } = useSideChats()
+
+// --- the forum index: one tag at a time ---------------------------------
+// Single-select rather than multi: with two tags selected the obvious question is whether
+// it means AND or OR, and neither answer is guessable from a row of chips. One tag is
+// unambiguous, and it's what a forum's category strip does.
+const activeTag = ref<string | null>(null)
+const visibleSideChats = computed(() =>
+  activeTag.value === null
+    ? sideChats.value
+    : sideChats.value.filter(s => s.tags?.includes(activeTag.value!)),
+)
+// A filter that outlives the tag it names would silently empty the list.
+watch(tagCounts, (tags) => {
+  if (activeTag.value && !tags.some(t => t.tag === activeTag.value)) activeTag.value = null
+})
+
+// How many tag chips the strip shows before folding the rest behind "+N more". Eight is
+// about two rows in the panel's narrowest usable width — enough to be a category strip,
+// not so many that the posts get pushed off the screen by their own filter.
+const TAG_LIMIT = 8
+const allTagsShown = ref(false)
+const shownTags = computed(() => {
+  const tags = tagCounts.value
+  if (allTagsShown.value || tags.length <= TAG_LIMIT) return tags
+  // Whatever is currently filtered on stays visible even if it ranks below the cut —
+  // a filter you can see the effect of but not the control for is a trap.
+  const head = tags.slice(0, TAG_LIMIT)
+  const active = tags.find(t => t.tag === activeTag.value)
+  return active && !head.includes(active) ? [...head, active] : head
+})
+const hiddenTagCount = computed(() => Math.max(0, tagCounts.value.length - shownTags.value.length))
+
+const reactionTotal = (s: SideChat) => (s.reactions ?? []).reduce((sum, r) => sum + r.count, 0)
+const commentTotal = (s: SideChat) => (s.comments ?? []).reduce((sum, c) => sum + c.count, 0)
+
+// --- managing a post from the *list*, without opening it -----------------
+// Held as the row itself rather than an id: the edit dialog wants the whole post, and the
+// delete confirmation wants its title to put in the question.
+const editingRow = ref<SideChat | null>(null)
+const deletingRow = ref<SideChat | null>(null)
+const deletingRowBusy = ref(false)
+// Touch has no hover to reveal the row controls with, so there they're simply always on.
+const coarse = import.meta.client && window.matchMedia?.('(pointer: coarse)').matches
+
+async function confirmDeleteRow(s: SideChat) {
+  if (deletingRowBusy.value) return
+  deletingRowBusy.value = true
+  try {
+    await removeSideChat(s.id)
+  } finally {
+    deletingRowBusy.value = false
+    deletingRow.value = null
+  }
+}
+
 const {
-  sideChat, messages, highlights, hasMore, loadingOlder,
+  sideChat, messages, highlights, gone, hasMore, loadingOlder,
   loadSideChat, loadOlder, ensureLoaded,
   send, edit, remove, toggleReaction, togglePin, toggleDecision,
   subscribe, unsubscribe,
@@ -58,6 +113,24 @@ const mode = computed<'list' | 'create' | 'view' | null>(() => {
 })
 const activeId = computed(() => (mode.value === 'view' ? Number(route.query.sidechat) : null))
 const fromMessageId = computed(() => (route.query.from ? Number(route.query.from) : null))
+
+// --- managing the open post (the OP's, or a server admin's) ---
+const editing = ref(false)
+const confirmDelete = ref(false)
+const deleting = ref(false)
+const { removeSideChat, react: reactToPost } = useSideChats()
+
+async function onDelete() {
+  if (!activeId.value || deleting.value) return
+  deleting.value = true
+  try {
+    await removeSideChat(activeId.value)
+    close() // the workspace is showing a room that no longer exists
+  } finally {
+    deleting.value = false
+    confirmDelete.value = false
+  }
+}
 
 const TABS = [
   { key: 'chat', label: 'Chat', icon: MessageSquare },
@@ -94,6 +167,10 @@ const replyingTo = ref<Message | null>(null)
 // The message the forward picker is open for, or null when it's closed.
 const forwardTarget = ref<Message | null>(null)
 const scroller = ref<any>(null)
+// The post's own reply box, so "Reply" can put the caret straight in it.
+const postReplyBox = ref<HTMLTextAreaElement | null>(null)
+// The full comment list behind the post's chips.
+const showPostComments = ref(false)
 const highlightedMessageId = ref<number | null>(null)
 let highlightTimer: ReturnType<typeof setTimeout> | undefined
 
@@ -142,6 +219,61 @@ function close() {
   navigateTo({ path: route.path, query: {} })
 }
 
+// --- replying to the post itself ----------------------------------------
+// A reply to the post is still a message in this side chat's timeline — there is no second
+// store — but it's *marked* as addressed at the title, so it renders with a chip naming the
+// post rather than looking like any other line. The box opens under the title, where the
+// thing being replied to is: bouncing the caret to the composer at the bottom is what this
+// replaced, and it never read as "replying to the title".
+const postReplyOpen = ref(false)
+const postReply = ref('')
+const postReplyBusy = ref(false)
+
+function replyToPost() {
+  postReplyOpen.value = true
+  nextTick(() => postReplyBox.value?.focus())
+}
+
+/**
+ * Arriving with `screply=1` means the timeline card's "Reply" sent us here, so open the
+ * box on landing. The flag is dropped straight away: it describes how you got here, not
+ * where you are, and leaving it in the URL would re-open the box on every tab switch.
+ */
+watch([activeId, () => route.query.screply], () => {
+  if (activeId.value && route.query.screply === '1') {
+    replyToPost()
+    setQuery({ screply: null })
+  }
+}, { immediate: true })
+
+async function submitPostReply() {
+  const body = postReply.value.trim()
+  if (!body || !activeId.value || postReplyBusy.value) return
+  postReplyBusy.value = true
+  try {
+    // `true` is the marker; everything else is an ordinary send.
+    await send(activeId.value, body, null, [], null, [], true)
+    postReply.value = ''
+    postReplyOpen.value = false
+    // Land on the Chat tab so the reply that just went in is actually on screen.
+    if (sctab.value !== 'chat') setQuery({ sctab: null })
+    scrollBottom()
+  } finally {
+    postReplyBusy.value = false
+  }
+}
+
+/**
+ * Step back to the list of posts, leaving anything else on screen alone.
+ *
+ * A merge rather than a `goto`, deliberately: a side chat's thread column lives in the
+ * same URL, and replacing the query wholesale would slam it shut as a side effect of
+ * pressing Back on the panel next to it.
+ */
+function backToList() {
+  setQuery({ sidechats: '1', sidechat: null, sctab: null, desktab: null, from: null })
+}
+
 // A side chat's threads live in a second column, under their own `sc…` query keys so they
 // don't collide with a channel thread the main timeline may have open at the same time.
 function openThreads() {
@@ -154,13 +286,41 @@ function onOpenThread(id: number) {
   setQuery({ scthreads: null, scthread: String(id), scfrom: null })
 }
 
+// --- tags on the create form ---
+// Deliberately a plain list of strings and no picker: there's no tag catalogue to pick
+// from, only whatever this channel has used before (offered as suggestions). The server
+// lowercases and dedupes, so these chips are a preview of what it will store.
+const newTags = ref<string[]>([])
+const newTagDraft = ref('')
+
+function addNewTag(raw: string) {
+  const tag = raw.trim().toLowerCase()
+  if (!tag || newTags.value.includes(tag) || newTags.value.length >= 8) return
+  newTags.value = [...newTags.value, tag]
+}
+
+function onNewTagKey(e: KeyboardEvent) {
+  if (e.key !== 'Enter' && e.key !== ',') return
+  e.preventDefault() // Enter would otherwise submit the form with a half-typed tag
+  addNewTag(newTagDraft.value)
+  newTagDraft.value = ''
+}
+
 async function submitCreate() {
   const name = newName.value.trim()
   if (!name || creating.value) return
   creating.value = true
   try {
-    const s = await createSideChat(props.channelId, { name, message_id: fromMessageId.value ?? null })
+    // Whatever is still in the input counts: nobody expects a typed tag to vanish because
+    // they hit the button instead of Enter.
+    if (newTagDraft.value.trim()) { addNewTag(newTagDraft.value); newTagDraft.value = '' }
+    const s = await createSideChat(props.channelId, {
+      name,
+      message_id: fromMessageId.value ?? null,
+      tags: newTags.value,
+    })
     newName.value = ''
+    newTags.value = []
     goto({ sidechat: String(s.id) })
   } finally {
     creating.value = false
@@ -209,6 +369,13 @@ watch(
   async () => {
     teardown()
     replyingTo.value = null
+    // Both are about the post we're leaving; carrying them across would aim an open edit
+    // dialog — or a delete confirmation — at the next one.
+    editing.value = false
+    confirmDelete.value = false
+    // The reply box is aimed at the post we're leaving; so is anything half-typed in it.
+    postReplyOpen.value = false
+    postReply.value = ''
     if (mode.value === 'list') {
       await loadSideChats(props.channelId)
     } else if (mode.value === 'view' && activeId.value) {
@@ -221,6 +388,9 @@ watch(
   },
   { immediate: true },
 )
+
+// The post was deleted (by its OP, or by an admin) while we were standing in it.
+watch(gone, (v) => { if (v) close() })
 
 watch(() => messages.value.at(-1)?.id, (nid, oid) => {
   if (nid && oid && nid > oid) scrollBottom()
@@ -261,38 +431,222 @@ function relTime(iso: string) {
     <ResizeHandle v-if="!narrow" edge="left" @resize="startResize" />
     <header class="flex h-12 shrink-0 items-center justify-between border-b px-4">
       <div class="flex min-w-0 items-center gap-2 font-semibold">
-        <Rocket class="h-4 w-4 text-muted-foreground" />
+        <!-- Back to the list. Opening a post replaces the list in this one column, so
+             without this the only way out is ✕ — which closes the panel entirely and
+             loses your place. Absent on the list itself, where there's nothing behind. -->
+        <button
+          v-if="mode !== 'list'"
+          class="-ml-1 rounded p-1 text-muted-foreground hover:bg-muted hover:text-foreground"
+          title="Back to all side chats"
+          aria-label="Back to all side chats"
+          @click="backToList"
+        >
+          <ChevronLeft class="h-4 w-4" />
+        </button>
+        <Rocket v-else class="h-4 w-4 text-muted-foreground" />
         <span v-if="mode === 'list'">Side Chats</span>
         <span v-else-if="mode === 'create'">New side chat</span>
         <span v-else class="truncate">{{ sideChat?.name ?? 'Side Chat' }}</span>
       </div>
-      <button class="text-muted-foreground hover:text-foreground" aria-label="Close" @click="close">
-        <X class="h-4 w-4" />
-      </button>
+      <div class="flex items-center gap-1">
+        <template v-if="mode === 'view' && sideChat?.can_manage">
+          <button class="p-1 text-muted-foreground hover:text-foreground" title="Edit title and tags" aria-label="Edit side chat" @click="editing = true">
+            <Pencil class="h-3.5 w-3.5" />
+          </button>
+          <button class="p-1 text-muted-foreground hover:text-destructive" title="Delete side chat" aria-label="Delete side chat" @click="confirmDelete = true">
+            <Trash2 class="h-3.5 w-3.5" />
+          </button>
+        </template>
+        <button class="text-muted-foreground hover:text-foreground" aria-label="Close" @click="close">
+          <X class="h-4 w-4" />
+        </button>
+      </div>
     </header>
 
+    <!-- Deleting a post takes its whole room with it — timeline, threads, board, notes —
+         so it's confirmed in place, right under the title being deleted. -->
+    <div v-if="confirmDelete" class="shrink-0 space-y-2 border-b bg-destructive/10 px-3 py-2 text-sm">
+      <p>Delete “{{ sideChat?.name }}” and everything in it? This can't be undone.</p>
+      <div class="flex gap-2">
+        <Button size="sm" variant="destructive" :disabled="deleting" @click="onDelete">
+          {{ deleting ? 'Deleting…' : 'Delete side chat' }}
+        </Button>
+        <Button size="sm" variant="ghost" @click="confirmDelete = false">Cancel</Button>
+      </div>
+    </div>
+
+    <SideChatEditDialog v-if="editing && sideChat" :side-chat="sideChat" @close="editing = false" />
+    <SideChatEditDialog v-if="editingRow" :side-chat="editingRow" @close="editingRow = null" />
+    <CommentDialog
+      v-if="showPostComments && sideChat"
+      v-model:open="showPostComments"
+      :subject="{ kind: 'sideChat', id: sideChat.id }"
+    />
+
     <!-- LIST -->
-    <div v-if="mode === 'list'" class="flex-1 overflow-y-auto p-2">
-      <Button variant="outline" size="sm" class="mb-2 w-full gap-1.5" @click="goto({ sidechat: 'new' })">
-        <Plus class="h-4 w-4" /> New side chat
-      </Button>
-      <button
-        v-for="s in sideChats"
+    <div v-if="mode === 'list'" class="flex min-h-0 flex-1 flex-col">
+      <!--
+        The toolbar: what you can *do* to the list, held out of the list's own scroll area
+        and fenced off by a border. The tag filter used to sit loose at the top of the
+        scrolling rows, which read as though it belonged to the first post rather than to
+        the list — and scrolled away the moment you moved.
+      -->
+      <div class="shrink-0 space-y-2 border-b p-2">
+        <Button variant="outline" size="sm" class="w-full gap-1.5" @click="goto({ sidechat: 'new' })">
+          <Plus class="h-4 w-4" /> New side chat
+        </Button>
+
+        <!-- Only drawn once something is actually tagged: an empty filter row is a
+             control that does nothing. -->
+        <div v-if="tagCounts.length">
+          <div class="mb-1.5 flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+            <Tag class="h-3 w-3" />
+            <span>Filter by tag</span>
+            <!-- An explicit way out. Clicking the active chip again also clears it, but
+                 that's a thing you have to already know; this says so. -->
+            <button
+              v-if="activeTag"
+              class="ml-auto flex items-center gap-0.5 rounded px-1 py-0.5 normal-case tracking-normal text-primary hover:bg-muted"
+              @click="activeTag = null"
+            >
+              <X class="h-3 w-3" /> Clear
+            </button>
+          </div>
+
+          <div class="flex flex-wrap gap-1">
+            <!-- "All" as a chip rather than an implied empty state: with no chip lit, a
+                 row of unlit chips gives no clue that unfiltered is a state you're in. -->
+            <button
+              class="rounded-full px-2 py-1 text-xs font-medium transition"
+              :class="activeTag === null
+                ? 'bg-primary text-primary-foreground'
+                : 'bg-muted text-foreground/80 hover:bg-muted/70'"
+              :aria-pressed="activeTag === null"
+              @click="activeTag = null"
+            >
+              All <span class="tabular-nums opacity-70">{{ sideChats.length }}</span>
+            </button>
+
+            <button
+              v-for="t in shownTags"
+              :key="t.tag"
+              class="rounded-full px-2 py-1 text-xs transition"
+              :class="activeTag === t.tag
+                ? 'bg-primary font-medium text-primary-foreground'
+                : 'bg-muted text-foreground/80 hover:bg-muted/70'"
+              :aria-pressed="activeTag === t.tag"
+              @click="activeTag = activeTag === t.tag ? null : t.tag"
+            >
+              {{ t.tag }} <span class="tabular-nums opacity-70">{{ t.count }}</span>
+            </button>
+
+            <!-- A long tail of tags would push the posts off the screen, which is the
+                 wrong way round: the filter is here to reach the list, not to bury it. -->
+            <button
+              v-if="hiddenTagCount"
+              class="rounded-full border border-dashed px-2 py-1 text-xs text-muted-foreground transition hover:bg-muted hover:text-foreground"
+              @click="allTagsShown = !allTagsShown"
+            >
+              {{ allTagsShown ? 'Show fewer' : `+${hiddenTagCount} more` }}
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <!-- The posts themselves, scrolling under the toolbar. -->
+      <div class="min-h-0 flex-1 overflow-y-auto p-2">
+
+      <!-- A row, not a <button>: it carries its own edit/delete controls, and a button
+           inside a button is invalid markup that browsers resolve by dropping one of them.
+           The title is the clickable part; the controls sit beside it. -->
+      <div
+        v-for="s in visibleSideChats"
         :key="s.id"
-        class="block w-full rounded p-2 text-left hover:bg-muted"
-        @click="goto({ sidechat: String(s.id) })"
+        class="group/row rounded p-2 hover:bg-muted"
       >
-        <div class="text-sm font-medium">{{ s.name }}</div>
+        <div class="flex items-start gap-1">
+          <button class="min-w-0 flex-1 truncate text-left text-sm font-medium" @click="goto({ sidechat: String(s.id) })">
+            {{ s.name }}
+          </button>
+          <!-- Hover-revealed on a mouse, always there on touch — the same treatment the
+               sidebar's channel controls get, for the same reason. -->
+          <span
+            v-if="s.can_manage"
+            class="flex shrink-0 items-center gap-0.5"
+            :class="coarse ? '' : 'opacity-0 group-hover/row:opacity-100'"
+          >
+            <button class="rounded p-1 text-muted-foreground hover:text-foreground" title="Edit title and tags" :aria-label="`Edit ${s.name}`" @click.stop="editingRow = s">
+              <Pencil class="h-3.5 w-3.5" />
+            </button>
+            <button class="rounded p-1 text-muted-foreground hover:text-destructive" title="Delete side chat" :aria-label="`Delete ${s.name}`" @click.stop="deletingRow = s">
+              <Trash2 class="h-3.5 w-3.5" />
+            </button>
+          </span>
+        </div>
+
+        <!-- Who started it, badged OP — the forum convention. -->
+        <div v-if="s.creator" class="mt-0.5 flex items-center gap-1 text-[11px] text-muted-foreground">
+          <span class="truncate">{{ nameFor(s.creator) }}</span>
+          <span class="rounded bg-primary/10 px-1 text-[9px] font-bold uppercase text-primary" title="Original poster">OP</span>
+        </div>
+
+        <!-- A row's tags double as filter shortcuts: seeing "design" on a post and wanting
+             the rest of them is the same thought, so it shouldn't need a trip to the strip
+             above. Safe to make clickable because only the *title* opens the post. -->
+        <div v-if="s.tags?.length" class="mt-1 flex flex-wrap gap-1">
+          <button
+            v-for="tag in s.tags"
+            :key="tag"
+            class="rounded-full px-2 py-0.5 text-[10px] font-medium transition"
+            :class="activeTag === tag
+              ? 'bg-primary text-primary-foreground'
+              : 'bg-primary/10 text-primary hover:bg-primary/20'"
+            :title="`Show everything tagged ${tag}`"
+            @click.stop="activeTag = activeTag === tag ? null : tag"
+          >
+            {{ tag }}
+          </button>
+        </div>
+
         <div class="mt-0.5 flex flex-wrap items-center gap-x-2 text-xs text-muted-foreground">
           <span class="flex items-center gap-1"><Users class="h-3 w-3" /> {{ s.participants_count ?? 0 }}</span>
           <span>· {{ s.messages_count ?? 0 }} messages</span>
+          <!-- Reactions on the post, summed: the list wants "how much did this land",
+               not which emoji. The chips themselves live on the card and in the post. -->
+          <span v-if="reactionTotal(s) > 0" class="flex items-center gap-1" title="Reactions to this post">
+            · <Smile class="h-3 w-3" /> {{ reactionTotal(s) }}
+          </span>
+          <!-- Word-reactions on the post, summed. Separate from the message count above:
+               one is feedback *about* the topic, the other is the conversation in it. -->
+          <span v-if="commentTotal(s) > 0" class="flex items-center gap-1" title="Comments on this post">
+            · <MessageSquareText class="h-3 w-3" /> {{ commentTotal(s) }}
+          </span>
           <span v-if="(s.decisions_count ?? 0) > 0" class="flex items-center gap-1">
             · <CheckCircle2 class="h-3 w-3" /> {{ s.decisions_count }}
           </span>
           <span>· {{ relTime(s.last_active_at) }}</span>
         </div>
-      </button>
-      <p v-if="!sideChats.length" class="p-3 text-sm text-muted-foreground">No side chats yet.</p>
+
+        <!-- Confirmed in the row itself: a modal would cover the list you're deleting from,
+             and the title being deleted is right there to read. -->
+        <div v-if="deletingRow?.id === s.id" class="mt-1.5 rounded border border-destructive/40 bg-destructive/10 p-2 text-xs">
+          <p>Delete “{{ s.name }}” and everything in it?</p>
+          <div class="mt-1.5 flex gap-2">
+            <Button size="sm" variant="destructive" :disabled="deletingRowBusy" @click.stop="confirmDeleteRow(s)">
+              {{ deletingRowBusy ? 'Deleting…' : 'Delete' }}
+            </Button>
+            <Button size="sm" variant="ghost" @click.stop="deletingRow = null">Cancel</Button>
+          </div>
+        </div>
+      </div>
+
+        <p v-if="!sideChats.length" class="p-3 text-sm text-muted-foreground">No side chats yet.</p>
+        <div v-else-if="!visibleSideChats.length" class="p-3 text-sm text-muted-foreground">
+          <p>Nothing tagged “{{ activeTag }}”.</p>
+          <!-- The way out, offered where the dead end is rather than only up in the strip. -->
+          <button class="mt-1 text-primary hover:underline" @click="activeTag = null">Show all side chats</button>
+        </div>
+      </div>
     </div>
 
     <!-- CREATE -->
@@ -301,6 +655,41 @@ function relTime(iso: string) {
         {{ fromMessageId ? 'Spin a side chat off this message.' : 'Start a new side chat in this channel.' }}
       </p>
       <Input v-model="newName" placeholder="e.g. Dashboard Redesign" autofocus />
+
+      <!-- Tags at creation, not as an afterthought: a post filed the moment it's opened is
+           a post the list can find. Same free-text entry as the edit dialog. -->
+      <div>
+        <label class="mb-1 block text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+          Tags <span class="font-normal normal-case">(optional)</span>
+        </label>
+        <div class="flex flex-wrap items-center gap-1 rounded-lg border bg-background px-2 py-1.5">
+          <span v-for="tag in newTags" :key="tag" class="flex items-center gap-1 rounded-full bg-primary/10 px-2 py-0.5 text-xs text-primary">
+            {{ tag }}
+            <button type="button" class="hover:text-foreground" :aria-label="`Remove ${tag}`" @click="newTags = newTags.filter(t => t !== tag)">
+              <X class="h-3 w-3" />
+            </button>
+          </span>
+          <input
+            v-model="newTagDraft"
+            :disabled="newTags.length >= 8"
+            placeholder="Add a tag…"
+            class="min-w-24 flex-1 bg-transparent py-0.5 text-sm outline-none placeholder:text-muted-foreground"
+            @keydown="onNewTagKey"
+          >
+        </div>
+        <div v-if="tagCounts.length" class="mt-1.5 flex flex-wrap gap-1">
+          <button
+            v-for="t in tagCounts.filter(t => !newTags.includes(t.tag)).slice(0, 12)"
+            :key="t.tag"
+            type="button"
+            class="rounded-full border px-2 py-0.5 text-[11px] text-muted-foreground hover:bg-muted hover:text-foreground"
+            @click="addNewTag(t.tag)"
+          >
+            {{ t.tag }}
+          </button>
+        </div>
+      </div>
+
       <Button type="submit" class="w-full" :disabled="!newName.trim() || creating">
         {{ creating ? 'Creating…' : 'Create side chat' }}
       </Button>
@@ -322,6 +711,73 @@ function relTime(iso: string) {
           <component :is="t.icon" class="h-4 w-4" /> {{ t.label }}
         </button>
       </nav>
+
+      <!-- The post's own strip: who started it, what it's tagged, how it landed. Above the
+           tabs' content rather than inside the Chat tab, because it describes the *post*
+           and stays true whichever tab you're on. -->
+      <div v-if="sideChat" class="shrink-0 border-b px-4 py-2">
+        <div class="flex items-center gap-1 text-xs text-muted-foreground">
+          <template v-if="sideChat.creator">
+            <span class="truncate">{{ nameFor(sideChat.creator) }}</span>
+            <span class="rounded bg-primary/10 px-1 text-[9px] font-bold uppercase text-primary" title="Original poster — started this side chat">OP</span>
+          </template>
+          <!-- Replying to a post *is* posting into its timeline; there is no separate
+               reply store. So this drops you on the Chat tab with the caret in the box,
+               which is exactly what the button promises. -->
+          <button
+            class="ml-auto flex items-center gap-1 rounded px-1.5 py-0.5 hover:bg-muted hover:text-foreground"
+            title="Reply to this side chat"
+            @click="replyToPost"
+          >
+            <Reply class="h-3.5 w-3.5" /> Reply
+          </button>
+        </div>
+
+        <div v-if="sideChat.tags?.length" class="mt-1 flex flex-wrap gap-1">
+          <span v-for="tag in sideChat.tags" :key="tag" class="rounded-full bg-primary/10 px-2 py-0.5 text-[10px] font-medium text-primary">{{ tag }}</span>
+        </div>
+
+        <ReactionBar
+          :reactions="sideChat.reactions ?? []"
+          :current-user-id="user?.id ?? null"
+          always-show
+          @toggle="reactToPost(sideChat.id, $event)"
+        />
+        <!-- Word-reactions on the *post*: short co-signable feedback about the topic, as
+             opposed to a reply, which is a message in the timeline below. -->
+        <CommentBar
+          :subject="{ kind: 'sideChat', id: sideChat.id }"
+          :comments="sideChat.comments ?? []"
+          :current-user-id="user?.id ?? null"
+          always-show
+          @open="showPostComments = true"
+        />
+
+        <!-- The reply box, right under the title it's aimed at. Only for people on the
+             roster: posting here is posting in the side chat, and that's what joining is
+             for — so non-members are told rather than given a box that would 403. -->
+        <form v-if="postReplyOpen" class="mt-2" @submit.prevent="submitPostReply">
+          <template v-if="joined">
+            <textarea
+              ref="postReplyBox"
+              v-model="postReply"
+              rows="2"
+              placeholder="Write a reply…"
+              class="w-full resize-none rounded-lg border bg-background px-2 py-1.5 text-sm outline-none focus:ring-1 focus:ring-ring"
+              @keydown.enter.exact.prevent="submitPostReply"
+            />
+            <div class="mt-1 flex items-center justify-end gap-2">
+              <Button type="button" size="sm" variant="ghost" @click="postReplyOpen = false">Cancel</Button>
+              <Button type="submit" size="sm" :disabled="!postReply.trim() || postReplyBusy">
+                {{ postReplyBusy ? 'Posting…' : 'Reply' }}
+              </Button>
+            </div>
+          </template>
+          <p v-else class="rounded-lg border bg-muted/40 px-2 py-1.5 text-xs text-muted-foreground">
+            Join this side chat to reply.
+          </p>
+        </form>
+      </div>
 
       <!-- CHAT (kept mounted so its scroll position and subscription survive tab switches) -->
       <div v-show="sctab === 'chat'" class="flex min-h-0 flex-1 flex-col">
@@ -448,6 +904,7 @@ function relTime(iso: string) {
                     side-chat-actions
                     forwardable
                     :joined="joined"
+                    :post-title="sideChat?.name"
                     :highlighted="item.id === highlightedMessageId"
                     @reply="replyingTo = $event"
                     @save="edit"

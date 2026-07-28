@@ -22,6 +22,9 @@ class MessageResource extends JsonResource
             'body' => $this->body,
             'type' => $this->type,
             'edited' => $this->edited_at !== null,
+            // A top-level reply to the side chat *post* (its title), as opposed to
+            // `reply_to`, which points at another message. See the migration.
+            'replies_to_post' => (bool) $this->replies_to_post,
             'pinned' => $this->pinned_at !== null,
             'pinned_at' => $this->pinned_at,
             // Marked as a recorded decision (side-chat messages only).

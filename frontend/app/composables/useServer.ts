@@ -78,6 +78,27 @@ export function useServer() {
     void useNicknames().open({ kind: 'server', id })
   }
 
+  /**
+   * Re-ask for the channel list of a server that's already open.
+   *
+   * `openServer` can't do this — it early-returns on the server it's already showing, and
+   * it also re-seats every subscription, which is exactly what you don't want in the
+   * middle of one. Used when access changes: the list is answered per viewer, so
+   * refetching is what makes a newly-private channel disappear (or a newly-granted one
+   * appear) without any client being told who else is on the list.
+   */
+  async function refreshChannels(id: number) {
+    if (requestedId.value !== id) return
+    const res = await api<Paginated<Channel>>(`/api/servers/${id}/channels?page=1`)
+    if (requestedId.value !== id) return // superseded mid-fetch
+    // Keep each row's per-viewer bits (the unread badge), which the list carries but a
+    // re-fetch mid-session shouldn't be trusted to have re-counted identically.
+    const previous = new Map(channels.value.map(c => [c.id, c]))
+    channels.value = res.data.map(c => ({ ...previous.get(c.id), ...c }))
+    chPage.value = res.meta.current_page
+    chLast.value = res.meta.last_page
+  }
+
   async function loadMoreChannels(id: number) {
     if (!hasMoreChannels.value || chLoading.value) return
     chLoading.value = true
@@ -147,6 +168,7 @@ export function useServer() {
     channels,
     hasMoreChannels,
     openServer,
+    refreshChannels,
     loadMoreChannels,
     createChannel,
     renameChannel,

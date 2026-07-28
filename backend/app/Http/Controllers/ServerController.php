@@ -8,14 +8,18 @@ use App\Actions\Server\LeaveServerAction;
 use App\Actions\Server\RenameServerAction;
 use App\DTOs\Server\CreateServerData;
 use App\DTOs\Server\UpdateServerData;
+use App\Events\ServerRoleUpdated;
 use App\Http\Requests\Server\DeleteServerRequest;
 use App\Http\Requests\Server\LeaveServerRequest;
 use App\Http\Requests\Server\StoreServerRequest;
+use App\Http\Requests\Server\UpdateMemberRoleRequest;
 use App\Http\Requests\Server\UpdateServerRequest;
 use App\Http\Requests\Server\ViewServerRequest;
 use App\Http\Resources\ServerResource;
 use App\Models\Server;
+use App\Models\User;
 use App\Services\ServerService;
+use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Http\Resources\Json\AnonymousResourceCollection;
 use Illuminate\Http\Response;
@@ -55,6 +59,25 @@ class ServerController extends Controller
         $action->handle($server);
 
         return response()->noContent();
+    }
+
+    /**
+     * Make a member an admin, or put them back to plain member. Owner only.
+     *
+     * The owner themselves is not addressable here: their standing comes from `owner_id`,
+     * not from the pivot, so writing a role for them would be a no-op that looked like a
+     * demotion. 404 says the same thing more honestly.
+     */
+    public function updateRole(UpdateMemberRoleRequest $request, Server $server, User $member): JsonResponse
+    {
+        abort_if($server->isOwner($member) || ! $server->hasMember($member), 404);
+
+        $role = $request->validated()['role'];
+        $server->members()->updateExistingPivot($member->id, ['role' => $role]);
+
+        broadcast(new ServerRoleUpdated($server, $member->id, $role));
+
+        return response()->json(['data' => ['user_id' => $member->id, 'role' => $role]]);
     }
 
     /** Any member may go. The owner may not — see LeaveServerAction. */

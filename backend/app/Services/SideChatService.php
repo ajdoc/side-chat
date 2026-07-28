@@ -46,7 +46,7 @@ final class SideChatService
     public function applyCardData($query)
     {
         return $query
-            ->with(['creator', 'parentMessage.user', 'participants:id,name,avatar'])
+            ->with(['creator', 'parentMessage.user', 'participants:id,name,avatar', 'reactions.user', 'comments.user'])
             ->withCount($this->countDefinitions())
             ->withMax('messages', 'created_at');
     }
@@ -82,7 +82,7 @@ final class SideChatService
     public function loadForDisplay(SideChat $sideChat): SideChat
     {
         return $sideChat
-            ->load(['creator', 'parentMessage.user', 'participants:id,name,avatar'])
+            ->load(['creator', 'parentMessage.user', 'participants:id,name,avatar', 'reactions.user', 'comments.user'])
             ->loadCount($this->countDefinitions())
             ->loadMax('messages', 'created_at');
     }

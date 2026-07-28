@@ -36,11 +36,16 @@ export function useChannelMembers() {
     ...new Set(members.value.flatMap(m => [m.name, publicNameFor(m)])),
   ])
 
-  async function load(channelId: number) {
+  /**
+   * @param force Skip the cache. The roster is stable enough to cache for autocomplete,
+   * but the roles settings *edit* it, and reopening onto a cached list would show the
+   * change undone. Anything that writes a member's role invalidates by asking again.
+   */
+  async function load(channelId: number, force = false) {
     requestedId.value = channelId
 
     const cached = cache.value[channelId]
-    if (cached) {
+    if (cached && !force) {
       members.value = cached
       return
     }

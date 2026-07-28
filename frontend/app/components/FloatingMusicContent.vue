@@ -13,7 +13,7 @@ import type { FloatingWidgetWindow } from '~/composables/useFloatingWindows'
  */
 const props = defineProps<{ win: FloatingWidgetWindow }>()
 
-const { widget, restore, unpin, isPinned } = useMusicPin()
+const { widget, restore } = useMusicPin()
 
 onMounted(async () => {
   // On a fresh page the window may come back from storage before the pin has been re-seated —
@@ -22,11 +22,11 @@ onMounted(async () => {
   if (!widget.value) useFloatingWindows().close(props.win.id)
 })
 
-onBeforeUnmount(() => {
-  // Closing the window stops the music — the same meaning the old dock's ✕ had (unpin). Guarded
-  // so the unpin→close→unmount→unpin path settles instead of looping.
-  if (widget.value && isPinned(props.win.widgetId)) unpin()
-})
+// No unpin on unmount. It used to live here, and it made every incidental remount of the shelf
+// read as "the user closed the player": the pin was dropped, the docked engine went with it
+// (silence) and the timeline card — no longer stubbed, because nothing was pinned any more —
+// inflated a second player for the same song. Closing is now the shelf's business: the ✕ calls
+// `close`, and `close` clears the pin (see useFloatingWindows).
 </script>
 
 <template>

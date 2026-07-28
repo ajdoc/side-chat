@@ -22,6 +22,11 @@ class ChannelMemberController extends Controller
         $container = $channel->container();
         abort_if($container === null, 404);
 
+        // A third reader now: the server's Roles settings, which needs to know what each
+        // member currently is. `owner` isn't a pivot value — it's the server's owner_id —
+        // so it's folded in here rather than read off the roster.
+        $ownerId = $container->owner_id ?? null;
+
         $members = $container->members()
             ->orderBy('name')
             ->get(['users.id', 'users.name', 'users.email', 'avatar'])
@@ -30,6 +35,7 @@ class ChannelMemberController extends Controller
                 'name' => $user->name,
                 'email' => $user->email,
                 'avatar' => $user->avatar,
+                'role' => $user->id === $ownerId ? 'owner' : ($user->pivot->role ?? 'member'),
             ]);
 
         return response()->json(['data' => $members]);

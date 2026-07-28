@@ -11,6 +11,11 @@ import { chunkMessage } from '~/lib/chunkMessage'
 export function buildMessagePayload(opts: {
   body?: string | null
   replyToId?: number | null
+  /**
+   * Addressed at a side chat's *post* rather than at another message — the forum's
+   * top-level reply. Side chats only; nothing else has a post to reply to.
+   */
+  repliesToPost?: boolean
   files?: File[]
   /** Ids of files staged through the chunked path — see useChunkedUpload. */
   uploadIds?: string[]
@@ -29,6 +34,7 @@ export function buildMessagePayload(opts: {
     return {
       ...(opts.body !== undefined ? { body: opts.body } : {}),
       ...(opts.replyToId !== undefined ? { reply_to_id: opts.replyToId ?? null } : {}),
+      ...(opts.repliesToPost ? { replies_to_post: true } : {}),
       ...(gif ? { gif: gifFields(gif) } : {}),
       ...(uploads.length ? { uploads } : {}),
     }
@@ -38,6 +44,7 @@ export function buildMessagePayload(opts: {
   if (opts.method) form.append('_method', opts.method)
   if (opts.body) form.append('body', opts.body)
   if (opts.replyToId) form.append('reply_to_id', String(opts.replyToId))
+  if (opts.repliesToPost) form.append('replies_to_post', '1')
   files.forEach(file => form.append('attachments[]', file))
   uploads.forEach(id => form.append('uploads[]', id))
   removals.forEach(id => form.append('remove_attachment_ids[]', String(id)))
@@ -62,6 +69,7 @@ export function buildMessagePayload(opts: {
 export function buildMessageParts(opts: {
   body?: string | null
   replyToId?: number | null
+  repliesToPost?: boolean
   files?: File[]
   uploadIds?: string[]
   gif?: GifResult | null
@@ -71,6 +79,9 @@ export function buildMessageParts(opts: {
   return parts.map((body, i) => buildMessagePayload({
     body,
     replyToId: i === 0 ? opts.replyToId : null,
+    // Only the first part is the reply; the rest are its continuation, and marking each
+    // one would stamp the same chip down the whole run.
+    repliesToPost: i === 0 ? opts.repliesToPost : false,
     files: i === parts.length - 1 ? opts.files : [],
     uploadIds: i === parts.length - 1 ? opts.uploadIds : [],
     gif: i === parts.length - 1 ? opts.gif : null,

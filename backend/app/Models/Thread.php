@@ -40,4 +40,21 @@ class Thread extends Model
     {
         return $this->hasMany(Message::class);
     }
+
+    /**
+     * May this person rename or delete the thread? Its creator, or the server's staff.
+     *
+     * The rule itself is explained in ThreadAuthorRequest, which enforces it; this exists
+     * so ThreadResource can tell the client the same answer without duplicating it.
+     */
+    public function canManage(User $user): bool
+    {
+        if ($this->user_id === $user->getKey()) {
+            return true;
+        }
+
+        $container = $this->loadMissing('channel')->channel?->container();
+
+        return $container instanceof Server && $container->isStaff($user);
+    }
 }

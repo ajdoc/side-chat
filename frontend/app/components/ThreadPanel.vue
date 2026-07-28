@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import { ChevronDown, Loader2, MessagesSquare, SendHorizontal, Users, X } from 'lucide-vue-next'
-import type { GifResult, Message } from '~/types'
+import { ChevronDown, ChevronLeft, Loader2, MessagesSquare, Pencil, SendHorizontal, Trash2, Users, X } from 'lucide-vue-next'
+import type { GifResult, Message, Thread } from '~/types'
 import { Button } from '~/components/ui/button'
 import { Input } from '~/components/ui/input'
 
@@ -22,7 +22,7 @@ const { user } = useAuth()
 // Names follow whatever people are called in this server or chat — see useNicknames.
 const { nameFor } = useNicknames()
 
-const { threads, sideChatThreads, loadThreads, createThread, loadSideChatThreads, createSideChatThread } = useThreads()
+const { threads, sideChatThreads, loadThreads, createThread, loadSideChatThreads, createSideChatThread, renameThread, deleteThread } = useThreads()
 const scoped = computed(() => props.sideChatId != null)
 const list = computed(() => (scoped.value ? sideChatThreads.value : threads.value))
 const { thread, messages, gone, hasMore, loadingOlder, loadThread, loadOlder, ensureLoaded, send, edit, remove, toggleReaction, togglePin, subscribe, unsubscribe } = useThreadMessages()
@@ -108,6 +108,17 @@ function setQuery(patch: Record<string, string | null>) {
 function openThread(id: number) {
   setQuery({ [keys.value.view]: String(id), [keys.value.list]: null, [keys.value.from]: null })
 }
+/**
+ * Back to this scope's thread list.
+ *
+ * Its own keys only, like everything else here: the channel's thread column and a side
+ * chat's are two independent columns sharing one URL, and pressing Back on either must
+ * not disturb the other.
+ */
+function backToList() {
+  setQuery({ [keys.value.list]: '1', [keys.value.view]: null, [keys.value.from]: null })
+}
+
 /** Close just this column — its own keys — so a side chat (or the other thread) beside it stays. */
 function close() {
   setQuery({ [keys.value.view]: null, [keys.value.list]: null, [keys.value.from]: null })
@@ -128,6 +139,88 @@ async function submitCreate() {
     creating.value = false
   }
 }
+
+// --- managing a thread from the *list*, without opening it ---------------
+// Held as the row itself: the rename seeds from its name and the confirmation quotes it.
+const renamingRow = ref<Thread | null>(null)
+const deletingRow = ref<Thread | null>(null)
+const rowName = ref('')
+const rowBusy = ref(false)
+// Touch has no hover to reveal the controls with, so there they're always on.
+const coarse = import.meta.client && window.matchMedia?.('(pointer: coarse)').matches
+
+function startRowRename(t: Thread) {
+  rowName.value = t.name
+  deletingRow.value = null
+  renamingRow.value = t
+}
+
+async function submitRowRename(t: Thread) {
+  const name = rowName.value.trim()
+  if (!name || rowBusy.value) return
+  rowBusy.value = true
+  try {
+    await renameThread(t.id, name)
+    renamingRow.value = null
+  } finally {
+    rowBusy.value = false
+  }
+}
+
+async function submitRowDelete(t: Thread) {
+  if (rowBusy.value) return
+  rowBusy.value = true
+  try {
+    await deleteThread(t.id)
+  } finally {
+    rowBusy.value = false
+    deletingRow.value = null
+  }
+}
+
+// --- rename / delete of the *open* thread (creator, or the server's staff) ---
+const renaming = ref(false)
+const renameName = ref('')
+const savingName = ref(false)
+const confirmDelete = ref(false)
+const deleting = ref(false)
+
+function startRename() {
+  renameName.value = thread.value?.name ?? ''
+  confirmDelete.value = false
+  renaming.value = true
+}
+
+async function submitRename() {
+  const name = renameName.value.trim()
+  if (!name || !thread.value || savingName.value) return
+  savingName.value = true
+  try {
+    const next = await renameThread(thread.value.id, name)
+    // The header reads `thread`, which useThreadMessages owns; its `.ThreadUpdated`
+    // handler will do this too, but not before the round trip we're already inside.
+    thread.value = { ...thread.value, name: next.name }
+    renaming.value = false
+  } finally {
+    savingName.value = false
+  }
+}
+
+async function submitDelete() {
+  if (!thread.value || deleting.value) return
+  deleting.value = true
+  try {
+    await deleteThread(thread.value.id)
+    close() // the panel is showing a thread that no longer exists
+  } finally {
+    deleting.value = false
+    confirmDelete.value = false
+  }
+}
+
+// Leaving a thread (or switching to another) drops any half-finished rename or confirmation:
+// they're about *this* thread, and carrying them across would aim them at the next one.
+watch(activeThreadId, () => { renaming.value = false; confirmDelete.value = false })
 
 async function onSend(body: string, files: File[], gif?: GifResult, uploadIds: string[] = []) {
   if (!activeThreadId.value || sending.value) return
@@ -190,31 +283,104 @@ onBeforeUnmount(teardown)
   >
     <ResizeHandle v-if="!narrow" edge="left" @resize="startResize" />
     <header class="flex h-12 shrink-0 items-center justify-between border-b px-4">
-      <div class="flex items-center gap-2 font-semibold">
-        <MessagesSquare class="h-4 w-4 text-muted-foreground" />
+      <div class="flex min-w-0 items-center gap-2 font-semibold">
+        <!-- Back to the list. Opening a thread replaces it in this one column, so without
+             this the only way out is ✕ — which closes the column and loses your place. -->
+        <button
+          v-if="mode !== 'list'"
+          class="-ml-1 rounded p-1 text-muted-foreground hover:bg-muted hover:text-foreground"
+          title="Back to all threads"
+          aria-label="Back to all threads"
+          @click="backToList"
+        >
+          <ChevronLeft class="h-4 w-4" />
+        </button>
+        <MessagesSquare v-else class="h-4 w-4 text-muted-foreground" />
         <span v-if="mode === 'list'">{{ scoped ? 'Side chat threads' : 'Threads' }}</span>
         <span v-else-if="mode === 'create'">New thread</span>
         <span v-else class="truncate">{{ thread?.name ?? 'Thread' }}</span>
       </div>
-      <button class="text-muted-foreground hover:text-foreground" aria-label="Close" @click="close">
-        <X class="h-4 w-4" />
-      </button>
+      <div class="flex items-center gap-1">
+        <!-- Rename / delete. Only drawn when the server said this person may: `can_manage`
+             is the same rule the endpoint enforces, so there's no button here that 403s. -->
+        <template v-if="mode === 'view' && thread?.can_manage">
+          <button class="p-1 text-muted-foreground hover:text-foreground" aria-label="Rename thread" title="Rename thread" @click="startRename">
+            <Pencil class="h-3.5 w-3.5" />
+          </button>
+          <button class="p-1 text-muted-foreground hover:text-destructive" aria-label="Delete thread" title="Delete thread" @click="confirmDelete = true">
+            <Trash2 class="h-3.5 w-3.5" />
+          </button>
+        </template>
+        <button class="text-muted-foreground hover:text-foreground" aria-label="Close" @click="close">
+          <X class="h-4 w-4" />
+        </button>
+      </div>
     </header>
+
+    <!-- Rename: an inline row rather than a dialog. It's one field, and the title it edits
+         is directly above it — a modal would cover the thing being renamed. -->
+    <form v-if="renaming" class="flex shrink-0 items-center gap-2 border-b bg-muted/30 px-3 py-2" @submit.prevent="submitRename">
+      <Input v-model="renameName" placeholder="Thread name" autofocus class="h-8" />
+      <Button type="submit" size="sm" :disabled="!renameName.trim() || savingName">Save</Button>
+      <Button type="button" size="sm" variant="ghost" @click="renaming = false">Cancel</Button>
+    </form>
+
+    <!-- Delete needs confirming: it takes every reply with it and there is no undo. -->
+    <div v-if="confirmDelete" class="shrink-0 space-y-2 border-b bg-destructive/10 px-3 py-2 text-sm">
+      <p>Delete this thread and all {{ thread?.replies_count ?? 0 }} replies? This can't be undone.</p>
+      <div class="flex gap-2">
+        <Button size="sm" variant="destructive" :disabled="deleting" @click="submitDelete">
+          {{ deleting ? 'Deleting…' : 'Delete thread' }}
+        </Button>
+        <Button size="sm" variant="ghost" @click="confirmDelete = false">Cancel</Button>
+      </div>
+    </div>
 
     <!-- LIST -->
     <div v-if="mode === 'list'" class="flex-1 overflow-y-auto p-2">
-      <button
-        v-for="t in list"
-        :key="t.id"
-        class="block w-full rounded p-2 text-left hover:bg-muted"
-        @click="openThread(t.id)"
-      >
-        <div class="text-sm font-medium">{{ t.name }}</div>
+      <!-- A row, not a <button>: it carries its own edit/delete controls, and nesting a
+           button inside a button is invalid markup. The title is the clickable part. -->
+      <div v-for="t in list" :key="t.id" class="group/row rounded p-2 hover:bg-muted">
+        <div class="flex items-start gap-1">
+          <button class="min-w-0 flex-1 truncate text-left text-sm font-medium" @click="openThread(t.id)">
+            {{ t.name }}
+          </button>
+          <span
+            v-if="t.can_manage"
+            class="flex shrink-0 items-center gap-0.5"
+            :class="coarse ? '' : 'opacity-0 group-hover/row:opacity-100'"
+          >
+            <button class="rounded p-1 text-muted-foreground hover:text-foreground" title="Rename thread" :aria-label="`Rename ${t.name}`" @click.stop="startRowRename(t)">
+              <Pencil class="h-3.5 w-3.5" />
+            </button>
+            <button class="rounded p-1 text-muted-foreground hover:text-destructive" title="Delete thread" :aria-label="`Delete ${t.name}`" @click.stop="deletingRow = t">
+              <Trash2 class="h-3.5 w-3.5" />
+            </button>
+          </span>
+        </div>
+
         <div class="text-xs text-muted-foreground">
           {{ t.replies_count ?? 0 }} {{ (t.replies_count ?? 0) === 1 ? 'reply' : 'replies' }}
           <template v-if="t.creator"> · started by {{ nameFor(t.creator) }}</template>
         </div>
-      </button>
+
+        <!-- Rename inline: one field, and the name it edits is directly above it. -->
+        <form v-if="renamingRow?.id === t.id" class="mt-1.5 flex items-center gap-1.5" @submit.prevent="submitRowRename(t)" @click.stop>
+          <Input v-model="rowName" placeholder="Thread name" autofocus class="h-8" />
+          <Button type="submit" size="sm" :disabled="!rowName.trim() || rowBusy">Save</Button>
+          <Button type="button" size="sm" variant="ghost" @click="renamingRow = null">Cancel</Button>
+        </form>
+
+        <div v-if="deletingRow?.id === t.id" class="mt-1.5 rounded border border-destructive/40 bg-destructive/10 p-2 text-xs" @click.stop>
+          <p>Delete “{{ t.name }}” and its {{ t.replies_count ?? 0 }} replies?</p>
+          <div class="mt-1.5 flex gap-2">
+            <Button size="sm" variant="destructive" :disabled="rowBusy" @click="submitRowDelete(t)">
+              {{ rowBusy ? 'Deleting…' : 'Delete' }}
+            </Button>
+            <Button size="sm" variant="ghost" @click="deletingRow = null">Cancel</Button>
+          </div>
+        </div>
+      </div>
       <p v-if="!list.length" class="p-3 text-sm text-muted-foreground">
         {{ scoped ? 'No threads in this side chat yet.' : 'No threads yet.' }}
       </p>

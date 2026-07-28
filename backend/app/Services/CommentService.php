@@ -2,14 +2,17 @@
 
 namespace App\Services;
 
-use App\Models\Comment;
-use App\Models\Message;
+use Illuminate\Database\Eloquent\Model;
 
 final class CommentService
 {
     /**
-     * Group a message's comments into the "popular comments" summary the UI renders as
+     * Group a thing's comments into the "popular comments" summary the UI renders as
      * chips: `✓ Looks good (18)`.
+     *
+     * Takes any model with a `comments` relation: a side chat *post* carries them too (see
+     * SideChatComment), the rows have the same shape, and the chips are the same component.
+     * One summariser keeps the grouping, ordering and tie-breaking identical for both.
      *
      * Grouped by the normalized body (+emoji) so wording that only differs in case or
      * spacing counts as the same phrase. Like ReactionService, it's viewer-agnostic — it
@@ -19,16 +22,16 @@ final class CommentService
      *
      * @return array<int, array{key: string, body: string, emoji: ?string, count: int, users: array<int, array{id: int, name: string}>}>
      */
-    public function summarize(Message $message): array
+    public function summarize(Model $subject): array
     {
-        $message->loadMissing('comments.user');
+        $subject->loadMissing('comments.user');
 
-        return $message->comments
+        return $subject->comments
             // A phrase is (normalized body + emoji): "Looks good" 👍 and "Looks good" with
             // no emoji are two different chips, as they read differently.
-            ->groupBy(fn (Comment $c) => $c->body_key.'|'.($c->emoji ?? ''))
+            ->groupBy(fn (Model $c) => $c->body_key.'|'.($c->emoji ?? ''))
             ->map(function ($group) {
-                /** @var Comment $first */
+                /** @var Model $first */
                 $first = $group->first();
 
                 return [
@@ -38,7 +41,7 @@ final class CommentService
                     'emoji' => $first->emoji,
                     'count' => $group->count(),
                     'users' => $group
-                        ->map(fn (Comment $c) => ['id' => $c->user_id, 'name' => $c->user?->name ?? 'unknown'])
+                        ->map(fn (Model $c) => ['id' => $c->user_id, 'name' => $c->user?->name ?? 'unknown'])
                         ->values()
                         ->all(),
                 ];

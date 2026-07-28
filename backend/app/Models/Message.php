@@ -16,11 +16,11 @@ class Message extends Model
     /** @use HasFactory<MessageFactory> */
     use HasFactory;
 
-    protected $fillable = ['channel_id', 'thread_id', 'side_chat_id', 'widget_id', 'user_id', 'body', 'type', 'reply_to_id', 'forwarded_from_id', 'edited_at', 'pinned_at', 'pinned_by', 'decided_at', 'decided_by'];
+    protected $fillable = ['channel_id', 'thread_id', 'side_chat_id', 'widget_id', 'user_id', 'body', 'type', 'reply_to_id', 'replies_to_post', 'forwarded_from_id', 'edited_at', 'pinned_at', 'pinned_by', 'decided_at', 'decided_by'];
 
     protected function casts(): array
     {
-        return ['edited_at' => 'datetime', 'pinned_at' => 'datetime', 'decided_at' => 'datetime'];
+        return ['edited_at' => 'datetime', 'pinned_at' => 'datetime', 'decided_at' => 'datetime', 'replies_to_post' => 'boolean'];
     }
 
     /**
