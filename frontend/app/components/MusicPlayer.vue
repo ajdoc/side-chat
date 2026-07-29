@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { useLocalStorage } from '@vueuse/core'
-import { ArrowDown, ArrowUp, FastForward, ListMusic, Maximize2, Mic2, Pause, Pin, PinOff, Play, Radio, RefreshCw, Repeat, Repeat1, Rewind, Search, Shuffle, SkipBack, SkipForward, Square, TriangleAlert, Volume2, VolumeX, X } from 'lucide-vue-next'
+import { ArrowDown, ArrowUp, ChevronDown, ChevronUp, FastForward, History, ListMusic, Maximize2, Mic2, Pause, Pin, PinOff, Play, Radio, RefreshCw, Repeat, Repeat1, Rewind, Search, Shuffle, SkipBack, SkipForward, Square, TriangleAlert, Volume2, VolumeX, X } from 'lucide-vue-next'
 import type { MusicState, MusicTrack, Widget } from '~/types'
 import { Button } from '~/components/ui/button'
 
@@ -54,6 +54,47 @@ const upcoming = computed(() =>
 // Absolute queue index of the i-th "up next" row. With nothing seated (currentIndex null) the
 // list starts at 0; otherwise it starts just after the current track.
 const upcomingIndex = (i: number) => (currentIndex.value ?? -1) + 1 + i
+
+/**
+ * How much of the queue is on show.
+ *
+ * Two separate questions, because they're two separate frustrations. `queueExpanded` is about
+ * *length* — the list has always stopped at 20 with a "+N more" that told you what you were
+ * missing without offering it, which on a long night's queue is most of it. `showPlayed` is
+ * about *direction*: "up next" is the whole queue minus everything already played, and what
+ * played half an hour ago is exactly what you want when someone asks what that song was.
+ *
+ * Both are local and unshared — this is which part of the room's queue *you* are looking at,
+ * not a change to the queue itself.
+ */
+const queueExpanded = ref(false)
+const showPlayed = ref(false)
+
+const COLLAPSED_ROWS = 20
+
+/** Everything before the current track, oldest first — empty unless `showPlayed`. */
+const played = computed(() =>
+  currentIndex.value == null ? [] : queue.value.slice(0, currentIndex.value),
+)
+
+/**
+ * The rows to draw, each carrying its absolute queue index and its 1-based position in the
+ * upcoming list (which is what the server's `move` speaks — see MusicWidget::move).
+ *
+ * One list rather than two loops so that "show all" and the row cap mean the same thing
+ * whichever half you're looking at.
+ */
+const queueRows = computed(() => {
+  const rows = [
+    ...(showPlayed.value ? played.value.map((track, i) => ({ track, index: i, position: null as number | null, played: true })) : []),
+    ...upcoming.value.map((track, i) => ({ track, index: upcomingIndex(i), position: i + 1, played: false })),
+  ]
+
+  return queueExpanded.value ? rows : rows.slice(0, COLLAPSED_ROWS)
+})
+
+const totalRows = computed(() => (showPlayed.value ? played.value.length : 0) + upcoming.value.length)
+const hiddenRows = computed(() => Math.max(0, totalRows.value - queueRows.value.length))
 const isPlaying = computed(() => state.value.status === 'playing')
 const speed = computed(() => state.value.speed ?? 1)
 const pending = computed(() => state.value.pendingSearch ?? null)
@@ -714,29 +755,68 @@ onBeforeUnmount(() => {
         </p>
       </template>
 
-      <!-- Up next -->
-      <div v-if="upcoming.length" class="mt-3 border-t pt-2">
-        <p class="mb-1 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">{{ current ? 'Up next' : 'In queue' }} · {{ upcoming.length }}</p>
-        <ul class="space-y-0.5">
-          <li
-            v-for="(track, i) in upcoming.slice(0, 20)"
-            :key="track.id"
-            class="group flex items-center gap-2 rounded px-1 py-1 text-xs hover:bg-muted"
+      <!-- The queue: what's next, and — when you ask for it — what's already been. -->
+      <div v-if="totalRows" class="mt-3 border-t pt-2">
+        <div class="mb-1 flex items-center gap-2">
+          <p class="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+            {{ current ? 'Up next' : 'In queue' }} · {{ upcoming.length }}
+          </p>
+          <!-- Only offered when there *is* history, so the row doesn't carry a button that
+               would do nothing on a queue you've just started. -->
+          <button
+            v-if="played.length"
+            class="ml-auto rounded px-1.5 py-0.5 text-[10px] font-medium transition"
+            :class="showPlayed ? 'bg-primary/10 text-primary' : 'text-muted-foreground hover:bg-muted hover:text-foreground'"
+            :title="showPlayed ? 'Hide the tracks already played' : `Show the ${played.length} already played`"
+            @click="showPlayed = !showPlayed"
           >
-            <span class="w-4 flex-none text-right text-[10px] text-muted-foreground">{{ i + 1 }}</span>
-            <button class="min-w-0 flex-1 text-left" :class="track.unresolved && 'opacity-40'" :title="track.unresolved ? 'Not found on YouTube' : track.title" @click="jump(upcomingIndex(i))">
-              <span class="block truncate" :class="track.unresolved && 'line-through'">{{ track.title }}</span>
-              <span v-if="track.artist" class="block truncate text-muted-foreground">{{ track.artist }}</span>
+            <History class="mr-0.5 inline h-3 w-3" />{{ played.length }} played
+          </button>
+        </div>
+
+        <!-- Capped in height once it's long: the whole queue on a 60-track night would push
+             the transport off the screen, and this card lives inside a scrolling timeline
+             where an inner scroller is the lesser evil. -->
+        <ul class="space-y-0.5" :class="queueExpanded && 'max-h-72 overflow-y-auto pr-1'">
+          <li
+            v-for="row in queueRows"
+            :key="row.track.id"
+            class="group flex items-center gap-2 rounded px-1 py-1 text-xs hover:bg-muted"
+            :class="row.played && 'opacity-60'"
+          >
+            <span class="w-4 flex-none text-right text-[10px] text-muted-foreground">{{ row.played ? '·' : row.position }}</span>
+            <button
+              class="min-w-0 flex-1 text-left"
+              :class="row.track.unresolved && 'opacity-40'"
+              :title="row.track.unresolved ? 'Not found on YouTube' : row.played ? `Play ${row.track.title} again` : row.track.title"
+              @click="jump(row.index)"
+            >
+              <span class="block truncate" :class="row.track.unresolved && 'line-through'">{{ row.track.title }}</span>
+              <span v-if="row.track.artist" class="block truncate text-muted-foreground">{{ row.track.artist }}</span>
             </button>
-            <span class="flex-none tabular-nums text-muted-foreground">{{ fmt(track.duration) }}</span>
+            <span class="flex-none tabular-nums text-muted-foreground">{{ fmt(row.track.duration) }}</span>
+            <!-- Reordering is a statement about what's *coming*; a played track has no
+                 position in the upcoming list for the server to move, so it keeps only the
+                 remove button. -->
             <span class="flex flex-none items-center opacity-0 reveal-touch group-hover:opacity-100">
-              <button class="p-0.5 text-muted-foreground hover:text-foreground disabled:opacity-30" title="Move up" :disabled="i === 0" @click="moveTrack(i + 1, -1)"><ArrowUp class="h-3.5 w-3.5" /></button>
-              <button class="p-0.5 text-muted-foreground hover:text-foreground disabled:opacity-30" title="Move down" :disabled="i === upcoming.length - 1" @click="moveTrack(i + 1, 1)"><ArrowDown class="h-3.5 w-3.5" /></button>
-              <button class="p-0.5 text-muted-foreground hover:text-destructive" title="Remove" @click="removeTrack(track)"><X class="h-3.5 w-3.5" /></button>
+              <template v-if="row.position != null">
+                <button class="p-0.5 text-muted-foreground hover:text-foreground disabled:opacity-30" title="Move up" :disabled="row.position === 1" @click="moveTrack(row.position, -1)"><ArrowUp class="h-3.5 w-3.5" /></button>
+                <button class="p-0.5 text-muted-foreground hover:text-foreground disabled:opacity-30" title="Move down" :disabled="row.position === upcoming.length" @click="moveTrack(row.position, 1)"><ArrowDown class="h-3.5 w-3.5" /></button>
+              </template>
+              <button class="p-0.5 text-muted-foreground hover:text-destructive" title="Remove" @click="removeTrack(row.track)"><X class="h-3.5 w-3.5" /></button>
             </span>
           </li>
         </ul>
-        <p v-if="upcoming.length > 20" class="mt-1 pl-6 text-[10px] text-muted-foreground">+{{ upcoming.length - 20 }} more</p>
+
+        <!-- The old "+N more" said what you were missing without offering it. -->
+        <button
+          v-if="hiddenRows || queueExpanded"
+          class="mt-1 w-full rounded px-1 py-1 text-left text-[10px] font-medium text-muted-foreground transition hover:bg-muted hover:text-foreground"
+          @click="queueExpanded = !queueExpanded"
+        >
+          <component :is="queueExpanded ? ChevronUp : ChevronDown" class="mr-0.5 inline h-3 w-3" />
+          {{ queueExpanded ? 'Show less' : `Show all ${totalRows}` }}
+        </button>
       </div>
     </div>
 

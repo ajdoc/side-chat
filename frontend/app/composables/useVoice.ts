@@ -624,6 +624,25 @@ export function useVoice() {
   const screenStream = useState<MediaStream | null>('voice:screenStream', () => null)
   const cameraStream = useState<MediaStream | null>('voice:cameraStream', () => null)
   /**
+   * Which way the camera is pointing, on a device that has more than one.
+   *
+   * Front by default everywhere, because a call is a face: `user` is what a laptop's only
+   * camera is anyway, so this costs desktop nothing and gives a phone the right default.
+   * Held here rather than inside startCamera so that switching sides survives turning the
+   * camera off and on again — you flipped to the back camera to show someone something, and
+   * it should still be the back camera a moment later.
+   */
+  const cameraFacing = useState<'user' | 'environment'>('voice:cameraFacing', () => 'user')
+  /**
+   * Whether flipping is worth offering — asked of the device, not guessed from the platform.
+   *
+   * `enumerateDevices` only labels cameras once permission has been granted, but it *counts*
+   * them regardless, and a count is the whole question here. A laptop with one webcam gets no
+   * button; a phone, and a desktop with two cameras plugged in, get one.
+   */
+  const cameraCount = useState('voice:cameraCount', () => 0)
+  const canSwitchCamera = computed(() => cameraCount.value > 1)
+  /**
    * The sound you're sharing with nothing to look at — a track playing in a tab, a video
    * everyone is listening to rather than watching.
    *
@@ -2432,13 +2451,41 @@ export function useVoice() {
    * content hint for a face — unlike a screen full of text, we'd rather it stayed smooth
    * than stayed sharp.
    */
+  /** What we ask a camera for. `ideal` throughout so a device that can't oblige still opens. */
+  function cameraConstraints(facing: 'user' | 'environment'): MediaTrackConstraints {
+    return {
+      width: { ideal: 640 },
+      height: { ideal: 360 },
+      frameRate: { ideal: 24 },
+      // Ideal, not exact: a laptop with one camera that calls itself neither would fail an
+      // `exact` constraint outright, and a call is not worth losing over which way it faces.
+      facingMode: { ideal: facing },
+    }
+  }
+
+  /**
+   * How many cameras this device has, for the flip button.
+   *
+   * Called when the camera goes on rather than at connect: before then we may have no
+   * permission and no reason to ask, and after it the labels (and the count) are reliable.
+   */
+  async function countCameras() {
+    try {
+      const devices = await navigator.mediaDevices.enumerateDevices()
+      cameraCount.value = devices.filter(d => d.kind === 'videoinput').length
+    } catch {
+      // Refused or unimplemented. Nothing to offer, which is the same as one camera.
+      cameraCount.value = 0
+    }
+  }
+
   async function startCamera() {
     if (!inCall.value || isCameraOn.value) return
 
     let capture: MediaStream
     try {
       capture = await navigator.mediaDevices.getUserMedia({
-        video: { width: { ideal: 640 }, height: { ideal: 360 }, frameRate: { ideal: 24 } },
+        video: cameraConstraints(cameraFacing.value),
         // The microphone is already open and already being sent. Opening a second one here
         // is how you end up sending yourself twice, and hearing an echo.
         audio: false,
@@ -2473,7 +2520,52 @@ export function useVoice() {
     await renegotiateAll()
 
     cameraStream.value = markRaw(capture)
+    void countCameras()
     await publishState()
+  }
+
+  /**
+   * Turn round: swap the front camera for the back one, or back again.
+   *
+   * A `replaceTrack` into the slot the old camera was already in, so there's no renegotiation
+   * and nobody at the far end sees so much as a flicker — the picture simply changes. The old
+   * track is stopped only *after* the new one is open, so a device that refuses the other
+   * facing (or is busy) leaves you exactly as you were rather than with the camera off.
+   */
+  async function switchCamera() {
+    if (!isCameraOn.value) return
+
+    const next = cameraFacing.value === 'user' ? 'environment' : 'user'
+
+    let capture: MediaStream
+    try {
+      capture = await navigator.mediaDevices.getUserMedia({ video: cameraConstraints(next), audio: false })
+    } catch {
+      error.value = 'We couldn\'t reach that camera.'
+      return
+    }
+
+    const track = capture.getVideoTracks()[0] ?? null
+    if (!track) return
+
+    track.contentHint = 'motion'
+    track.onended = () => { void stopCamera() }
+
+    await Promise.all([...handles.values()].map(async (handle) => {
+      const sender = handle.cameraTransceiver?.sender
+      // Same slot, same direction, same encodings — only the source changes, which is why
+      // this needs none of the renegotiation dance startCamera does.
+      if (sender) await sender.replaceTrack(track).catch(() => {})
+    }))
+
+    const previous = cameraTrack
+    cameraTrack = track
+    cameraFacing.value = next
+    // Old capture down only now, and the whole stream: a MediaStream holding a stopped track
+    // still renders its last frame in the self-view.
+    previous?.stop()
+    cameraStream.value?.getTracks().forEach(t => t.stop())
+    cameraStream.value = markRaw(capture)
   }
 
   async function stopCamera() {
@@ -2606,6 +2698,8 @@ export function useVoice() {
     inCall,
     isSharing,
     isCameraOn,
+    cameraFacing,
+    canSwitchCamera,
     isAudioSharing,
     sharingPeer,
     voiceEffects,
@@ -2657,6 +2751,7 @@ export function useVoice() {
     controlChannelReady,
     probeDisplayCapture,
     toggleCamera,
+    switchCamera,
     disconnectUser,
     disconnectAll,
     disconnectedByModerator,

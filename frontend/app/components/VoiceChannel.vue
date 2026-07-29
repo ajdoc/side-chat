@@ -13,6 +13,7 @@ import {
   PhoneOff,
   ScreenShare,
   ScreenShareOff,
+  SwitchCamera,
   UserX,
   Video,
   VideoOff,
@@ -93,6 +94,9 @@ const {
   screenShareUnavailableReason,
   probeDisplayCapture,
   toggleCamera,
+  switchCamera,
+  canSwitchCamera,
+  cameraFacing,
   disconnectUser,
   disconnectAll,
   muteUser,
@@ -503,7 +507,11 @@ const deafenedCount = computed(() => waiting.value.filter(p => p.deafened).lengt
           </div>
         </section>
 
-        <div class="grid max-h-[38vh] grid-cols-[repeat(auto-fill,minmax(170px,1fr))] gap-2 overflow-y-auto">
+        <!-- Tiles are wider than they were, because a tile with a camera in it is now 16:9
+             rather than an 80px circle. `min(100%,220px)` is what keeps that honest on a
+             phone: the track floor can never exceed the column, so a 390px screen gets one
+             full-width tile instead of a 220px one with its controls squashed beside it. -->
+        <div class="grid max-h-[55vh] grid-cols-[repeat(auto-fill,minmax(min(100%,220px),1fr))] gap-2 overflow-y-auto">
           <VoiceTile
             :peer="selfPeer"
             self
@@ -574,6 +582,18 @@ const deafenedCount = computed(() => waiting.value.filter(p => p.deafened).lengt
         >
           <VideoOff v-if="isCameraOn" class="h-4 w-4" />
           <Video v-else class="h-4 w-4" />
+        </Button>
+
+        <!-- Front camera or back one. Only while a camera is actually on (there's nothing to
+             flip otherwise) and only on a device with more than one — see canSwitchCamera. -->
+        <Button
+          v-if="isCameraOn && canSwitchCamera"
+          variant="secondary"
+          size="icon"
+          :title="cameraFacing === 'user' ? 'Switch to the back camera' : 'Switch to the front camera'"
+          @click="switchCamera"
+        >
+          <SwitchCamera class="h-4 w-4" />
         </Button>
 
         <!--

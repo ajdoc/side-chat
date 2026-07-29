@@ -20,6 +20,7 @@ import {
   Lock,
   Shirt,
   Sofa,
+  SwitchCamera,
   Users,
   Video,
   VideoOff,
@@ -113,6 +114,9 @@ const {
   toggleScreenShare,
   toggleAudioShare,
   toggleCamera,
+  switchCamera,
+  canSwitchCamera,
+  cameraFacing,
   isAudioSharing,
   setProximityMode,
   setPeerProximity,
@@ -524,11 +528,28 @@ const { width: stageHeight, startResize } = useResizable('space-stage', 420, {
  * controls you reach for mid-conversation (mic, and the way out) and folds the rest into a
  * menu, and the dock moves under the room instead of beside it.
  *
- * Same `(max-width: 767px)` question the sidebar asks, deliberately: this is about the width of
- * the window, not about which shell it is. A desktop window dragged narrow gets the same
- * treatment, and a tablet in landscape keeps the full row.
+ * The question is asked of *this component's own width*, not the window's — which is the fix for
+ * a room in a split view. The window there is as wide as it ever was, so the window-width answer
+ * was "plenty of room" while the room itself had 40% of it, and the header laid out for a desktop
+ * ran the mic, the people button and Leave straight over the room's name. A container measures
+ * what's actually there, so a room folds its toolbar whether it's narrow because the phone is or
+ * because you docked something beside it.
+ *
+ * The window's own answer is still honoured as a floor: a phone is narrow before this component
+ * has been measured at all, and a first paint with nine buttons in the header is the flash we're
+ * avoiding.
  */
-const { narrow } = useNavDrawer()
+const { narrow: windowNarrow } = useNavDrawer()
+
+/** This component's width, watched — see `narrow` below. 0 until the first observation. */
+const stageWidth = ref(0)
+const root = ref<HTMLElement | null>(null)
+
+/**
+ * 640px, not the sidebar's 767: the header is the only thing being folded here, and it fits
+ * comfortably in a pane that would still be too narrow to put a sidebar beside.
+ */
+const narrow = computed(() => windowNarrow.value || (stageWidth.value > 0 && stageWidth.value < 640))
 
 /** The folded-away half of the toolbar, open. Narrow windows only — wide ones show it inline. */
 const showMore = ref(false)
@@ -611,6 +632,7 @@ let lastAt = 0
  */
 let openedAt = performance.now()
 let ro: ResizeObserver | undefined
+let widthRo: ResizeObserver | undefined
 let cssW = 0
 let cssH = 0
 const camera = reactive<Camera>({ x: 0, y: 0, zoom: 1, width: 0, height: 0 })
@@ -1656,6 +1678,12 @@ onMounted(async () => {
   ro = new ResizeObserver(resize)
   if (wrap.value) ro.observe(wrap.value)
 
+  // How much room the room itself has, which is what decides whether the header folds. Its own
+  // observer rather than a branch inside `resize`: that one is about the canvas' backing store
+  // and runs on the drawing element, and this is about the component's outer width.
+  widthRo = new ResizeObserver(([entry]) => { stageWidth.value = entry?.contentRect.width ?? 0 })
+  if (root.value) widthRo.observe(root.value)
+
   // Walked in earlier and only now come back to look at it. The map has to be loaded first —
   // `place` needs to know which tiles you're allowed to stand on.
   reattach()
@@ -1682,6 +1710,7 @@ onBeforeUnmount(() => {
   stopRoomEvents = undefined
   effects.length = 0
   ro?.disconnect()
+  widthRo?.disconnect()
   probe?.remove()
   probe = null
   palette = null
@@ -1724,22 +1753,30 @@ watch(inThisRoom, (now) => {
     explicit height in one case and `min-h-0 flex-1` in the other.
   -->
   <div
+    ref="root"
     class="relative flex flex-col border-b bg-muted/20"
     :class="chatHidden ? 'min-h-0 flex-1' : 'shrink-0'"
     :style="chatHidden ? undefined : { height: `${stageHeight}px` }"
   >
     <!-- Header: what room this is, who's in it, and the way in or out. -->
     <div class="flex h-11 shrink-0 items-center justify-between gap-2 px-3">
-      <div class="flex min-w-0 items-center gap-2 text-sm">
+      <!--
+        The name and its trimmings scroll sideways rather than push the controls off the
+        header. Everything in here is `shrink-0` by nature (a badge, a count, a zone pill), so
+        without somewhere to overflow *to* they simply ran over the mic and Leave buttons in a
+        narrow pane. `min-w-0` is what lets this strip give up width in the first place.
+      -->
+      <div class="scroll-strip flex min-w-0 flex-1 items-center gap-2 text-sm [&>*]:shrink-0">
         <MapIcon class="h-4 w-4 shrink-0 text-muted-foreground" />
         <span class="truncate font-medium">{{ map?.name ?? channel.name }}</span>
-        <AlphaBadge stage="Beta" hint="Proximity audio and the room editor are still settling — expect rough edges." />
+        <!-- A "we're still building this" note is the first thing to go when room is short. -->
+        <AlphaBadge v-if="!narrow" stage="Beta" hint="Proximity audio and the room editor are still settling — expect rough edges." />
         <span class="flex shrink-0 items-center gap-1 text-xs text-muted-foreground">
           <Users class="h-3.5 w-3.5" /> {{ occupantCount }}
         </span>
         <span
           v-if="currentZone"
-          class="shrink-0 rounded-full bg-primary/10 px-2 py-0.5 text-[11px] font-medium text-primary"
+          class="max-w-[10rem] shrink-0 truncate rounded-full bg-primary/10 px-2 py-0.5 text-[11px] font-medium text-primary"
           :title="`Everyone in ${currentZone.name} hears each other, and nobody outside it can`"
         >{{ currentZone.name }}</span>
       </div>
@@ -1827,6 +1864,17 @@ watch(inThisRoom, (now) => {
             >
               <component :is="isCameraOn ? Video : VideoOff" class="h-4 w-4 shrink-0" />
               <span v-if="narrow">{{ isCameraOn ? 'Turn camera off' : 'Turn camera on' }}</span>
+            </button>
+            <!-- Front camera or back one — only while one is on, and only where there are two. -->
+            <button
+              v-if="isCameraOn && canSwitchCamera"
+              type="button"
+              :class="[toolClass, 'text-muted-foreground hover:text-foreground']"
+              :title="cameraFacing === 'user' ? 'Switch to the back camera' : 'Switch to the front camera'"
+              @click="fromMenu(switchCamera)"
+            >
+              <SwitchCamera class="h-4 w-4 shrink-0" />
+              <span v-if="narrow">{{ cameraFacing === 'user' ? 'Back camera' : 'Front camera' }}</span>
             </button>
             <button
               type="button"

@@ -45,6 +45,11 @@ function initials(name: string) {
 const { nameFor } = useNicknames()
 const peerName = computed(() => nameFor(props.peer))
 
+// A camera we actually have a picture for. `cameraOn` is what they *say* they're doing and
+// arrives over the whisper channel; the stream turns up a moment later over WebRTC, and for
+// that moment a tile sized for video would be an empty black box.
+const onCamera = computed(() => props.peer.cameraOn && !!props.peer.camera)
+
 const volumeLabel = computed(() => `${Math.round(props.peer.volume * 100)}%`)
 const shareLabel = computed(() => `${Math.round(props.peer.screenVolume * 100)}%`)
 </script>
@@ -54,21 +59,27 @@ const shareLabel = computed(() => `${Math.round(props.peer.screenVolume * 100)}%
     class="flex flex-col items-center gap-3 rounded-xl border bg-card p-4 transition-colors"
     :class="watching ? 'border-primary' : 'border-border'"
   >
-    <div class="relative">
+    <div class="relative" :class="onCamera && 'w-full'">
       <!--
-        On camera: their face, in the same footprint the avatar occupied, so a tile doesn't
-        jump about the grid when somebody turns a camera on mid-sentence.
+        On camera: their face, as large as the tile is wide.
+
+        It used to be squeezed into the 80px circle the avatar occupies, on the theory that a
+        tile shouldn't jump about the grid when somebody turns a camera on mid-sentence. That
+        was the wrong thing to protect: a face at 80px is a thumbnail, unreadable on a phone,
+        and the reflow it avoided happens once. So a camera claims the tile's full width at
+        16:9 — the shape a camera actually produces — and the avatar circle is unchanged for
+        everyone who isn't on one.
 
         Your own is mirrored. Everyone expects to see themselves the way a mirror shows
         them, and nobody else's view is flipped — this is a fact about self-view, not about
         the stream, so it stops at the CSS.
       -->
       <div
-        v-if="peer.cameraOn && peer.camera"
-        class="h-20 w-20 overflow-hidden rounded-full ring-2 transition-all"
+        v-if="onCamera"
+        class="aspect-video w-full overflow-hidden rounded-lg bg-black ring-2 transition-all"
         :class="speaking ? 'ring-green-500' : 'ring-transparent'"
       >
-        <VoiceVideo :stream="peer.camera" fit="cover" :class="self ? '-scale-x-100' : ''" />
+        <VoiceVideo :stream="peer.camera!" fit="cover" :class="self ? '-scale-x-100' : ''" />
       </div>
 
       <div
@@ -83,7 +94,8 @@ const shareLabel = computed(() => `${Math.round(props.peer.screenVolume * 100)}%
       <!-- Their own choices, as broadcast to everyone. -->
       <span
         v-if="muted"
-        class="absolute -bottom-1 -right-1 grid h-7 w-7 place-items-center rounded-full bg-destructive text-destructive-foreground"
+        class="absolute grid h-7 w-7 place-items-center rounded-full bg-destructive text-destructive-foreground"
+        :class="onCamera ? 'bottom-1 right-1' : '-bottom-1 -right-1'"
         :title="self ? 'Your microphone is off' : `${peerName} muted their microphone`"
       >
         <MicOff class="h-3.5 w-3.5" />
@@ -96,7 +108,8 @@ const shareLabel = computed(() => `${Math.round(props.peer.screenVolume * 100)}%
       -->
       <span
         v-if="peer.deafened"
-        class="absolute -bottom-1 -left-1 grid h-7 w-7 place-items-center rounded-full bg-destructive text-destructive-foreground"
+        class="absolute grid h-7 w-7 place-items-center rounded-full bg-destructive text-destructive-foreground"
+        :class="onCamera ? 'bottom-1 left-1' : '-bottom-1 -left-1'"
         :title="self ? 'You have everyone silenced' : `${peerName} is deafened — they can't hear the call`"
       >
         <HeadphoneOff class="h-3.5 w-3.5" />
@@ -104,14 +117,16 @@ const shareLabel = computed(() => `${Math.round(props.peer.screenVolume * 100)}%
 
       <span
         v-if="!self && peer.connection === 'connecting'"
-        class="absolute -left-1 -top-1 grid h-6 w-6 place-items-center rounded-full bg-muted text-muted-foreground"
+        class="absolute grid h-6 w-6 place-items-center rounded-full bg-muted text-muted-foreground"
+        :class="onCamera ? 'left-1 top-1' : '-left-1 -top-1'"
         title="Connecting…"
       >
         <Loader2 class="h-3.5 w-3.5 animate-spin" />
       </span>
       <span
         v-else-if="!self && peer.connection === 'failed'"
-        class="absolute -left-1 -top-1 grid h-6 w-6 place-items-center rounded-full bg-destructive text-destructive-foreground"
+        class="absolute grid h-6 w-6 place-items-center rounded-full bg-destructive text-destructive-foreground"
+        :class="onCamera ? 'left-1 top-1' : '-left-1 -top-1'"
         title="Connection lost — retrying"
       >
         <WifiOff class="h-3.5 w-3.5" />

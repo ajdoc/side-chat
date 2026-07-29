@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ExternalLink, Hash, Map as MapIcon, Volume2, X } from 'lucide-vue-next'
+import { ExternalLink, Hash, Info, LayoutPanelLeft, Map as MapIcon, MessagesSquare, Volume2, X } from 'lucide-vue-next'
 import type { SplitPane } from '~/composables/useSplitView'
 import { Button } from '~/components/ui/button'
 import { provideLocalSurfaceRoute } from '~/composables/useSurfaceRoute'
@@ -22,7 +22,31 @@ const props = defineProps<{ pane: SplitPane }>()
 const emit = defineEmits<{ close: [], promote: [] }>()
 
 // Seeded empty: a freshly docked channel shows its conversation, not somebody's last thread.
-const { state: surfaceState } = provideLocalSurfaceRoute()
+const { state: surfaceState, patch: patchSurface, replace: replaceSurface } = provideLocalSurfaceRoute()
+
+/**
+ * Open one of the channel's side surfaces *in the dock*.
+ *
+ * Deliberately the same rules the channel page follows: Threads stands beside whatever else is
+ * up (a side chat keeps its column) and clears the full-column pair, while Info and the Side
+ * Desk each replace the lot — they're full-column surfaces and there's no room in a dock for
+ * two of those. Toggling: pressing the button a surface is already showing puts it away, which
+ * matters more here than on the page, where the alternative is a column you can't dismiss
+ * without a keyboard shortcut you'd have to know about.
+ */
+function openThreads() {
+  if (surfaceState.value.threads || surfaceState.value.thread) {
+    patchSurface({ threads: null, thread: null, from: null })
+    return
+  }
+  patchSurface({ threads: '1', thread: null, from: null, info: null, desk: null })
+}
+function openInfo() {
+  replaceSurface(surfaceState.value.info === '1' ? {} : { info: '1' })
+}
+function openDesk() {
+  replaceSurface(surfaceState.value.desk ? {} : { desk: 'canvas' })
+}
 
 /**
  * A second set of the channel-scoped stores — side chats, threads, pins, forum groups.
@@ -112,7 +136,26 @@ const isVoice = computed(() => props.pane.type === 'voice')
       </template>
 
       <template #actions>
+        <!--
+          The same four the channel page carries. They were missing here for no better reason
+          than that the page owns them and the dock isn't the page — so a docked channel could
+          show a thread or the Side Desk (the panels read the pane's own surface route quite
+          happily) but had no way to open one. These write that local route instead of
+          navigating, which is the whole of the difference.
+
+          Icons only, always: the dock is the narrow half by definition, and four labelled
+          buttons plus a title don't fit in it even on a wide monitor.
+        -->
         <SideChatsButton :channel-id="channel.id" />
+        <Button variant="ghost" size="sm" class="gap-2 px-2 text-muted-foreground" title="Threads" @click="openThreads">
+          <MessagesSquare class="h-4 w-4" />
+        </Button>
+        <Button variant="ghost" size="sm" class="gap-2 px-2 text-muted-foreground" title="Side Desk" @click="openDesk">
+          <LayoutPanelLeft class="h-4 w-4" />
+        </Button>
+        <Button variant="ghost" size="sm" class="gap-2 px-2 text-muted-foreground" title="Info" @click="openInfo">
+          <Info class="h-4 w-4" />
+        </Button>
       </template>
 
       <!-- The room / the call, replaced by the door to it. Occupies the same slot the real
