@@ -14,9 +14,14 @@ final class MessageService
     /**
      * Latest page of a channel's main timeline; `before` walks backwards in time.
      *
-     * @return array{messages: Collection, has_more: bool}
+     * `around` is the other way in, and it exists for search: clicking a result from March
+     * has to land on that message with the conversation either side of it, which no amount
+     * of paging backwards from today will reach in reasonable time. Mutually exclusive with
+     * `before` — you are either walking the timeline or jumping into it.
+     *
+     * @return array{messages: Collection, has_more: bool, has_newer: bool}
      */
-    public function forChannel(Channel $channel, ?int $before = null): array
+    public function forChannel(Channel $channel, ?int $before = null, ?int $around = null): array
     {
         $query = $channel->messages()
             ->whereNull('thread_id')    // thread replies live in their thread
@@ -29,7 +34,9 @@ final class MessageService
             ])
             ->orderByDesc('id');
 
-        return $this->keyset($query, $before);
+        return $around !== null
+            ? $this->around($query, $around)
+            : $this->keyset($query, $before);
     }
 
     /**
@@ -82,6 +89,38 @@ final class MessageService
         return [
             'messages' => $rows->take(self::PER_PAGE)->reverse()->values(),
             'has_more' => $rows->count() > self::PER_PAGE,
+            // The plain page always ends at the newest message, so there is never anything
+            // below it. Only a jump (see below) can land mid-timeline.
+            'has_newer' => false,
+        ];
+    }
+
+    /**
+     * A window centred on one message — half the page either side of it.
+     *
+     * Two queries rather than one clever one: "the 100 messages before id X" and "the 100
+     * from X onwards" are different sorts in different directions, and expressing that as a
+     * single statement costs a union and a subquery to save a round trip nobody is counting.
+     *
+     * The target itself comes from the *newer* half, so a jump to a message that has since
+     * been deleted returns the conversation around where it was rather than an empty page —
+     * the client scrolls to the nearest id it got and highlights nothing.
+     *
+     * @return array{messages: Collection, has_more: bool, has_newer: bool}
+     */
+    private function around($query, int $target): array
+    {
+        $half = (int) (self::PER_PAGE / 2);
+
+        $older = (clone $query)->where('id', '<', $target)->limit($half + 1)->get();
+        $newer = (clone $query)->where('id', '>=', $target)->reorder('id')->limit($half + 1)->get();
+
+        return [
+            'messages' => $older->take($half)->reverse()
+                ->concat($newer->take($half))
+                ->values(),
+            'has_more' => $older->count() > $half,
+            'has_newer' => $newer->count() > $half,
         ];
     }
 }

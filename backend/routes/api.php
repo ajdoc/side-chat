@@ -31,6 +31,7 @@ use App\Http\Controllers\PreferencesController;
 use App\Http\Controllers\ProfileController;
 use App\Http\Controllers\ReactionController;
 use App\Http\Controllers\ReadReceiptController;
+use App\Http\Controllers\SearchController;
 use App\Http\Controllers\ServerController;
 use App\Http\Controllers\SideChatController;
 use App\Http\Controllers\SideChatForumController;
@@ -100,6 +101,15 @@ Route::middleware('auth:api')->group(function () {
     Route::post('uploads/{upload:uuid}/complete', [ChunkedUploadController::class, 'complete']);
     Route::delete('uploads/{upload:uuid}', [ChunkedUploadController::class, 'destroy']);
 });
+
+/*
+ * Search, across everything the caller can see: messages, channels, servers, DMs and group
+ * chats. One route rather than one per kind — see SearchController for why the command
+ * palette makes that the only workable shape. Needs no membership middleware: every query
+ * behind it is built from the caller's visible set (Channel::scopeVisibleTo), so an
+ * unauthorised scope narrows the results to nothing rather than needing to be refused.
+ */
+Route::middleware('auth:api')->get('search', SearchController::class);
 
 // Servers, channels, and messages.
 Route::middleware('auth:api')->group(function () {

@@ -82,6 +82,33 @@ class Message extends Model
         $query->whereNotNull('pinned_at');
     }
 
+    /**
+     * Every message this person may read.
+     *
+     * Two gates, because a message's home is not always its channel. The channel gate is
+     * {@see Channel::scopeVisibleTo} exactly, as a subquery. The second gate is the side
+     * chat: a side chat is a *private* room hanging off a channel everyone can see, so
+     * "you're in the channel" is not the answer — a message with `side_chat_id` set is
+     * yours to read only if you're on that side chat's roster.
+     *
+     * Thread replies need no gate of their own: a thread is open to whoever holds the
+     * surface it hangs off, which the first two clauses have already settled.
+     *
+     * @param  Builder<Message>  $query
+     */
+    public function scopeVisibleTo(Builder $query, User $user): void
+    {
+        $query
+            ->whereIn('channel_id', Channel::query()->visibleTo($user)->select('channels.id'))
+            ->where(function (Builder $q) use ($user) {
+                $q->whereNull('side_chat_id')
+                    ->orWhereExists(fn ($exists) => $exists
+                        ->from('side_chat_user')
+                        ->whereColumn('side_chat_user.side_chat_id', 'messages.side_chat_id')
+                        ->where('side_chat_user.user_id', $user->getKey()));
+            });
+    }
+
     /** Recorded as a decision — the ✅ count on a side chat's card. Same shape as a pin. */
     public function isDecision(): bool
     {

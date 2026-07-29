@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ArrowDown, Loader2, Menu, PictureInPicture2, X } from 'lucide-vue-next'
+import { ArrowDown, Loader2, Menu, PictureInPicture2, Search, X } from 'lucide-vue-next'
 import type { Channel, GifResult, Message } from '~/types'
 import type { FloatingConversationIcon } from '~/composables/useFloatingWindows'
 import { Button } from '~/components/ui/button'
@@ -51,7 +51,7 @@ const emit = defineEmits<{ read: [] }>()
 const surface = useSurfaceRoute()
 const query = surface.query
 const { user } = useAuth()
-const { messages, hasMore, loadingOlder, load, loadOlder, ensureLoaded, send, edit, remove, toggleReaction, togglePin, subscribe, unsubscribe } = useMessages()
+const { messages, hasMore, hasNewer, loadingOlder, load, loadOlder, ensureLoaded, jumpTo, returnToLatest, send, edit, remove, toggleReaction, togglePin, subscribe, unsubscribe } = useMessages()
 const {
   readersByMessage,
   load: loadReads,
@@ -97,6 +97,7 @@ const threadPanelOpen = computed(() => !!(query.value.thread || query.value.thre
 const sideChatThreadPanelOpen = computed(() => !!(query.value.scthread || query.value.scthreads))
 const sideChatPanelOpen = computed(() => !!(query.value.sidechat || query.value.sidechats))
 const infoPanelOpen = computed(() => query.value.info === '1')
+const searchPanelOpen = computed(() => query.value.search === '1')
 const deskPanelOpen = computed(() => !!query.value.desk)
 // The open side chat's id, when one is in view mode — it scopes an alongside thread column
 // to that side chat rather than the channel.
@@ -165,20 +166,52 @@ function scrollToBottom() {
   nextTick(() => step(60))
 }
 
-function jumpToLatest() {
+/**
+ * Back to the live end.
+ *
+ * Two different journeys behind one button. Usually the newest message is already loaded
+ * and this is a scroll. After a search jump it isn't: the loaded window sits somewhere in
+ * history with unfetched messages below it, so getting back is a refetch first.
+ */
+async function jumpToLatest() {
+  if (hasNewer.value) {
+    await returnToLatest()
+    await nextTick()
+  }
   scrollToBottom()
 }
 
-// Jump to a message referenced by a reply, paging in older history first if needed.
-async function onJumpToReply(id: number) {
-  const found = await ensureLoaded(id)
-  if (!found) return // message was deleted or otherwise unavailable
+/** Put the view on a message that is already loaded, and flash it. */
+function revealLoaded(id: number) {
   const idx = messages.value.findIndex(m => m.id === id)
   if (idx < 0) return
   nextTick(() => scroller.value?.scrollToItem(idx))
   clearTimeout(highlightTimer)
   highlightedMessageId.value = id
   highlightTimer = setTimeout(() => { highlightedMessageId.value = null }, 1500)
+}
+
+// Jump to a message referenced by a reply, paging in older history first if needed.
+async function onJumpToReply(id: number) {
+  const found = await ensureLoaded(id)
+  if (!found) return // message was deleted or otherwise unavailable
+  revealLoaded(id)
+}
+
+/**
+ * Jump to a search result — which may be thousands of messages back, or in another channel.
+ *
+ * Paging backwards (what a reply's jump does) is hopeless at that distance, so this
+ * re-anchors the loaded window on the message instead. A result in a *different* channel is
+ * a navigation, not a jump: the row is a link, and the destination page picks the message up
+ * from `?jump=` as it mounts.
+ */
+async function onJumpToSearchResult(id: number, targetChannelId: number) {
+  if (targetChannelId !== props.channel.id) return
+  const found = await jumpTo(id)
+  // Deleted since it was indexed — the window still lands where it was, so say nothing and
+  // leave the reader where the message used to be rather than bouncing them back.
+  if (found) revealLoaded(id)
 }
 
 /**
@@ -190,6 +223,17 @@ async function onJumpToReply(id: number) {
  */
 function patchQuery(patch: Record<string, string | null>) {
   surface.patch({ info: null, desk: null, ...patch })
+}
+
+/**
+ * Open or close the search column.
+ *
+ * Not routed through patchQuery: that clears `info` and `desk` on the way past, which is
+ * right for a thread (it takes precedence over them) and wrong here — search is a peer of
+ * those two, and the template already decides which of the three gets the column.
+ */
+function toggleSearchPanel() {
+  surface.patch({ search: searchPanelOpen.value ? null : '1', info: null, desk: null })
 }
 
 function onCreateThread(messageId: number) {
@@ -236,6 +280,19 @@ async function openChannel(id: number) {
   subscribeTyping(`channel.${id}`)
   markRead(messages.value.at(-1)?.id ?? null)
   emit('read')
+
+  // Arrived from a search result in another channel: the palette put the message id in the
+  // URL because the page it navigates to mounts its own timeline, and this is the only
+  // moment that timeline exists and knows where it was asked to land.
+  const jump = Number(query.value.jump)
+  if (jump) {
+    // Consumed, not kept: a reload of this URL an hour later should show the conversation,
+    // not silently re-anchor on a message the reader has long since dealt with.
+    surface.patch({ jump: null })
+    await onJumpToSearchResult(jump, id)
+    return
+  }
+
   scrollToBottom()
 }
 
@@ -344,6 +401,18 @@ onBeforeUnmount(() => {
              buttons would just compress to fit and never overflow the strip. -->
         <div class="scroll-strip flex max-w-[65%] shrink items-center gap-1 [&>*]:shrink-0 md:max-w-none md:shrink-0 md:overflow-visible">
           <slot name="actions" />
+          <!-- Search this conversation. First in the action strip, before the slotted
+               buttons, so it keeps the same spot in a channel, a DM and a Side Space rather
+               than sliding around with whatever else that surface offers. -->
+          <button
+            type="button"
+            class="rounded p-1.5 transition-colors hover:bg-muted"
+            :class="searchPanelOpen ? 'bg-muted text-foreground' : 'text-muted-foreground hover:text-foreground'"
+            title="Search this conversation"
+            @click="toggleSearchPanel"
+          >
+            <Search class="h-4 w-4" />
+          </button>
           <button
             v-if="!isMobile"
             type="button"
@@ -430,7 +499,11 @@ onBeforeUnmount(() => {
         </ClientOnly>
 
         <!-- Jump to latest: only while you're reading history, so it never covers the newest
-             message. Carries a dot when something arrived below you while you were up here. -->
+             message. Carries a dot when something arrived below you while you were up here.
+
+             `hasNewer` forces it on regardless of scroll position: after a search jump the
+             loaded window ends mid-history, so you can be at the bottom of it and still be
+             months behind — and this pill is the only way back. -->
         <Transition
           enter-active-class="transition duration-150"
           leave-active-class="transition duration-150"
@@ -438,7 +511,7 @@ onBeforeUnmount(() => {
           leave-to-class="translate-y-2 opacity-0"
         >
           <button
-            v-if="!atBottom"
+            v-if="!atBottom || hasNewer"
             type="button"
             class="absolute bottom-3 right-4 z-10 flex items-center gap-1.5 rounded-full border bg-background px-3 py-1.5 text-xs font-medium shadow-md hover:bg-muted"
             @click="jumpToLatest"
@@ -481,15 +554,23 @@ onBeforeUnmount(() => {
       :side-chat-id="activeSideChatId"
     />
 
+    <!-- Searching this conversation. Like Info and Side Desk it takes the whole side column,
+         so it yields to a thread or a side chat rather than stacking beside them. -->
+    <SearchPanel
+      v-if="searchPanelOpen && !threadPanelOpen && !sideChatPanelOpen"
+      :channel-id="channelId"
+      @jump="onJumpToSearchResult"
+    />
+
     <!-- Info and Side Desk each take the whole side column, so they yield to a thread or a
          side chat rather than stack beside them. Info reuses the reply-jump. -->
     <ChannelInfoPanel
-      v-if="infoPanelOpen && !threadPanelOpen && !sideChatPanelOpen"
+      v-if="infoPanelOpen && !threadPanelOpen && !sideChatPanelOpen && !searchPanelOpen"
       :channel-id="channelId"
       @jump="onJumpToReply"
     />
     <SideDeskPanel
-      v-if="deskPanelOpen && !threadPanelOpen && !sideChatPanelOpen"
+      v-if="deskPanelOpen && !threadPanelOpen && !sideChatPanelOpen && !searchPanelOpen"
       :channel-id="channelId"
       @jump="onJumpToReply"
     />

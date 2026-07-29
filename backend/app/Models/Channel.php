@@ -4,6 +4,7 @@ namespace App\Models;
 
 use App\Contracts\MessageContainer;
 use Database\Factories\ChannelFactory;
+use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
@@ -182,6 +183,41 @@ class Channel extends Model
 
         return ($container instanceof Server && $container->isStaff($user))
             || $this->allowedMembers()->whereKey($user->getKey())->exists();
+    }
+
+    /**
+     * Every channel this person may read, as a query rather than an answer.
+     *
+     * The set-shaped twin of {@see hasMember}: that one asks about a channel you already
+     * hold, this one asks for all of them at once. Search needs the second form — "which of
+     * the million messages in this database may you see" cannot be answered a row at a
+     * time — and the two must agree exactly, or search becomes the one door in the app with
+     * a different lock on it. So the clauses below are hasMember's, in the same order:
+     * container membership, then the private channel's own allow-list, with a server's
+     * staff let through because the people who set the lock keep the key.
+     *
+     * Left as a subquery on purpose. `whereIn('channel_id', Channel::visibleTo($user)
+     * ->select('id'))` is one round trip and one plan; plucking the ids first is a second
+     * query whose answer is stale the moment it lands.
+     */
+    public function scopeVisibleTo(Builder $query, User $user): void
+    {
+        $query->where(function (Builder $q) use ($user) {
+            $q->where(function (Builder $inServer) use ($user) {
+                $inServer
+                    ->whereIn('server_id', $user->servers()->select('servers.id'))
+                    ->where(function (Builder $access) use ($user) {
+                        $access
+                            ->where('is_private', false)
+                            ->orWhereIn('server_id', Server::where('owner_id', $user->getKey())->select('id'))
+                            ->orWhereIn('server_id', $user->servers()->wherePivot('role', Server::ROLE_ADMIN)->select('servers.id'))
+                            ->orWhereExists(fn ($exists) => $exists
+                                ->from('channel_user')
+                                ->whereColumn('channel_user.channel_id', 'channels.id')
+                                ->where('channel_user.user_id', $user->getKey()));
+                    });
+            })->orWhereIn('conversation_id', $user->conversations()->select('conversations.id'));
+        });
     }
 
     public function isText(): bool

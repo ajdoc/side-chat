@@ -1092,3 +1092,84 @@ export interface AmongUsState {
   task_done: number
   winner: null | 'crew' | 'impostor'
 }
+
+/**
+ * Where a search result was found.
+ *
+ * On a timeline a message needs no context — you're looking at the place it lives. Pulled
+ * out of that place it's nearly useless without one, so every message result carries the
+ * channel, the server or chat above it, and the branch it was said on.
+ */
+export interface SearchContext {
+  channel_id: number
+  channel_name: string
+  channel_type: ChannelType
+  server_id: number | null
+  server_name: string | null
+  conversation_id: number | null
+  conversation_type: ConversationType | null
+  /** A DM has no name — title it from these, exactly as the sidebar does. */
+  conversation_members: User[] | null
+  thread_id: number | null
+  thread_name?: string | null
+  side_chat_id: number | null
+  side_chat_name?: string | null
+}
+
+/** A message as a search result: the ordinary payload plus where it came from. */
+export interface SearchMessage extends Message {
+  context: SearchContext
+}
+
+/**
+ * A named place inside a channel, as a search result: a side chat, a thread, or the group a
+ * side chat list folds under.
+ *
+ * One shape for three models because from the searcher's side they're three spellings of
+ * the same thing — a titled place you open by clicking it. `kind` is what the client routes
+ * on. See the backend's SearchSurfaceResource.
+ */
+export interface SearchSurface {
+  kind: 'side_chat' | 'thread' | 'side_chat_group'
+  id: number
+  name: string
+  channel_id: number
+  channel_name: string
+  server_id: number | null
+  conversation_id: number | null
+  /** A DM has no name — title it from these, exactly as the sidebar does. */
+  conversation_members: User[] | null
+  /** Side chats only: the group it's filed under, or null for Uncategorised. */
+  group_id?: number | null
+  group_name?: string | null
+  /** Threads only: set when the thread belongs to a side chat rather than the channel. */
+  side_chat_id?: number | null
+  side_chat_name?: string | null
+  created_at: string
+}
+
+/** The command palette's answer — a few of each kind, grouped, never interleaved. */
+export interface SearchResults {
+  conversations: Conversation[]
+  channels: Channel[]
+  side_chats: SearchSurface[]
+  threads: SearchSurface[]
+  side_chat_groups: SearchSurface[]
+  servers: Server[]
+  messages: SearchMessage[]
+}
+
+/** What `has:` may narrow a message search to. */
+export type SearchHas = 'link' | 'file' | 'image'
+
+/** The narrowing half of a search, as the filter chips express it. */
+export interface SearchFilters {
+  channel_id?: number
+  server_id?: number
+  conversation_id?: number
+  /** A user id — the `from:` chip. */
+  from?: number
+  after?: string
+  before?: string
+  has?: SearchHas
+}

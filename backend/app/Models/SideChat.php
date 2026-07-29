@@ -2,6 +2,7 @@
 
 namespace App\Models;
 
+use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
@@ -34,6 +35,25 @@ class SideChat extends Model
     public function channel(): BelongsTo
     {
         return $this->belongsTo(Channel::class);
+    }
+
+    /**
+     * Every side chat this person may see, for search.
+     *
+     * The channel gate and nothing more — deliberately weaker than the one on its messages.
+     * A side chat's *card* is public to the channel: SideChatController::index hands the
+     * whole list to any member, which is what puts "Deploy plan — 12 replies, started by
+     * Ana" in the panel and on the timeline for people who never joined. Joining is what
+     * gets you the conversation inside, and that stays gated (see Message::scopeVisibleTo).
+     *
+     * So a title found here is a title already on that person's screen. Anything stricter
+     * would make search the one place in the app that pretends these posts don't exist.
+     *
+     * @param  Builder<SideChat>  $query
+     */
+    public function scopeVisibleTo(Builder $query, User $user): void
+    {
+        $query->whereIn('channel_id', Channel::query()->visibleTo($user)->select('channels.id'));
     }
 
     /**

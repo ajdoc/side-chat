@@ -3,7 +3,7 @@ import {
   AudioLines,
   Check, ChevronDown, ChevronRight, Copy, DoorOpen, Hash, HeadphoneOff, Lock, LogOut,
   Map as MapIcon,
-  MessageSquarePlus, MicOff, Monitor, Moon, Pencil, Phone, Plus, ScreenShare, Shield, Sun, Trash2,
+  MessageSquarePlus, MicOff, Monitor, Moon, Pencil, Phone, Plus, ScreenShare, Search, Shield, Sun, Trash2,
   User, UserPlus, Users, Volume2,
 } from 'lucide-vue-next'
 import { useLocalStorage } from '@vueuse/core'
@@ -256,6 +256,9 @@ watch([expandedIds, servers, activeServerId], () => {
 // which wants a pointer and room to put things.
 const { isMobile } = usePlatform()
 const { narrow, open: drawerOpen, close: closeDrawer } = useNavDrawer()
+// ⌘K. Held by ref rather than a shared flag because the palette owns its own open state and
+// its own shortcut — the sidebar button is one more way in, not the way in.
+const palette = ref<{ show: () => void } | null>(null)
 // The sidebar hides several controls behind hover — a server's settings menu, a channel's
 // rename/delete. On a touch screen that isn't "harder to find", it's unreachable, so those
 // controls stand permanently open for a finger. See useTouch.
@@ -615,6 +618,18 @@ onBeforeUnmount(() => { userStream.unsubscribe(); stopPresence() })
       <div class="flex h-12 shrink-0 items-center gap-2 border-b px-4 font-semibold">
         <img src="/brand/logo.png" alt="" class="h-6 w-6 shrink-0 rounded-md" >
         Side Chat
+        <!-- The palette's discoverable handle. ⌘K is how it will actually be opened once
+             anybody knows it exists, and a phone has no ⌘ at all — so the shortcut is a
+             hint on the button rather than the only way in. -->
+        <button
+          type="button"
+          class="ml-auto flex shrink-0 items-center gap-1.5 rounded-md px-1.5 py-1 text-muted-foreground transition hover:bg-muted hover:text-foreground"
+          title="Search everything (⌘K)"
+          @click="closeDrawer(); palette?.show()"
+        >
+          <Search class="h-4 w-4" />
+          <kbd v-if="!narrow" class="rounded border px-1 text-[10px] font-normal">⌘K</kbd>
+        </button>
       </div>
 
       <div class="min-h-0 flex-1">
@@ -1111,6 +1126,11 @@ onBeforeUnmount(() => { userStream.unsubscribe(); stopPresence() })
     <!-- Dragging windows around needs a pointer and room to put them, so the phone build
          does without the shelf entirely. Desktop keeps it. -->
     <FloatingWindows v-if="!isMobile" />
+
+    <!-- ⌘K. Mounted here, beside the shelf, for the same reason: it has to be reachable from
+         every screen in the app, and the thing it navigates to is usually not the page it was
+         opened from. -->
+    <SearchPalette ref="palette" />
 
     <!-- Who may be in a channel (staff), and who runs the server (owner). Mounted here
          beside the shelf so they survive the sidebar row that opened them being re-rendered. -->

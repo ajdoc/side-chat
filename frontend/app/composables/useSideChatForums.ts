@@ -126,6 +126,18 @@ export function useSideChatForums() {
   }
 
   /**
+   * Unfold a group, without caring whether it was already open.
+   *
+   * For arriving at a group from search: `toggleGroup` would close the one group the person
+   * has just asked to see, half the time, depending on a fold state they set weeks ago and
+   * cannot be expected to remember.
+   */
+  function expandGroup(channelId: number, forumId: number | null) {
+    const key = groupKey(channelId, forumId)
+    collapsed.value = collapsed.value.filter(k => k !== key)
+  }
+
+  /**
    * The posts, cut into the groups the list draws — every group in order, then whatever is
    * left over under "Uncategorised".
    *
@@ -160,6 +172,7 @@ export function useSideChatForums() {
     moveForum,
     isGroupOpen,
     toggleGroup,
+    expandGroup,
     groupPosts,
   }
 }

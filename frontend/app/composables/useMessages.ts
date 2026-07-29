@@ -7,6 +7,9 @@ export function useMessages() {
   const messages = ref<Message[]>([])
   const channelId = ref<number | null>(null)
   const hasMore = ref(false) // older messages exist above the loaded window
+  // …and, after a jump to a search result, unloaded messages *below* it. False everywhere
+  // else: an ordinary page always ends at the newest message. See jumpTo().
+  const hasNewer = ref(false)
   const loadingOlder = ref(false)
   // Shared with useThreads() so the Threads list stays in sync.
   // Every channel-scoped store here is prefixed, so the split view's docked pane keeps its
@@ -28,6 +31,10 @@ export function useMessages() {
   const { open: openFloating } = useFloatingWindows()
 
   function pushUnique(m: Message) {
+    // While parked on a jump the loaded window ends mid-history, so appending a live
+    // arrival would print today's message directly beneath March's with the intervening
+    // months missing. It isn't lost — returning to the latest page refetches it.
+    if (hasNewer.value) return
     if (!messages.value.some(x => x.id === m.id)) {
       messages.value = [...messages.value, m]
     }
@@ -99,6 +106,8 @@ export function useMessages() {
     const res = await api<{ data: Message[], has_more: boolean }>(`/api/channels/${id}/messages`)
     messages.value = res.data
     hasMore.value = res.has_more
+    // A plain load always lands at the live end, which un-does whatever window a jump left.
+    hasNewer.value = false
   }
 
   // Prepend the previous 200 messages. Returns the id of the message that was
@@ -121,7 +130,8 @@ export function useMessages() {
   }
 
   // Page backward until `id` shows up in the loaded window (or history runs out).
-  // Used to jump to a reply's original message when it's older than what's loaded.
+  // Used to jump to a reply's original message when it's older than what's loaded — a
+  // reply's target is nearly always a screen or two up, so a few pages usually finds it.
   async function ensureLoaded(id: number): Promise<boolean> {
     let guard = 0
     while (!messages.value.some(m => m.id === id) && hasMore.value && guard++ < 50) {
@@ -131,11 +141,54 @@ export function useMessages() {
   }
 
   /**
+   * Re-anchor the timeline on one message, wherever in history it is.
+   *
+   * What a search result needs, and what {@link ensureLoaded} can't give it: a hit from
+   * March is thousands of messages back, and paging there would be dozens of round trips
+   * to throw nearly all of it away. So the server returns a window centred on the message
+   * instead (`?around=`) and the loaded range simply *becomes* that window.
+   *
+   * `hasNewer` is the consequence and it has to be tracked: for the first time the timeline
+   * can be sitting somewhere with messages below it that aren't loaded, so "scrolled to the
+   * bottom" no longer means "at the newest message". Live arrivals are dropped while it's
+   * true — appending them would put today's message directly under March's.
+   */
+  async function jumpTo(id: number, targetChannelId?: number): Promise<boolean> {
+    const target = targetChannelId ?? channelId.value
+    if (target == null) return false
+
+    // Already in the loaded window — no need to throw it away and refetch.
+    if (target === channelId.value && messages.value.some(m => m.id === id)) return true
+
+    channelId.value = target
+    const res = await api<{ data: Message[], has_more: boolean, has_newer: boolean }>(
+      `/api/channels/${target}/messages?around=${id}`,
+    )
+    messages.value = res.data
+    hasMore.value = res.has_more
+    hasNewer.value = res.has_newer
+
+    return res.data.some(m => m.id === id)
+  }
+
+  /** Back to the live end of the timeline, dropping whatever window a jump left us in. */
+  async function returnToLatest() {
+    if (channelId.value == null) return
+    await load(channelId.value)
+  }
+
+  /**
    * Post the message — as a run of them when the body is over the per-message limit, one after
    * the other so they land in the order they were written. See {@link buildMessageParts}.
    */
   async function send(body: string, replyToId?: number | null, files: File[] = [], gif?: GifResult | null, uploadIds: string[] = []) {
     if (!channelId.value) return
+    // Writing is leaving: your message belongs at the live end of the conversation, so
+    // typing one abandons whatever historical window a search jump had us parked in. Doing
+    // it here rather than dropping the message keeps `pushUnique`'s guard from swallowing
+    // the one message the user is guaranteed to be looking for.
+    if (hasNewer.value) await returnToLatest()
+
     for (const payload of buildMessageParts({ body, replyToId, files, gif, uploadIds })) {
       const res = await api<{ data: Message }>(`/api/channels/${channelId.value}/messages`, {
         method: 'POST',
@@ -324,5 +377,5 @@ export function useMessages() {
     release(`channel.${id}`)
   }
 
-  return { messages, hasMore, loadingOlder, load, loadOlder, ensureLoaded, send, edit, remove, removeAttachment, toggleReaction, togglePin, subscribe, unsubscribe }
+  return { messages, hasMore, hasNewer, loadingOlder, load, loadOlder, ensureLoaded, jumpTo, returnToLatest, send, edit, remove, removeAttachment, toggleReaction, togglePin, subscribe, unsubscribe }
 }

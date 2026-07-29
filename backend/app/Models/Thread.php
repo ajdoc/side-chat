@@ -2,6 +2,7 @@
 
 namespace App\Models;
 
+use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
@@ -17,6 +18,29 @@ class Thread extends Model
     public function channel(): BelongsTo
     {
         return $this->belongsTo(Channel::class);
+    }
+
+    /**
+     * Every thread this person may see, for search.
+     *
+     * A channel thread is as visible as the channel it hangs off — the Threads panel lists
+     * all of them to any member, and a title is exactly what that panel shows. A side chat's
+     * own threads are not: they are reached through the side chat, so they inherit its
+     * roster, the same gate {@see Message::scopeVisibleTo} applies to its messages.
+     *
+     * @param  Builder<Thread>  $query
+     */
+    public function scopeVisibleTo(Builder $query, User $user): void
+    {
+        $query
+            ->whereIn('channel_id', Channel::query()->visibleTo($user)->select('channels.id'))
+            ->where(function (Builder $q) use ($user) {
+                $q->whereNull('side_chat_id')
+                    ->orWhereExists(fn ($exists) => $exists
+                        ->from('side_chat_user')
+                        ->whereColumn('side_chat_user.side_chat_id', 'threads.side_chat_id')
+                        ->where('side_chat_user.user_id', $user->getKey()));
+            });
     }
 
     /** The side chat this thread belongs to, if it's a side-chat thread rather than a channel one. */

@@ -76,8 +76,28 @@ const hiddenTagCount = computed(() => Math.max(0, tagCounts.value.length - shown
  */
 const {
   forums, canManageForums, loadForums, createForum, renameForum, removeForum, moveForum,
-  isGroupOpen, toggleGroup, groupPosts,
+  isGroupOpen, toggleGroup, expandGroup, groupPosts,
 } = useSideChatForums()
+
+// The group we arrived at from search, flashed for a moment so the eye finds it in a long
+// list. Same device (and roughly the same beat) as the timeline's jump-to-message highlight.
+// Declared before the watcher below, which runs immediately and reads it.
+const highlightedForumId = ref<number | null>(null)
+
+/**
+ * Arriving from a search hit on a group heading.
+ *
+ * `scforum` names the group to unfold and is consumed on arrival — the fold state is a
+ * lasting preference in localStorage, so leaving the key in the URL would re-open the group
+ * every time the panel remounted, quietly overriding a choice made since.
+ */
+watch([() => query.value.scforum, () => props.channelId], ([forumId, channelId]) => {
+  if (!forumId) return
+  expandGroup(channelId, Number(forumId))
+  highlightedForumId.value = Number(forumId)
+  surface.patch({ scforum: null })
+  setTimeout(() => { highlightedForumId.value = null }, 1600)
+}, { immediate: true })
 
 const groups = computed(() => groupPosts(visibleSideChats.value))
 
@@ -651,7 +671,10 @@ function relTime(iso: string) {
         <!-- The group heading. Folds its own posts away; the count is what tells you what
              you folded. Uncategorised gets the same heading as any other group but none of
              the controls — it isn't a row anybody made, so it isn't a row anybody renames. -->
-        <div class="group/forum flex items-center gap-1 rounded px-1 py-1 hover:bg-muted/60">
+        <div
+          class="group/forum flex items-center gap-1 rounded px-1 py-1 transition-colors hover:bg-muted/60"
+          :class="highlightedForumId === g.forum?.id ? 'bg-primary/15 ring-1 ring-primary/40' : ''"
+        >
           <button
             type="button"
             class="flex min-w-0 flex-1 items-center gap-1 text-left text-[11px] font-semibold uppercase tracking-wide text-muted-foreground hover:text-foreground"

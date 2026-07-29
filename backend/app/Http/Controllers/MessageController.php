@@ -27,10 +27,15 @@ class MessageController extends Controller
 
     public function index(IndexMessageRequest $request, Channel $channel): AnonymousResourceCollection
     {
-        $page = $this->messages->forChannel($channel, $request->integer('before') ?: null);
+        $page = $this->messages->forChannel(
+            $channel,
+            $request->integer('before') ?: null,
+            // Jumping to a search result, rather than paging the timeline.
+            $request->integer('around') ?: null,
+        );
 
         return MessageResource::collection($page['messages'])
-            ->additional(['has_more' => $page['has_more']]);
+            ->additional(['has_more' => $page['has_more'], 'has_newer' => $page['has_newer']]);
     }
 
     public function store(StoreMessageRequest $request, Channel $channel, SendMessageAction $action): MessageResource

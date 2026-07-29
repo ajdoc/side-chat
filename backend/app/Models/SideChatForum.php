@@ -3,6 +3,7 @@
 namespace App\Models;
 
 use Database\Factories\SideChatForumFactory;
+use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
@@ -29,6 +30,18 @@ class SideChatForum extends Model
     public function channel(): BelongsTo
     {
         return $this->belongsTo(Channel::class);
+    }
+
+    /**
+     * Every group this person may see, for search. The channel gate alone, like the posts
+     * filed under it — a heading is part of how the list is laid out, and the list is open
+     * to the whole channel.
+     *
+     * @param  Builder<SideChatForum>  $query
+     */
+    public function scopeVisibleTo(Builder $query, User $user): void
+    {
+        $query->whereIn('channel_id', Channel::query()->visibleTo($user)->select('channels.id'));
     }
 
     /** The posts filed here. Ordering is the list's business, not the group's. */
