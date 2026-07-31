@@ -24,6 +24,16 @@
  * A lock doesn't hold a door shut against the world — it holds it shut against *people without
  * keys*. So a locked door still opens, just not for everyone, and somebody with no key sees it
  * open for the person ahead of them and close again behind. Which is what a locked door does.
+ *
+ * ## Passes run out on their own
+ *
+ * Saying a door's password doesn't earn a key, it buys a few seconds. The map carries the moment
+ * each pass ends rather than a name on the key-holder list, so nothing has to be broadcast when
+ * one lapses: the door simply stops opening for that person on every screen at once, because
+ * every screen is comparing the same deadline against its own clock in the same frame loop.
+ *
+ * Which is the same trick as the rest of this file — one shared fact, evaluated identically
+ * everywhere, rather than a second stream of truth about who is currently allowed where.
  */
 
 import type { Facing, Occupant, SpaceMap } from './spaceMapEngine'
@@ -48,7 +58,12 @@ export const DOOR_REACH = 1.4
  * owner" and "type the words"), and a door that can't tell them apart is a door people give up
  * at.
  */
-export type DoorLock = { keys: Set<number>, password: boolean }
+export type DoorLock = {
+  keys: Set<number>
+  password: boolean
+  /** Who is through on a password, and the epoch millisecond their pass stops working. */
+  passes: Map<number, number>
+}
 export type LockMap = Map<string, DoorLock>
 
 /** Turn the map's `locks` payload into something the frame loop can ask cheaply. */
@@ -56,17 +71,51 @@ export function lockMap(locks: SpaceMap['locks']): LockMap {
   const map: LockMap = new Map()
 
   for (const lock of locks ?? []) {
-    map.set(lock.object_id, { keys: new Set(lock.allowed ?? []), password: !!lock.has_password })
+    map.set(lock.object_id, {
+      keys: new Set(lock.allowed ?? []),
+      password: !!lock.has_password,
+      passes: new Map((lock.passes ?? []).map(pass => [pass.id, pass.until])),
+    })
   }
 
   return map
 }
 
-/** May this person walk through this door? Unlocked doors are open to everybody. */
+/**
+ * May this person walk through this door *now*? Unlocked doors are open to everybody.
+ *
+ * The clock is read here rather than passed in, because this is asked from the frame loop about
+ * everybody in the room and the answer is only ever wanted for the current instant. Callers that
+ * need it to change when a pass expires — the prompt over your head, chiefly — have to be ticked;
+ * see `passesExpireAt`.
+ */
 export function mayPass(locks: LockMap, doorId: string, userId: number | null | undefined): boolean {
   const lock = locks.get(doorId)
+  if (!lock) return true
+  if (userId == null) return false
 
-  return !lock || (userId != null && lock.keys.has(userId))
+  return lock.keys.has(userId) || (lock.passes.get(userId) ?? 0) > Date.now()
+}
+
+/**
+ * When the next outstanding pass anywhere in the room runs out, or null if none is.
+ *
+ * Exists because a lapsing pass is the one thing about a door that changes with no event behind
+ * it: no map arrives, no key is whispered, the clock simply passes a number. The frame loop
+ * notices by asking every frame, but Vue's computeds don't — so the stage watches this to know
+ * when it has to look again, instead of re-evaluating the whole locked-door prompt sixty times a
+ * second on the off-chance.
+ */
+export function passesExpireAt(locks: LockMap): number | null {
+  let soonest: number | null = null
+
+  for (const lock of locks.values()) {
+    for (const until of lock.passes.values()) {
+      if (until > Date.now() && (soonest === null || until < soonest)) soonest = until
+    }
+  }
+
+  return soonest
 }
 
 /**

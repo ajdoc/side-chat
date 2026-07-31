@@ -7,6 +7,8 @@ import {
   Loader2,
   Map as MapIcon,
   Megaphone,
+  MessageCircle,
+  MessageCircleOff,
   MessageSquare,
   MoreHorizontal,
   Mic,
@@ -50,7 +52,7 @@ import {
   zoneAt,
 } from '~/lib/spaceMapEngine'
 import { decorInFront, decorKind, decorSize, seatInFront, seatOn } from '~/lib/spaceDecor'
-import { canTryPassword, doorInFront, lockMap, mayPass, syncDoors } from '~/lib/spaceDoors'
+import { canTryPassword, doorInFront, lockMap, mayPass, passesExpireAt, syncDoors } from '~/lib/spaceDoors'
 import { EFFECT_MS, drawRoomEffect, drawRoomEffectLabel } from '~/lib/spaceEffects'
 import { normaliseLook } from '~/lib/spaceAvatar'
 import { Button } from '~/components/ui/button'
@@ -126,7 +128,7 @@ const {
   fireEffect,
 } = useVoice()
 
-const { map, loading, error: mapError, load: loadMap, subscribe: subscribeMap, unsubscribe: unsubscribeMap } = useSpaceMap(props.channel.id)
+const { map, loading, error: mapError, load: loadMap, refresh: refreshMap, subscribe: subscribeMap, unsubscribe: unsubscribeMap } = useSpaceMap(props.channel.id)
 const {
   me,
   others,
@@ -192,6 +194,14 @@ const shouting = ref(false)
  * the bubble up — the save that follows is what makes it survive a reload, not what makes it true.
  */
 const myShout = computed(() => me.value?.shout ?? null)
+
+/**
+ * Chat over people's heads: whether you want it, and what to draw on anyone in particular.
+ *
+ * Only read here — ChannelView, which owns the timeline and the typing whispers this room sits
+ * inside, is what fills it. See useSpaceChatBubbles.
+ */
+const { enabled: bubblesOn, bubbleFor } = useSpaceChatBubbles()
 /** The rooms-and-locks panel. Only ever opened by somebody with something to manage. */
 const managingLocks = ref(false)
 
@@ -252,6 +262,36 @@ const occupants = computed(() => (me.value ? [me.value, ...Object.values(others.
 /** Which doors are locked and who holds a key, in the shape the frame loop wants to ask. */
 const locks = computed(() => lockMap(map.value?.locks))
 
+/**
+ * The clock the *prompt* runs on, as distinct from the door itself.
+ *
+ * A password pass lapses on its own, with no map and no event behind it — see spaceDoors. The
+ * doors handle that by themselves, because the frame loop re-asks every frame anyway. The label
+ * over your head doesn't: it's a computed, and nothing it reads changes at the moment a pass
+ * runs out, so without this you would stand in a doorway that had quietly shut with no
+ * explanation and no way to ask for one.
+ *
+ * So the loop nudges this ref at the deadline, and only at the deadline — one write per expired
+ * pass rather than a timestamp ticking sixty times a second through half the room's computeds.
+ */
+/**
+ * Somebody at this keyboard just said a door's password.
+ *
+ * Fetches the map rather than waiting for the broadcast to come back around: the pass is already
+ * granted, and the only thing standing between them and the door is knowing about it. If the
+ * fetch fails the ping is still coming, so there is nothing to report and nothing to undo.
+ */
+function onEnteredDoor() {
+  void refreshMap().catch(() => {})
+}
+
+const passClock = ref(0)
+const nextPassExpiry = computed(() => {
+  void passClock.value
+
+  return passesExpireAt(locks.value)
+})
+
 /** The door you're standing at, if any — for the "this one's locked" prompt. */
 const facingDoor = computed(() => (me.value ? doorInFront(map.value, me.value) : null))
 
@@ -300,6 +340,10 @@ const blockedDoorTakesPassword = computed(() =>
 
 /** A door you're at that will not open for you. The only reason a door needs a prompt at all. */
 const blockedDoor = computed(() => {
+  // Read so that a pass running out puts the prompt back — the one input to this that changes
+  // without anything having happened. See passClock.
+  void passClock.value
+
   const door = facingDoor.value
   if (!door || !me.value) return null
 
@@ -819,6 +863,10 @@ function loop(now: number) {
      * per approach walking into a door that was about to open, which reads as the door sticking.
      */
     syncDoors(map.value, occupants.value, locks.value)
+
+    // And the moment a password pass runs out, tell the prompt. The doors have already acted on
+    // it a line above; this is only so the label can explain why one just shut.
+    if (nextPassExpiry.value !== null && Date.now() >= nextPassExpiry.value) passClock.value = Date.now()
 
     // A meeting freezes the room — nobody walks, so movement isn't ticked; everything else runs
     // so the countdown and the voice keep going.
@@ -1684,7 +1732,18 @@ function drawPerson(
     ctx.stroke()
   }
 
-  if (o.shout) drawShout(ctx, o.shout, p.x, p.y, size)
+  /*
+   * What they're saying beats what they're wearing.
+   *
+   * A shout is a sign you hang over yourself and leave there; a chat bubble is this second.
+   * They occupy the same few pixels above the head, and stacking them would put a permanent
+   * placard on top of the thing somebody just typed, so the live one wins for as long as it
+   * lasts and the shout comes back underneath when it goes.
+   */
+  const bubble = bubbleFor(o.id)
+  if (bubble?.kind === 'typing') drawTyping(ctx, p.x, p.y, size)
+  else if (bubble) drawSpeech(ctx, bubble.text, p.x, p.y, size, bubble.until)
+  else if (o.shout) drawShout(ctx, o.shout, p.x, p.y, size)
 
   // The name goes *under* the feet, on a plate — over a patterned floor, plain text at this
   // size is unreadable about half the time.
@@ -1740,14 +1799,30 @@ function drawShout(ctx: CanvasRenderingContext2D, shout: string, x: number, y: n
 
   const w = ctx.measureText(text).width + size * 0.55
   const h = font * 1.75
-  // Clear of the muted-mic badge, which sits at -0.55 with a radius of 0.2.
-  const cy = y - size * 0.95 - h / 2
-  const left = x - w / 2
-  const top = cy - h / 2
 
   ctx.fillStyle = 'rgb(0 0 0 / 0.62)'
+  const cy = bubbleBox(ctx, x, y, size, w, h)
+
+  ctx.fillStyle = '#ffffff'
+  ctx.fillText(text, x, cy)
+}
+
+/**
+ * The bubble's outline, shared by everything that hangs over a head.
+ *
+ * Rounded pill plus a tail, drawn in whatever `fillStyle` the caller set, and returning the
+ * middle of it so the caller can put its contents there. Factored out because the three
+ * bubbles — a shout, a line of chat, somebody typing — differ in what's *inside* them and
+ * agree on everything else, and three copies of the tail geometry drifted the first time one
+ * of them changed.
+ */
+function bubbleBox(ctx: CanvasRenderingContext2D, x: number, y: number, size: number, w: number, h: number) {
+  // Clear of the muted-mic badge, which sits at -0.55 with a radius of 0.2.
+  const cy = y - size * 0.95 - h / 2
+  const top = cy - h / 2
+
   ctx.beginPath()
-  ctx.roundRect(left, top, w, h, Math.min(h / 2, size * 0.26))
+  ctx.roundRect(x - w / 2, top, w, h, Math.min(h / 2, size * 0.26))
   ctx.fill()
 
   // A tail, so it reads as coming *from* the person rather than floating above them. Grown with
@@ -1759,8 +1834,107 @@ function drawShout(ctx: CanvasRenderingContext2D, shout: string, x: number, y: n
   ctx.closePath()
   ctx.fill()
 
-  ctx.fillStyle = '#ffffff'
-  ctx.fillText(text, x, cy)
+  return cy
+}
+
+/**
+ * Something somebody just said in the chat, over their head for a few seconds.
+ *
+ * Light on dark, where a shout is white on black — the inversion is the whole distinction
+ * between the two, and it's readable at a glance from across the room without a legend. It's
+ * also the shape a speech bubble has in every comic anybody has ever read, which is worth more
+ * than any label.
+ *
+ * Fades out over its last moments rather than vanishing, so a room where four people are
+ * talking doesn't blink. Multiplies the alpha the caller set instead of replacing it, so a
+ * bubble still dims with its owner's earshot exactly as a shout does.
+ */
+function drawSpeech(ctx: CanvasRenderingContext2D, said: string, x: number, y: number, size: number, until: number) {
+  const FADE = 700
+  const left = until - Date.now()
+  if (left <= 0) return
+
+  ctx.save()
+  ctx.globalAlpha *= Math.min(1, left / FADE)
+
+  const font = Math.max(11, size * 0.36)
+  ctx.font = `500 ${font}px system-ui, sans-serif`
+  ctx.textAlign = 'center'
+  ctx.textBaseline = 'middle'
+
+  // Wrapped rather than cut, unlike a shout: a shout is a phrase you chose to fit over your
+  // head, and a sentence somebody typed into the chat is whatever length it is. Three lines is
+  // the ceiling — past that the bubble is a wall of text hanging over a 16-pixel person, and
+  // the message itself is in the timeline underneath.
+  const maxText = size * 7
+  const lines: string[] = []
+  let line = ''
+  for (const word of said.split(/\s+/)) {
+    const next = line ? `${line} ${word}` : word
+    if (line && ctx.measureText(next).width > maxText) {
+      lines.push(line)
+      line = word
+      if (lines.length === 3) break
+    } else {
+      line = next
+    }
+  }
+  if (lines.length < 3 && line) lines.push(line)
+
+  // Whatever didn't fit is admitted to rather than dropped silently.
+  if (lines.length === 3) {
+    let last = lines[2]!
+    const clipped = said.length > lines.join(' ').length
+    if (clipped) {
+      while (last.length > 1 && ctx.measureText(`${last}…`).width > maxText) last = last.slice(0, -1)
+      lines[2] = `${last}…`
+    }
+  }
+
+  if (!lines.length) return ctx.restore()
+
+  const lineHeight = font * 1.3
+  const w = Math.max(...lines.map(l => ctx.measureText(l).width)) + size * 0.55
+  const h = lines.length * lineHeight + font * 0.55
+
+  ctx.fillStyle = 'rgb(255 255 255 / 0.94)'
+  const cy = bubbleBox(ctx, x, y, size, w, h)
+
+  ctx.fillStyle = 'rgb(15 23 42)'
+  const firstY = cy - ((lines.length - 1) * lineHeight) / 2
+  lines.forEach((l, i) => ctx.fillText(l, x, firstY + i * lineHeight))
+
+  ctx.restore()
+}
+
+/**
+ * Somebody is typing: three dots in a bubble, rising in turn.
+ *
+ * The same bubble their words will appear in, so the line that follows looks like it grew out
+ * of this rather than replacing it. Off one shared clock like the walk cycle, so a room full of
+ * people typing pulses together instead of shimmering.
+ */
+function drawTyping(ctx: CanvasRenderingContext2D, x: number, y: number, size: number) {
+  const r = Math.max(1.6, size * 0.075)
+  const gap = r * 3
+  const w = gap * 2 + r * 2 + size * 0.5
+  const h = r * 2 + size * 0.4
+
+  ctx.save()
+  ctx.fillStyle = 'rgb(255 255 255 / 0.94)'
+  const cy = bubbleBox(ctx, x, y, size, w, h)
+
+  ctx.fillStyle = 'rgb(100 116 139)'
+  const t = performance.now() / 1000
+  for (let i = 0; i < 3; i++) {
+    // A third of a cycle apart, and only the top half of the sine — the dots hop, they don't
+    // swing, which is what the three-dot indicator does everywhere else in the app.
+    const lift = Math.max(0, Math.sin((t - i * 0.16) * 6)) * r * 1.1
+    ctx.beginPath()
+    ctx.arc(x + (i - 1) * gap, cy - lift, r, 0, Math.PI * 2)
+    ctx.fill()
+  }
+  ctx.restore()
 }
 
 // --- lifecycle ---
@@ -2053,6 +2227,27 @@ watch(inThisRoom, (now) => {
           >
             <Megaphone class="h-4 w-4 shrink-0" />
             <span v-if="narrow">{{ myShout ? `Shouting “${myShout}”` : 'Shout something' }}</span>
+          </button>
+
+          <!--
+            Whether the chat is also drawn over people's heads.
+
+            Yours alone, remembered, and nobody else is told — a room where you can see what's
+            being said is a livelier place, and a room where you can't is a quieter one, and
+            which of those you want is a matter of taste rather than something the channel
+            should decide for everybody. Turning a single person's bubbles off lives beside
+            their volume in the people rail, where the rest of the per-person mutes are.
+          -->
+          <button
+            type="button"
+            :class="[toolClass, bubblesOn ? 'text-primary' : 'text-muted-foreground hover:text-foreground']"
+            :title="bubblesOn
+              ? 'Chat bubbles are on — click to stop showing what people say over their heads'
+              : 'Show what people say in the chat as bubbles over their heads'"
+            @click="fromMenu(() => (bubblesOn = !bubblesOn))"
+          >
+            <component :is="bubblesOn ? MessageCircle : MessageCircleOff" class="h-4 w-4 shrink-0" />
+            <span v-if="narrow">{{ bubblesOn ? 'Chat bubbles on' : 'Chat bubbles off' }}</span>
           </button>
 
           <!--
@@ -2383,15 +2578,39 @@ watch(inThisRoom, (now) => {
           <!-- Somebody's sharing behind the panel you put away. -->
           <span v-if="someoneSharing" class="absolute -left-1 top-1 h-2 w-2 rounded-full bg-primary ring-2 ring-background" />
         </button>
+
+        <!--
+          Where a shared screen is watched, when it's watched big.
+
+          The people rail is a rail: wide enough for a face in a circle and a volume slider,
+          which makes the one thing in it that has detail — somebody's screen — a postage
+          stamp. Fullscreen was the only way up from there, and fullscreen takes the room away
+          entirely: you can't see who walked off, and you can't walk anywhere yourself.
+
+          So the screen gets the top of the *room* instead, at the size the room can spare, with
+          the bottom of the map still showing so proximity keeps meaning something. It's an empty
+          box until {@link SideSpaceCallDock} teleports its stage in here, which it does by
+          default the moment somebody shares; the dock's own button puts it back in the rail.
+        -->
+        <div id="space-screen-theater" class="pointer-events-none absolute inset-0 z-20" />
       </div>
 
-      <!-- Cameras, screens and the volume of everyone near you. -->
+      <!--
+        Cameras, screens and the volume of everyone near you.
+
+        Hidden rather than unmounted when you put it away, because the screen it's showing is
+        teleported over the room and should keep playing after the panel it came from is gone —
+        which is the whole point on a phone, where the panel covers the room and walking anywhere
+        means closing it. It knows it's stowed; nothing else in it renders while it is.
+      -->
       <SideSpaceCallDock
-        v-if="inThisRoom && peopleShowing"
+        v-if="inThisRoom"
+        v-show="peopleShowing"
         :class="narrow ? 'absolute inset-0 z-30' : 'shrink-0'"
         :style="narrow ? undefined : { width: `${peopleWidth}px` }"
         :can-moderate="canModerate"
         :sheet="narrow"
+        :stowed="!peopleShowing"
         @close="togglePeople"
         @resize="startPeopleResize"
       />
@@ -2427,6 +2646,7 @@ watch(inThisRoom, (now) => {
       :door-id="askingDoor"
       :channel-id="channel.id"
       :room-name="blockedRoomName"
+      @entered="onEnteredDoor"
       @close="askingDoor = null"
     />
 

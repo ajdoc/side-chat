@@ -282,6 +282,33 @@ it('sends the locks along with the map when the room changes', function () {
         ->assertJsonCount(1, 'data.locks');
 });
 
+it('moves the map version on when a lock changes, so the ping is not ignored', function () {
+    [$owner, $server, $channel] = spaceWithDoor();
+    $alice = spaceMember($server, 'Alice');
+
+    $before = $channel->spaceMap->updated_at;
+
+    /*
+     * The bug this exists for.
+     *
+     * The broadcast is a *version*, not the map, and every client refetches only when that
+     * version differs from the one it holds. Locks live in their own table — so a door could be
+     * locked, a key handed out or a password said, and the map's `updated_at` would not move an
+     * inch. The ping then arrived carrying a version everybody already had, every listener
+     * decided it had nothing to learn, and the door quietly did not change on a single screen.
+     *
+     * Which looks exactly like "I typed the right password and nothing happened".
+     */
+    $this->travel(1)->second();
+
+    Passport::actingAs($owner);
+    $this->putJson("/api/channels/{$channel->id}/space/locks/door-1", [
+        'allowed' => [$alice->id],
+    ])->assertOk();
+
+    expect($channel->spaceMap()->first()->updated_at->greaterThan($before))->toBeTrue();
+});
+
 it('keeps the map broadcast small enough to survive the websocket frame limit', function () {
     [$owner, , $channel] = spaceWithDoor();
 
@@ -442,6 +469,10 @@ it('leaves locks and room owners alone when a member saves the map', function ()
  * a pinned "the code is BADGER" message actually needs, and the properties worth pinning down
  * are that the phrase never leaves the server, that a wrong one changes nothing, and that
  * changing it puts everybody back outside.
+ *
+ * And that saying it buys a *pass*, not a key: it runs out in seconds, so the door asks again on
+ * the way back out. That's the difference between a code you were told and a key you were given,
+ * and it's the property everything below is really about.
  */
 it('lets somebody with no key in when they know the password', function () {
     [$owner, $server, $channel] = spaceWithDoor();
@@ -457,10 +488,40 @@ it('lets somebody with no key in when they know the password', function () {
     $response = $this->postJson("/api/channels/{$channel->id}/space/locks/door-1/enter", ['password' => 'badger'])
         ->assertOk();
 
-    // The door now opens for her on every screen in the room — which is what the resolved
-    // key-holder list riding along with the map means.
-    expect($response->json('data.locks.0.allowed'))->toContain($alice->id)
-        ->and(SideSpaceLock::first()->passed)->toBe([$alice->id]);
+    // The door now opens for her on every screen in the room — but as a pass with a deadline on
+    // it, sent apart from the standing keys, because that is what lets every browser shut the
+    // door again at the same moment without being told.
+    expect($response->json('data.locks.0.allowed'))->not->toContain($alice->id)
+        ->and($response->json('data.locks.0.passes'))->toBe([
+            ['id' => $alice->id, 'until' => (now()->getTimestamp() + SideSpaceLock::PASS_SECONDS) * 1000],
+        ])
+        ->and(Doors::keyholders($channel->spaceMap, SideSpaceLock::first()))->toContain($alice->id);
+});
+
+it('shuts the door again once the pass runs out', function () {
+    [$owner, $server, $channel] = spaceWithDoor();
+    $alice = spaceMember($server, 'Alice');
+
+    Passport::actingAs($owner);
+    $this->putJson("/api/channels/{$channel->id}/space/locks/door-1", [
+        'allowed' => [],
+        'password' => 'badger',
+    ])->assertOk();
+
+    Passport::actingAs($alice);
+    $this->postJson("/api/channels/{$channel->id}/space/locks/door-1/enter", ['password' => 'badger'])->assertOk();
+
+    // A few seconds later she is through the door and the pass is spent — the whole point of it
+    // being a pass. Coming back out is another crossing, and costs the words again.
+    $this->travel(SideSpaceLock::PASS_SECONDS + 1)->seconds();
+
+    expect(SideSpaceLock::first()->activePasses())->toBe([])
+        ->and(Doors::keyholders($channel->spaceMap, SideSpaceLock::first()))->not->toContain($alice->id);
+
+    // And saying them again works, rather than being turned away as somebody who already asked.
+    $this->postJson("/api/channels/{$channel->id}/space/locks/door-1/enter", ['password' => 'badger'])->assertOk();
+
+    expect(SideSpaceLock::first()->activePasses())->toHaveKey($alice->id);
 });
 
 it('never sends the password itself, only the fact of one', function () {
@@ -550,7 +611,7 @@ it('leaves the password alone when only the keys are edited', function () {
     $this->putJson("/api/channels/{$channel->id}/space/locks/door-1", ['allowed' => [$bob->id]])->assertOk();
 
     expect(SideSpaceLock::first()->hasPassword())->toBeTrue()
-        ->and(SideSpaceLock::first()->passed)->toBe([$alice->id]);
+        ->and(SideSpaceLock::first()->activePasses())->toHaveKey($alice->id);
 });
 
 it('takes the password off, and everybody who used it with it', function () {

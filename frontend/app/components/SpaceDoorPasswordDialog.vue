@@ -9,16 +9,28 @@ import { Button } from '~/components/ui/button'
  * advance, and this one lets in whoever was told the phrase. Most private rooms work the second
  * way, with the words in a pinned message.
  *
+ * Asked at every crossing, not once: the phrase buys a few seconds' passage rather than a key, so
+ * this dialog is a thing you meet on the way in *and* on the way out. Which is why it stays as
+ * small as it is — anything longer to read would be a toll on the room.
+ *
  * ## Why it doesn't say whether it worked
  *
- * There is no success state here beyond closing. Getting it right adds the key server-side and
+ * There is no success state here beyond closing. Getting it right grants the pass server-side and
  * broadcasts the map, and the *door opening in front of you* is the confirmation — a dialog
  * saying "correct" would sit on top of the thing it was describing. Only the failure needs
  * words, and the server's are used verbatim so a throttled flood of guesses reads as what it is
  * rather than as a wrong password.
  */
 const props = defineProps<{ doorId: string, channelId: number, roomName?: string | null }>()
-const emit = defineEmits<{ close: [] }>()
+/**
+ * `entered` is the door's cue to open now rather than in a moment.
+ *
+ * The pass is granted server-side and the map is broadcast, so the room would catch up on its own
+ * — but by way of a websocket ping and a refetch, and the person it matters to is the one already
+ * standing at the door with a pass measured in seconds. Telling the stage directly spends none of
+ * them.
+ */
+const emit = defineEmits<{ close: [], entered: [] }>()
 
 const { enter } = useSpaceLocks(props.channelId)
 
@@ -36,6 +48,7 @@ async function submit() {
   error.value = ''
   try {
     await enter(props.doorId, password.value)
+    emit('entered')
     emit('close')
   } catch (e: any) {
     // 422 is a wrong phrase; 429 is too many guesses. Both arrive with a sentence worth showing.
@@ -65,8 +78,8 @@ async function submit() {
 
       <div class="space-y-3 p-4">
         <p class="text-xs text-muted-foreground">
-          This door opens for anyone who knows the password. Get it right once and it stays open
-          for you.
+          This door opens for anyone who knows the password, for long enough to walk through it.
+          Coming back the other way means saying it again.
         </p>
 
         <input

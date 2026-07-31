@@ -228,7 +228,15 @@ export interface Message {
   thread_id: number | null
   side_chat_id: number | null
   body: string | null
-  type: 'user' | 'system' | 'widget'
+  /**
+   * What kind of card this is, and `null` for the ordinary case — somebody talking.
+   *
+   * The column defaults to `'user'`, but a plain message is written with no type at all, so
+   * that is what the API sends and `'user'` is a value you will almost never see. Ask what
+   * this *isn't* ("not system, not widget"), the way the models and MessageItem do; testing
+   * for `'user'` looks equivalent and silently matches nothing.
+   */
+  type: 'user' | 'system' | 'widget' | null
   /**
    * A top-level reply to the side chat *post* — addressed at its title, not at another
    * message. Distinct from `reply_to`, which names a message and shows its author and body.

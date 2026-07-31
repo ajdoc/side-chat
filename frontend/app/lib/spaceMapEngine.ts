@@ -117,7 +117,14 @@ export interface SpaceMap {
    * for whom. See lib/spaceDoors.ts, and the migration that explains the split.
    */
   rooms?: Array<{ zone_id: string, owner_id: number | null, owner: string | null }>
-  locks?: Array<{ object_id: string, zone_id: string | null, allowed: number[], has_password?: boolean }>
+  locks?: Array<{
+    object_id: string
+    zone_id: string | null
+    /** Standing keys. A pass bought with the password is in `passes`, with its deadline. */
+    allowed: number[]
+    has_password?: boolean
+    passes?: Array<{ id: number, until: number }>
+  }>
   updated_by?: string | null
   updated_at?: string
 }

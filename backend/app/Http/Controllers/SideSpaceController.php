@@ -364,7 +364,7 @@ class SideSpaceController extends Controller
     }
 
     /**
-     * Say the password at a door, and keep the key if it's right.
+     * Say the password at a door, and get through it if it's right.
      *
      * The other half of what a lock is for. A key-holder list can only let in people the room's
      * owner could name in advance; a password lets in anybody who was told it, which is how most
@@ -373,10 +373,15 @@ class SideSpaceController extends Controller
      *
      * Two decisions worth stating:
      *
-     *   - **the answer is remembered**, in `passed`, rather than the door asking every time. A
-     *     door that re-prompted at each crossing is a door people prop open, and the memory is
-     *     what lets changing the password actually shut somebody out (setting a new one empties
-     *     the list — see {@see lockDoor}).
+     *   - **the answer is not remembered for long**. Saying the words buys a pass measured in
+     *     seconds ({@see SideSpaceLock::PASS_SECONDS}), enough to walk through the door in front
+     *     of you and no more; coming back out means saying them again. A password is something
+     *     you present at a door, not a key you keep, and the version that was kept meant somebody
+     *     told the code in March still had the run of the room in July.
+     *   - **the pass rides in the map as a deadline**, not as a name on the key-holder list, so
+     *     every browser in the room closes the door again at the same moment without being told.
+     *     Setting a new password still clears the outstanding passes ({@see lockDoor}) — they are
+     *     seconds from lapsing anyway, but the door should shut the instant the phrase changes.
      *   - **a wrong guess is a 422**, the same shape as any other rejected input, and the door
      *     stays exactly as it was. Guessing is throttled on the route, because what needs
      *     limiting is the rate of attempts at a door and not anything about one request.
@@ -396,7 +401,10 @@ class SideSpaceController extends Controller
         abort_if($lock === null || ! $lock->hasPassword(), 404);
         abort_if($user === null, 403);
 
-        if (in_array($user->id, Doors::keyholders($map, $lock), true)) {
+        // Judged on the standing keys alone, not on an outstanding pass: somebody whose pass is
+        // about to run out saying the words again is asking for another one, and answering "you
+        // may already pass" would leave them the two seconds they had left.
+        if (in_array($user->id, Doors::granted($map, $lock), true)) {
             return $this->announce($map);
         }
 
@@ -404,9 +412,7 @@ class SideSpaceController extends Controller
             throw ValidationException::withMessages(['password' => 'That is not the password.']);
         }
 
-        $lock->update([
-            'passed' => array_values(array_unique([...array_map('intval', $lock->passed ?? []), $user->id])),
-        ]);
+        $lock->grantPass($user->id);
 
         return $this->announce($map);
     }
@@ -468,7 +474,7 @@ class SideSpaceController extends Controller
         $doors = Doors::all($map);
         $zones = collect($map->zones ?? [])->keyBy('id');
         $names = User::query()
-            ->whereIn('id', $rows->flatMap(fn ($lock) => Doors::keyholders($map, $lock))->unique())
+            ->whereIn('id', $rows->flatMap(fn ($lock) => Doors::granted($map, $lock))->unique())
             ->pluck('name', 'id');
 
         return response()->json([
@@ -482,8 +488,10 @@ class SideSpaceController extends Controller
                 'room' => $zones[$lock->zone_id]['name'] ?? null,
                 'created_by' => $lock->creator?->name,
                 'mine' => $lock->created_by === $user?->id,
-                // Everybody who may pass, resolved — for showing.
-                'allowed' => collect(Doors::keyholders($map, $lock))
+                // Everybody who holds a standing key, resolved — for showing. Not the people
+                // currently through on a password: those lapse in seconds, and a panel listing
+                // them beside the key-holders would read as "the owner gave this person a key".
+                'allowed' => collect(Doors::granted($map, $lock))
                     ->map(fn (int $id) => ['id' => $id, 'name' => $names[$id] ?? null])
                     ->values(),
                 /*
@@ -497,11 +505,12 @@ class SideSpaceController extends Controller
                  * granted, which is exactly the sort of guess that quietly stops being right.
                  */
                 'granted' => array_values(array_map('intval', $lock->allowed ?? [])),
-                // Whether a password is set, and how many people have used it. Never the phrase
-                // itself — it isn't stored in a form anybody could be shown, including its owner,
-                // which is why the panel offers "change it" and never "what is it".
+                // Whether a password is set, and how many people are through on one at this
+                // instant. Never the phrase itself — it isn't stored in a form anybody could be
+                // shown, including its owner, which is why the panel offers "change it" and
+                // never "what is it".
                 'has_password' => $lock->hasPassword(),
-                'passed_count' => count($lock->passed ?? []),
+                'passed_count' => count($lock->activePasses()),
                 'created_at' => $lock->created_at,
             ]),
             // What the panel needs to know about *itself*: whether to offer the rooms tab, and
@@ -519,9 +528,29 @@ class SideSpaceController extends Controller
      * Every write above changes what a door will do, and a door that opens on one screen and not
      * another is the one failure this whole feature has to avoid. So they all broadcast the map,
      * exactly as moving a couch does — the locks travel inside it.
+     *
+     * ## Why it touches the map first
+     *
+     * The broadcast is only a ping — an id and a version — because a furnished room is far past
+     * the websocket's frame limit (see SideSpaceMapUpdated). Clients compare that version against
+     * the map they already hold and refetch only when it differs, which is what stops a save
+     * echoing back to its own author as a pointless round trip.
+     *
+     * But every write here changes a *different table*: rooms and locks hang off the map and
+     * leave its own `updated_at` exactly where it was. So the ping went out carrying a version
+     * everybody already had, every listener concluded it had nothing to learn, and the new lock
+     * never reached a single screen — the map only ever caught up when something else happened
+     * to save the room. Locking a door, handing out a key and saying a password all looked like
+     * they had done nothing at all.
+     *
+     * Touching the map is what makes the version mean "the room as the browsers see it", locks
+     * included, rather than "the tiles". Cheap, and nothing at 60fps is behind it: these are the
+     * rare, deliberate writes, and walking never comes through here.
      */
     private function announce(SideSpaceMap $map): JsonResponse
     {
+        $map->touch();
+
         $fresh = $map->fresh(['rooms.owner', 'locks.creator', 'editor']);
 
         broadcast(new SideSpaceMapUpdated($fresh));

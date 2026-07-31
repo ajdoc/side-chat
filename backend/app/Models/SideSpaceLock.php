@@ -13,9 +13,10 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
  * such thing as an unlocked lock. Removing a lock is deleting the row, which is why the endpoint
  * is a DELETE and not a flag.
  *
- * A lock can also carry a **password**: anybody who enters it is remembered in `passed` and walks
- * through from then on. It's the other half of what a lock is for — letting in people you
- * couldn't have named in advance. See the migration for why that's a second list.
+ * A lock can also carry a **password**: anybody who says it is let through for the next
+ * {@see self::PASS_SECONDS} seconds and then has to say it again. It's the other half of what a
+ * lock is for — letting in people you couldn't have named in advance. See the migration for why
+ * that's a second column, and the later one for why it holds a clock rather than a list.
  *
  * `allowed` holds only the people who were *given* a key. Three more can always pass and are
  * resolved at read time rather than stored here — whoever set the lock, whoever owns the room,
@@ -45,10 +46,65 @@ class SideSpaceLock extends Model
         ];
     }
 
+    /**
+     * How long saying the password buys you, in seconds.
+     *
+     * Long enough to walk through the door you're standing at from wherever the dialog left you,
+     * with room for a slow hand — and short enough that it is over before you could have done
+     * anything else with it. Coming back out is a second crossing and costs the words again,
+     * which is the difference between a password and a key.
+     *
+     * It is a *duration* rather than a single crossing because every browser in the room decides
+     * for itself when a door opens, from the map it was sent (see lib/spaceDoors.ts). A deadline
+     * is a fact they can all agree on without asking anybody; "has this person been through yet"
+     * is one they would have to be told, and they would be told it late.
+     */
+    public const PASS_SECONDS = 15;
+
     /** Whether this door will open for somebody who knows the words. */
     public function hasPassword(): bool
     {
         return $this->password !== null && $this->password !== '';
+    }
+
+    /**
+     * Who is currently through on a password, and until when.
+     *
+     * Expired rows are dropped on the way out rather than deleted on a schedule: nothing needs to
+     * know about a lapsed pass, so the pruning that matters is the one at the point of reading.
+     * The column is tidied whenever a new pass is granted, which is often enough.
+     *
+     * @return array<int, int>  user id => unix timestamp the pass runs out
+     */
+    public function activePasses(): array
+    {
+        $now = now()->getTimestamp();
+        $passes = [];
+
+        foreach ((array) ($this->passed ?? []) as $id => $until) {
+            // Anything that isn't an id-keyed timestamp is the old list shape, which meant a
+            // permanent key and no longer exists. Ignored rather than honoured — see the
+            // migration.
+            if (! is_numeric($id) || ! is_numeric($until) || (int) $until <= $now) {
+                continue;
+            }
+
+            $passes[(int) $id] = (int) $until;
+        }
+
+        return $passes;
+    }
+
+    /** Let somebody through, starting now. Re-saying the password simply starts the clock again. */
+    public function grantPass(int $userId): void
+    {
+        // Assigned into the pruned set rather than spread into it: these are integer keys, and
+        // array spread renumbers those, which would hand the pass to whoever happened to be
+        // first in the list.
+        $passes = $this->activePasses();
+        $passes[$userId] = now()->getTimestamp() + self::PASS_SECONDS;
+
+        $this->update(['passed' => $passes]);
     }
 
     public function map(): BelongsTo

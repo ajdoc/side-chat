@@ -141,7 +141,8 @@ final class Doors
     }
 
     /**
-     * Everybody who may walk through a locked door.
+     * Everybody who holds a standing key to a locked door — as distinct from somebody who has
+     * just said the password, whose pass runs out ({@see keyholders}).
      *
      * The explicit key-holders, plus two who never need one: whoever set the lock, and whoever is
      * responsible for the room it guards. Resolved here, every time, rather than frozen into the
@@ -162,15 +163,9 @@ final class Doors
      *
      * @return array<int, int>  user ids
      */
-    public static function keyholders(SideSpaceMap $map, SideSpaceLock $lock): array
+    public static function granted(SideSpaceMap $map, SideSpaceLock $lock): array
     {
         $ids = array_map('intval', $lock->allowed ?? []);
-
-        // Anybody who has entered the password. A key earned rather than given, but a key: from
-        // the door's point of view there is no difference, which is the point of it.
-        foreach ($lock->passed ?? [] as $id) {
-            $ids[] = (int) $id;
-        }
 
         if ($lock->created_by !== null) {
             $ids[] = (int) $lock->created_by;
@@ -181,5 +176,24 @@ final class Doors
         }
 
         return array_values(array_unique($ids));
+    }
+
+    /**
+     * Everybody the door will open for *right now* — the standing keys, plus whoever is inside
+     * the few seconds a password buys.
+     *
+     * The two are kept apart because they expire differently and only one of them is a fact the
+     * browsers can be trusted to re-evaluate on their own. This is the server's answer, for the
+     * moment it is asked; the map sends the pass deadlines instead, so a room full of people can
+     * watch the same pass run out at the same time without another broadcast.
+     *
+     * @return array<int, int>  user ids
+     */
+    public static function keyholders(SideSpaceMap $map, SideSpaceLock $lock): array
+    {
+        return array_values(array_unique([
+            ...self::granted($map, $lock),
+            ...array_keys($lock->activePasses()),
+        ]));
     }
 }

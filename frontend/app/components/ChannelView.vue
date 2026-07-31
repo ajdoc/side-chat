@@ -61,12 +61,18 @@ const {
   unsubscribe: unsubscribeReads,
 } = useReads()
 const {
+  typists,
   label: typingLabel,
   notifyTyping,
   stopTyping,
   subscribe: subscribeTyping,
   unsubscribe: unsubscribeTyping,
 } = useTyping()
+// In a Side Space the same two facts — who's typing, and what they just said — are also drawn
+// over people's heads in the room. Fed from here rather than from the stage because this is
+// where both already arrive: a second set of whisper handlers on `channel.{id}` would come off
+// with the first one torn down. See useSpaceChatBubbles.
+const { noteTyping, forgetTyping, noteSaid, clearBubbles } = useSpaceChatBubbles()
 
 const { members: mentionMembers, names: mentionNames, load: loadMembers } = useChannelMembers()
 // Pop this conversation out into a floating window that follows you around the app.
@@ -272,6 +278,7 @@ async function onScrollStart() {
 
 async function openChannel(id: number) {
   replyingTo.value = null
+  bubbledUpTo = 0 // a different channel's ids say nothing about this one's
   loadMembers(id) // for @mention autocomplete + chips; not worth blocking the timeline on
   loadSideChats(id) // for the header badge; also not worth blocking the timeline on
   await Promise.all([load(id), loadReads(id)])
@@ -280,6 +287,12 @@ async function openChannel(id: number) {
   subscribeTyping(`channel.${id}`)
   markRead(messages.value.at(-1)?.id ?? null)
   emit('read')
+
+  // Everything that just landed was said before you got here. Set synchronously, in the same
+  // turn as the load, so the watcher below can't slip in front of it — that race is why this
+  // is a mark rather than a flag. Zero on an empty channel, which is right: the first thing
+  // ever said in the room is newer than nothing.
+  bubbledUpTo = messages.value.at(-1)?.id ?? 0
 
   // Arrived from a search result in another channel: the palette put the message id in the
   // URL because the page it navigates to mounts its own timeline, and this is the only
@@ -298,6 +311,7 @@ async function openChannel(id: number) {
 
 function closeChannel(id: number) {
   sideChats.value = [] // drop the old channel's count so the badge never flashes stale
+  clearBubbles() // nothing said in the room you're leaving should be hanging over it when you return
   unsubscribeTyping(`channel.${id}`)
   unsubscribeReads(id)
   unsubscribe(id)
@@ -309,6 +323,20 @@ async function onSend(body: string, files: File[], gif?: GifResult, uploadIds: s
   try {
     await send(body, replyingTo.value?.id ?? null, files, gif, uploadIds)
     stopTyping()
+    /*
+     * Your own line over your own head.
+     *
+     * Raised from what you typed, rather than from the message that comes back or from the
+     * watcher below. Your send is never broadcast to you (suppressed by socket id — see
+     * useMessages.send), so this is the only thing that knows you said it; and taking the text
+     * straight off the composer keeps your own bubble clear of every question the *arrival* of
+     * somebody else's message has to answer first — is it fresh, has the timeline finished
+     * loading, is it a widget card. You typed it a moment ago. That's the whole test.
+     */
+    if (isSpace.value && user.value) {
+      if (body.trim()) noteSaid(user.value.id, body)
+      else if (files.length) noteSaid(user.value.id, files.length > 1 ? '📎 sent some files' : '📎 sent a file')
+    }
     replyingTo.value = null
     scrollToBottom()
   } finally {
@@ -324,10 +352,90 @@ watch(() => messages.value.at(-1)?.id, (nid, oid) => {
     if (atBottom.value) scrollToBottom()
     else hasNewBelow.value = true
   }
+  // Somebody else said something just now. Deliberately outside the guard above, which asks a
+  // different question — it needs a *previous* message to compare against, and the first thing
+  // ever said in a room is exactly the message most worth a bubble.
+  if (nid && nid !== oid) raiseBubble(messages.value.at(-1))
   // Anything that arrives while you're looking at the channel is, by definition, read.
   markReadIfVisible(messages.value)
   emit('read')
 })
+
+/** Only a walkable room draws anyone's chat over their head; everywhere else this is inert. */
+const isSpace = computed(() => props.channel.type === 'space')
+
+/**
+ * How recently a message must have been said to be worth a bubble.
+ *
+ * A bubble is "somebody just spoke", so the timeline arriving — on entry, on a search jump,
+ * on returning to the live end — must not raise a roomful of them for a conversation that
+ * happened this morning. Generous rather than tight because it's compared against the
+ * *server's* clock: a minute of skew between two machines is unremarkable, and the cost of
+ * being wrong the generous way is one stale bubble, against silently swallowing every real
+ * one on a machine whose clock runs fast.
+ */
+const BUBBLE_FRESH_MS = 60_000
+
+/**
+ * The newest message id that was already here when we arrived, or that has already had its
+ * moment over somebody's head.
+ *
+ * An id rather than a "the timeline has finished loading" flag, which is what this was: that
+ * flag had to be raised on a tick, in a race with the very watcher it was gating, and a race
+ * is a poor thing to hang a feature on. A highwater mark asks the question directly — is this
+ * message newer than anything I've seen in this channel — and answers it the same way whether
+ * the timeline is still settling or has been open for an hour. Reset per channel by
+ * openChannel, which sets it the instant the history lands.
+ */
+let bubbledUpTo = 0
+
+/**
+ * A message, as a line over its author's avatar in the room.
+ *
+ * Everything a person says qualifies. System messages are the room talking about itself rather
+ * than somebody saying something, and a widget is a card — neither has a line in it to read, so
+ * those two are the exclusions and nothing else is. A message with only files attached *is*
+ * somebody saying something, so it gets a bubble saying that much rather than nothing.
+ */
+function raiseBubble(m: Message | undefined) {
+  if (!isSpace.value || !m) return
+
+  // Anything at or below the mark is history, however it got here — the first page, a search
+  // jump, the return to the live end. Raised here so a message is only ever bubbled once.
+  if (m.id <= bubbledUpTo) return
+  bubbledUpTo = m.id
+
+  // Asked the way the rest of the app asks it — see Message::isSystem/isWidget and
+  // MessageItem. A plain message carries no `type` at all rather than `'user'`, so testing
+  // *for* the kind that speaks silently rejected every real message in the room.
+  if (m.type === 'system' || m.type === 'widget' || !m.user) return
+  if (Date.now() - Date.parse(m.created_at) > BUBBLE_FRESH_MS) return
+
+  const line = m.body?.trim()
+    || (m.attachments?.length ? (m.attachments.length > 1 ? '📎 sent some files' : '📎 sent a file') : '')
+  if (line) noteSaid(m.user.id, line)
+}
+
+/**
+ * Every keystroke: tell the channel, and — in a room — put the dots over your own head too.
+ *
+ * Your own bubble is drawn locally because the whisper deliberately never comes back to you,
+ * and a room where everybody's typing is visible except yours is one where you can't tell
+ * whether the thing is working.
+ */
+function onTyping() {
+  notifyTyping()
+  if (isSpace.value && user.value) noteTyping(user.value.id)
+}
+
+// Who's typing, as a bubble of dots. Deep, because useTyping re-stamps an existing typist in
+// place while they keep going — and that re-stamp is exactly what has to keep the bubble up.
+watch(typists, (now, before) => {
+  if (!isSpace.value) return
+
+  for (const t of now) noteTyping(t.id)
+  for (const gone of (before ?? []).filter(b => !now.some(t => t.id === b.id))) forgetTyping(gone.id)
+}, { deep: true })
 
 // Coming back to a tab you left open counts as reading what piled up while you were away.
 function onVisibilityChange() {
@@ -535,7 +643,7 @@ onBeforeUnmount(() => {
           :channel-id="channelId"
           :mention-members="mentionMembers"
           @submit="onSend"
-          @typing="notifyTyping"
+          @typing="onTyping"
         />
       </div>
     </div>

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { AudioLines, HeadphoneOff, Loader2, Mic, MicOff, PhoneOff, ScreenShare, Volume2, VolumeX, WifiOff } from 'lucide-vue-next'
+import { AudioLines, HeadphoneOff, Loader2, MessageCircle, MessageCircleOff, Mic, MicOff, PhoneOff, ScreenShare, Volume2, VolumeX, WifiOff } from 'lucide-vue-next'
 import type { Peer } from '~/types'
 
 /**
@@ -24,6 +24,13 @@ const props = defineProps<{
    * control here that changes what somebody *else* hears, rather than what you do.
    */
   canModerate?: boolean
+  /**
+   * A Side Space, where what this person says in the chat is also drawn over their avatar in
+   * the room. Absent everywhere else — a voice channel has no room to draw it on.
+   */
+  canMuteBubbles?: boolean
+  /** Their bubbles are off, for you. See useSpaceChatBubbles. */
+  bubblesMuted?: boolean
 }>()
 
 const emit = defineEmits<{
@@ -34,6 +41,7 @@ const emit = defineEmits<{
   watch: []
   disconnect: []
   forceMute: [muted: boolean]
+  toggleBubbles: []
 }>()
 
 function initials(name: string) {
@@ -229,6 +237,27 @@ const shareLabel = computed(() => `${Math.round(props.peer.screenVolume * 100)}%
         {{ peer.localMuted ? 'off' : volumeLabel }}
       </span>
     </div>
+
+    <!--
+      Their chat, over their head in the room — or not.
+
+      Yours alone, exactly like the volume above it and for the same reason it sits here: this
+      is where every "what do *I* want from this person" switch lives, and one of them being
+      about the room rather than the sound doesn't make it a different kind of decision. The
+      room-wide off switch is in the stage's own menu; this is the one-person version.
+    -->
+    <button
+      v-if="!self && canMuteBubbles"
+      type="button"
+      class="flex w-full items-center justify-center gap-1.5 rounded-md border border-border px-2 py-1 text-xs font-medium text-muted-foreground transition hover:bg-muted hover:text-foreground"
+      :title="bubblesMuted
+        ? `Show ${peerName}'s chat over their head again`
+        : `Stop showing ${peerName}'s chat over their head — you'll still see it in the chat`"
+      @click="emit('toggleBubbles')"
+    >
+      <component :is="bubblesMuted ? MessageCircleOff : MessageCircle" class="h-3.5 w-3.5" />
+      {{ bubblesMuted ? 'Bubbles off' : 'Bubbles on' }}
+    </button>
 
     <!--
       Owner only, and unlike everything above it this reaches across the room: it moves the

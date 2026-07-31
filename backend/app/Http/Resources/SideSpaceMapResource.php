@@ -60,8 +60,25 @@ class SideSpaceMapResource extends JsonResource
                 ->map(fn ($lock) => [
                     'object_id' => $lock->object_id,
                     'zone_id' => $lock->zone_id,
-                    // Resolved, not stored — see Doors::keyholders.
-                    'allowed' => Doors::keyholders($this->resource, $lock),
+                    // Resolved, not stored — see Doors::granted. The standing keys only: a pass
+                    // bought with the password is below, with its deadline attached.
+                    'allowed' => Doors::granted($this->resource, $lock),
+                    /*
+                     * Who is through on a password, and when each of them stops being.
+                     *
+                     * Sent as a *deadline* rather than as membership of a list, because the pass
+                     * lapses without anybody doing anything and there is no event to broadcast
+                     * when it does. Every browser is already deciding this door's state sixty
+                     * times a second from the map it holds; give it the moment the pass ends and
+                     * it closes the door on time, in step with every other screen in the room,
+                     * with no second round trip and nothing to miss.
+                     *
+                     * Milliseconds, to be compared against Date.now() unchanged.
+                     */
+                    'passes' => collect($lock->activePasses())
+                        ->map(fn (int $until, int $id) => ['id' => $id, 'until' => $until * 1000])
+                        ->values()
+                        ->all(),
                     /*
                      * Whether the door will open for somebody who knows the words.
                      *

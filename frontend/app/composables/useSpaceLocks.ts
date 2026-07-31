@@ -38,7 +38,10 @@ export interface SpaceLockRow {
   granted: number[]
   /** Whether the door also opens for anybody who knows the password. Never the phrase itself. */
   has_password: boolean
-  /** How many people have got in that way — the reason to change it, in one number. */
+  /**
+   * How many people are through on the password *at this moment* — passes last seconds, not
+   * forever, so this is a gauge of who is inside rather than a tally of everybody who ever was.
+   */
   passed_count: number
   created_at: string
 }
@@ -115,7 +118,11 @@ export function useSpaceLocks(channelId: number) {
    * The one call here that isn't administration — it's made from the room, by somebody standing
    * at a door they can't open, and it's the only reason this composable is ever instantiated by
    * someone with nothing to manage. A wrong phrase throws (422) and is the caller's to show;
-   * a right one broadcasts the map, so the door opens on its own as the new key arrives.
+   * a right one broadcasts the map, so the door opens on its own as the pass arrives.
+   *
+   * And it is a *pass*, good for seconds — this call is made again on the way back out, and
+   * again the next time. That's the door's rule, not this function's, but it's the reason this
+   * one is called far more often than it looks like it would be.
    */
   async function enter(objectId: string, password: string) {
     await api(`${base}/locks/${objectId}/enter`, { method: 'POST', body: { password } })

@@ -324,9 +324,10 @@ const passesAnyway = (objectId: string, userId: number) =>
                 </div>
                 <p class="mt-1.5 text-[11px] text-muted-foreground">
                   <template v-if="d.lock.has_password">
-                    Anyone who knows it can come through.
-                    {{ d.lock.passed_count === 1 ? 'One person has' : `${d.lock.passed_count} people have` }}
-                    used it. Changing or removing it shuts them all out again.
+                    Anyone who knows it can come through, and is asked again at every crossing —
+                    it buys a way through the door, not a key to it.
+                    {{ d.lock.passed_count === 1 ? 'One person is' : `${d.lock.passed_count} people are` }}
+                    through on it right now. Changing or removing it shuts the door immediately.
                   </template>
                   <template v-else>
                     At least 4 characters. Anyone you give it to can let themselves in, without
