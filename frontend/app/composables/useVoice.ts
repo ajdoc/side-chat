@@ -590,6 +590,7 @@ export function useVoice() {
   const echo: any = useNuxtApp().$echo
   const { user } = useAuth()
   const token = useAuthToken()
+  const backgroundVoice = useBackgroundVoice()
 
   // Shared: the layout's "you're in a call" bar and the channel page both read this.
   const channelId = useState<number | null>('voice:channelId', () => null)
@@ -1725,6 +1726,16 @@ export function useVoice() {
     }
     window.addEventListener('pagehide', leaveOnUnload)
 
+    // On Android the call is cut the moment the app leaves the screen unless a foreground
+    // service is holding the microphone; this asks the shell for one, and is a no-op in every
+    // other shell. Not awaited — a call must not wait on a notification permission dialog.
+    backgroundVoice.start({
+      text: 'Tap to return to your call.',
+      // The notification's own Leave button. Hanging up here goes through the ordinary path,
+      // so the seat is released and the room hears you go, exactly as if you'd used the app.
+      onLeaveRequested: () => { void disconnect() },
+    })
+
     // Handed back so a caller that needs the roster can have it without a second request. A
     // Side Space does: it wants everybody's last standing position to draw the room with
     // before a single whisper has arrived. Null on any of the bail-outs above.
@@ -1777,6 +1788,7 @@ export function useVoice() {
     leaveOnUnload = undefined
 
     teardownMedia()
+    void backgroundVoice.stop()
 
     if (presence) {
       echo.leave(`voice.${id}`)

@@ -30,8 +30,7 @@ export function useSpaceMap(channelId: number) {
     loading.value = true
     error.value = ''
     try {
-      const res = await api<{ data: SpaceMap }>(`/api/channels/${channelId}/space/map`)
-      map.value = res.data
+      await refresh()
     }
     catch {
       error.value = 'Could not load this space.'
@@ -39,6 +38,21 @@ export function useSpaceMap(channelId: number) {
     finally {
       loading.value = false
     }
+  }
+
+  /**
+   * Read the map again without saying so.
+   *
+   * The broadcast is only a ping — the map itself is too big for the websocket's frame limit
+   * once a room is properly furnished (see SideSpaceMapUpdated). So this is the second half of
+   * every remote change, and it deliberately leaves `loading` alone: somebody else saving the
+   * editor must not blank out the room you're standing in for the length of a round trip.
+   */
+  async function refresh() {
+    const res = await api<{ data: SpaceMap }>(`/api/channels/${channelId}/space/map`)
+    map.value = res.data
+
+    return res.data
   }
 
   /** Save a rebuilt room. Owner only server-side; the caller hides the editor from everyone else. */
@@ -83,8 +97,14 @@ export function useSpaceMap(channelId: number) {
     if (!echo) return
 
     channel = echo.private(`channel.${channelId}`)
-    channel.listen('.SideSpaceMapUpdated', (payload: SpaceMap) => {
-      map.value = payload
+    channel.listen('.SideSpaceMapUpdated', (payload: { id: number, updated_at: string | null }) => {
+      // Already holding this version: a save through this same composable left `map` at exactly
+      // what the server stored, so the ping that follows it has nothing to teach us.
+      if (payload.updated_at && map.value?.updated_at === payload.updated_at) return
+
+      // Nothing to do on failure: the map on screen is the last one the server confirmed, which
+      // is a better thing to keep drawing than an error.
+      refresh().catch(() => {})
     })
   }
 
@@ -94,5 +114,5 @@ export function useSpaceMap(channelId: number) {
     channel = null
   }
 
-  return { map, loading, error, load, save, saveObjects, subscribe, unsubscribe }
+  return { map, loading, error, load, refresh, save, saveObjects, subscribe, unsubscribe }
 }

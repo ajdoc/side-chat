@@ -6,6 +6,7 @@ import {
   HeadphoneOff,
   Loader2,
   Map as MapIcon,
+  Megaphone,
   MessageSquare,
   MoreHorizontal,
   Mic,
@@ -49,7 +50,7 @@ import {
   zoneAt,
 } from '~/lib/spaceMapEngine'
 import { decorInFront, decorKind, decorSize, seatInFront, seatOn } from '~/lib/spaceDecor'
-import { doorInFront, lockMap, mayPass, syncDoors } from '~/lib/spaceDoors'
+import { canTryPassword, doorInFront, lockMap, mayPass, syncDoors } from '~/lib/spaceDoors'
 import { EFFECT_MS, drawRoomEffect, drawRoomEffectLabel } from '~/lib/spaceEffects'
 import { normaliseLook } from '~/lib/spaceAvatar'
 import { Button } from '~/components/ui/button'
@@ -133,6 +134,7 @@ const {
   attached,
   place,
   restyle,
+  reshout,
   warp,
   seed,
   tick,
@@ -181,8 +183,23 @@ const joining = ref(false)
  */
 const editing = ref<'full' | 'decor' | null>(null)
 const dressing = ref(false)
+/** The shout dialog. A sheet over the room like the others, so it takes the keys with it. */
+const shouting = ref(false)
+/**
+ * What you're shouting right now, for the toolbar.
+ *
+ * Read off the sprite rather than off the user record, so it changes the instant `reshout` puts
+ * the bubble up — the save that follows is what makes it survive a reload, not what makes it true.
+ */
+const myShout = computed(() => me.value?.shout ?? null)
 /** The rooms-and-locks panel. Only ever opened by somebody with something to manage. */
 const managingLocks = ref(false)
+
+/**
+ * The door whose password is being asked for, if any — a sheet over the room like the others,
+ * which is why the key handler treats it as one.
+ */
+const askingDoor = ref<string | null>(null)
 
 /**
  * Whether this person administers anything in here.
@@ -256,11 +273,30 @@ const lockedDoorHint = computed(() => {
   // four names is a label nobody reads.
   const who = owners.length > 1 ? `${owners[0]} or ${owners.length - 1} other${owners.length > 2 ? 's' : ''}` : owners[0]
 
+  if (blockedDoorTakesPassword.value) return room ? `${room} is locked — enter the password` : 'Locked — enter the password'
+
   if (who && room) return `${room} is locked — ask ${who}`
   if (room) return `${room} is locked`
 
   return 'This door is locked'
 })
+
+/** The room a door guards, by name — for the password prompt's title. */
+const blockedRoomName = computed(() => {
+  const zone = map.value?.locks?.find(l => l.object_id === blockedDoor.value?.id)?.zone_id
+
+  return (map.value?.zones ?? []).find(z => z.id === zone)?.name ?? null
+})
+
+/**
+ * Whether the door in your way is one you could talk your way through.
+ *
+ * A padlock means two different things — "ask whoever owns this room" and "type the words" —
+ * and the prompt has to say which, or somebody who was told the password stands in front of a
+ * dead end that was never a dead end.
+ */
+const blockedDoorTakesPassword = computed(() =>
+  !!blockedDoor.value && canTryPassword(locks.value, blockedDoor.value.id, me.value?.id))
 
 /** A door you're at that will not open for you. The only reason a door needs a prompt at all. */
 const blockedDoor = computed(() => {
@@ -487,7 +523,7 @@ watch(gameMeeting, (on, was) => {
   if (on && !was) {
     if (map.value) warp(map.value.spawn.x, map.value.spawn.y)
     unbindKeys()
-  } else if (!on && was && inThisRoom.value && !editing.value && !dressing.value) {
+  } else if (!on && was && inThisRoom.value && !editing.value && !dressing.value && !shouting.value) {
     bindKeys()
   }
 })
@@ -501,8 +537,8 @@ watch(gameMeeting, (on, was) => {
  * jobs for two different people. Given back on close, and only if you're still standing in the
  * room to use them.
  */
-watch([editing, dressing], ([sheet, picker]) => {
-  if (sheet || picker) return unbindKeys()
+watch([editing, dressing, shouting], ([sheet, picker, shout]) => {
+  if (sheet || picker || shout) return unbindKeys()
   if (inThisRoom.value && !gameMeeting.value) bindKeys()
 })
 
@@ -707,6 +743,7 @@ async function enter() {
       facing: p.facing ?? null,
       look: p.user.space_avatar,
       pet: p.user.space_pet,
+      shout: p.user.space_shout,
     })))
     // …and put yourself back where you were standing, if the room still allows it.
     const mine = roster.find(p => p.user.id === user.value?.id)
@@ -1029,7 +1066,7 @@ function onPointerDown(e: PointerEvent) {
 
   // Not standing in the room, or a sheet is over it: walking isn't ours to do. (A right-click or
   // a middle-click isn't a walk either.)
-  if (!inThisRoom.value || editing.value || dressing.value || gameMeeting.value) return
+  if (!inThisRoom.value || editing.value || dressing.value || shouting.value || gameMeeting.value) return
   if (e.button !== 0 && e.pointerType === 'mouse') return
 
   const at = pointerWorld(e)
@@ -1147,7 +1184,7 @@ function onInteractKey(e: KeyboardEvent) {
   if (!inThisRoom.value) return
   // A sheet is open over the room — the editor, or the picker. Neither is a place where a
   // letter should reach past it and switch the telly on.
-  if (editing.value || dressing.value) return
+  if (editing.value || dressing.value || shouting.value || askingDoor.value) return
 
   const el = e.target as HTMLElement | null
   if (el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.isContentEditable)) return
@@ -1157,6 +1194,15 @@ function onInteractKey(e: KeyboardEvent) {
   if (gameRunning.value) {
     if (gameNearTaskId.value) { e.preventDefault(); void onDoTask() }
     else if (gameNearBody.value) { e.preventDefault(); void onReportOrMeeting() }
+
+    return
+  }
+
+  // A door you could say the words at answers E before anything else does: you're standing in
+  // its doorway, and there is nothing else that press could sensibly mean there.
+  if (blockedDoorTakesPassword.value && blockedDoor.value) {
+    e.preventDefault()
+    askingDoor.value = blockedDoor.value.id
 
     return
   }
@@ -1179,6 +1225,18 @@ function onInteractKey(e: KeyboardEvent) {
 function onDressed(look: Parameters<typeof restyle>[0], pet: Parameters<typeof restyle>[1]) {
   dressing.value = false
   restyle(look, pet)
+}
+
+/**
+ * A new shout, or none — saved by the dialog and now worn, exactly like a new look.
+ *
+ * Same division of labour as {@link onDressed}: the dialog owns the write, the stage owns the
+ * sprite standing in the room, which would otherwise keep the old bubble until the roster was
+ * next rebuilt.
+ */
+function onShouted(shout: string | null) {
+  shouting.value = false
+  reshout(shout)
 }
 
 // --- drawing ---
@@ -1626,6 +1684,8 @@ function drawPerson(
     ctx.stroke()
   }
 
+  if (o.shout) drawShout(ctx, o.shout, p.x, p.y, size)
+
   // The name goes *under* the feet, on a plate — over a patterned floor, plain text at this
   // size is unreadable about half the time.
   const label = self ? 'You' : o.name
@@ -1646,6 +1706,61 @@ function drawPerson(
   ctx.fillText(label, p.x, labelY, size * 5)
 
   ctx.restore()
+}
+
+/**
+ * The bubble over somebody's head, and what they're shouting in it.
+ *
+ * Above the sprite rather than below it, where the nameplate lives: the two are different
+ * claims — one is who you are, the other is what you're saying — and stacking them on the same
+ * side of a 16-pixel figure makes both harder to read than either alone.
+ *
+ * Drawn light-on-dark like the nameplate, for the same reason: the floor underneath is a
+ * pattern, and plain text over grass is unreadable about half the time. It inherits whatever
+ * `globalAlpha` the caller set, so a shout fades out of earshot exactly as its owner does.
+ *
+ * Long shouts are cut with an ellipsis rather than wrapped. Forty characters is short enough
+ * that this almost never fires, and a two-line bubble at this zoom is a poster.
+ */
+function drawShout(ctx: CanvasRenderingContext2D, shout: string, x: number, y: number, size: number) {
+  // Bigger than the nameplate under the feet, and deliberately so: a name is a thing you look up
+  // when you want it, and a shout is a thing meant to be read across the room without going
+  // looking. The floor of 12px is what keeps it legible when somebody has zoomed all the way out.
+  const font = Math.max(12, size * 0.42)
+  ctx.font = `600 ${font}px system-ui, sans-serif`
+  ctx.textAlign = 'center'
+  ctx.textBaseline = 'middle'
+
+  const maxText = size * 6
+  let text = shout
+  if (ctx.measureText(text).width > maxText) {
+    while (text.length > 1 && ctx.measureText(`${text}…`).width > maxText) text = text.slice(0, -1)
+    text = `${text}…`
+  }
+
+  const w = ctx.measureText(text).width + size * 0.55
+  const h = font * 1.75
+  // Clear of the muted-mic badge, which sits at -0.55 with a radius of 0.2.
+  const cy = y - size * 0.95 - h / 2
+  const left = x - w / 2
+  const top = cy - h / 2
+
+  ctx.fillStyle = 'rgb(0 0 0 / 0.62)'
+  ctx.beginPath()
+  ctx.roundRect(left, top, w, h, Math.min(h / 2, size * 0.26))
+  ctx.fill()
+
+  // A tail, so it reads as coming *from* the person rather than floating above them. Grown with
+  // the bubble: a pinprick under a fat pill reads as a speck of dirt rather than as a tail.
+  ctx.beginPath()
+  ctx.moveTo(x - size * 0.14, top + h - 0.5)
+  ctx.lineTo(x, top + h + size * 0.22)
+  ctx.lineTo(x + size * 0.14, top + h - 0.5)
+  ctx.closePath()
+  ctx.fill()
+
+  ctx.fillStyle = '#ffffff'
+  ctx.fillText(text, x, cy)
 }
 
 // --- lifecycle ---
@@ -1925,6 +2040,21 @@ watch(inThisRoom, (now) => {
             <span v-if="narrow">Change how you look</span>
           </button>
 
+          <!-- A word over your head that stays there. Lit while one is up, because a thing that
+               everybody else can see and you can't is the one state worth showing in the bar —
+               and it doubles as the way back to turning it off. Only in the room: shouting into
+               a place you aren't standing in is nothing. -->
+          <button
+            v-if="inThisRoom"
+            type="button"
+            :class="[toolClass, myShout ? 'text-primary' : 'text-muted-foreground hover:text-foreground']"
+            :title="myShout ? `You're shouting “${myShout}” — click to change it or turn it off` : 'Shout something over your head'"
+            @click="fromMenu(() => (shouting = true))"
+          >
+            <Megaphone class="h-4 w-4 shrink-0" />
+            <span v-if="narrow">{{ myShout ? `Shouting “${myShout}”` : 'Shout something' }}</span>
+          </button>
+
           <!--
             What the room does when somebody comes into earshot. The very same settings a voice
             channel has — and until now the room was the one place they could be *fired* but not
@@ -2119,13 +2249,20 @@ watch(inThisRoom, (now) => {
           from a broken one: you walk at it, nothing happens, and there is nothing on screen
           that says anybody meant that.
         -->
-        <p
+        <!-- Unless a password would open it, in which case it is an affordance after all, and
+             the same press (E) that uses furniture asks for the words. -->
+        <component
+          :is="blockedDoorTakesPassword ? 'button' : 'p'"
           v-if="inThisRoom && blockedDoor"
+          :type="blockedDoorTakesPassword ? 'button' : undefined"
           class="absolute bottom-2 left-1/2 flex -translate-x-1/2 items-center gap-2 rounded-full bg-foreground/90 px-3 py-1.5 text-xs font-medium text-background shadow-lg"
+          :class="blockedDoorTakesPassword ? 'transition hover:bg-foreground' : ''"
+          @click="blockedDoorTakesPassword && blockedDoor ? askingDoor = blockedDoor.id : undefined"
         >
           <Lock class="h-3.5 w-3.5" />
           {{ lockedDoorHint }}
-        </p>
+          <span v-if="blockedDoorTakesPassword && !narrow" class="rounded border border-background/40 px-1 text-[10px] leading-4">E</span>
+        </component>
 
         <button
           v-if="inThisRoom && hasPrompt && !blockedDoor"
@@ -2277,6 +2414,20 @@ watch(inThisRoom, (now) => {
       v-if="dressing"
       @close="dressing = false"
       @saved="onDressed"
+    />
+
+    <SpaceShoutDialog
+      v-if="shouting"
+      @close="shouting = false"
+      @saved="onShouted"
+    />
+
+    <SpaceDoorPasswordDialog
+      v-if="askingDoor"
+      :door-id="askingDoor"
+      :channel-id="channel.id"
+      :room-name="blockedRoomName"
+      @close="askingDoor = null"
     />
 
     <SpaceLocksDialog

@@ -26,6 +26,8 @@ class UserResource extends JsonResource
             // something drawable rather than as an absence each of them handles differently.
             'space_avatar' => Avatars::normaliseLook($this->space_avatar),
             'space_pet' => $this->space_pet,
+            // The line over their head, or null for nobody shouting anything.
+            'space_shout' => $this->space_shout,
             'created_at' => $this->created_at,
         ];
     }

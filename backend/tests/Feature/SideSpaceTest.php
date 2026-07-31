@@ -704,6 +704,40 @@ it('remembers what you look like and who is following you', function () {
         ->assertJsonPath('data.space_avatar.hair', 'ponytail');
 });
 
+it('keeps a shout up until it is turned off', function () {
+    $user = User::factory()->create();
+    Passport::actingAs($user);
+
+    // Whitespace is collapsed: a bubble is one line whatever was pasted into it.
+    $this->patchJson('/api/space/appearance', ['shout' => "  Worship 🙌\n\n"])
+        ->assertOk()
+        ->assertJsonPath('data.space_shout', 'Worship 🙌');
+
+    // Saving something else entirely leaves it alone — the key is what changes it.
+    $this->patchJson('/api/space/appearance', ['pet' => 'emberpup'])
+        ->assertOk()
+        ->assertJsonPath('data.space_shout', 'Worship 🙌');
+
+    // Turning it off, both ways round: an explicit null, and a box that was emptied.
+    $this->patchJson('/api/space/appearance', ['shout' => '   '])
+        ->assertOk()
+        ->assertJsonPath('data.space_shout', null);
+
+    $this->patchJson('/api/space/appearance', ['shout' => 'Back'])->assertOk();
+    $this->patchJson('/api/space/appearance', ['shout' => null])
+        ->assertOk()
+        ->assertJsonPath('data.space_shout', null);
+
+    expect($user->fresh()->space_shout)->toBeNull();
+});
+
+it('refuses a shout too long to fit in the bubble', function () {
+    Passport::actingAs(User::factory()->create());
+
+    $this->patchJson('/api/space/appearance', ['shout' => str_repeat('a', 41)])
+        ->assertStatus(422)->assertJsonValidationErrors('shout');
+});
+
 it('refuses a look nobody has artwork for', function () {
     Passport::actingAs(User::factory()->create());
 

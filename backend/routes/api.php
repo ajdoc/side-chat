@@ -267,6 +267,13 @@ Route::middleware('auth:api')->group(function () {
     Route::get('channels/{channel}/space/locks', [SideSpaceController::class, 'locks']);
     Route::put('channels/{channel}/space/locks/{object}', [SideSpaceController::class, 'lockDoor']);
     Route::delete('channels/{channel}/space/locks/{object}', [SideSpaceController::class, 'unlockDoor']);
+    /*
+     * Saying the password at a door. Throttled, which the other three aren't: this is the one
+     * endpoint in the group that anybody may call about a door they have no claim on, so the
+     * rate of guesses is the only thing standing between a four-character phrase and a script.
+     */
+    Route::post('channels/{channel}/space/locks/{object}/enter', [SideSpaceController::class, 'enterDoor'])
+        ->middleware('throttle:10,1');
 
     /*
      * Games in the room — "the map becomes a game". The catalogue is global; everything else is

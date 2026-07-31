@@ -66,6 +66,10 @@ export function useScreenSourcePicker() {
   }
 
   function cancel() {
+    // Nothing pending means this is the second half of a dismissal that already answered —
+    // the X button both closes the dialog and fires `update:open`. Cancelling again would
+    // refuse whatever request happened to arrive next.
+    if (!request.value) return
     // Told to the shell even on a dismissal: without it the pending getDisplayMedia never
     // settles, and the share button stays stuck mid-press for the rest of the session.
     bridge()?.cancel()

@@ -5,6 +5,7 @@ namespace App\Http\Controllers;
 use App\Events\SideSpaceMapUpdated;
 use App\Http\Requests\SideSpace\AssignSpaceRoomOwnerRequest;
 use App\Http\Requests\SideSpace\DestroySpaceLockRequest;
+use App\Http\Requests\SideSpace\EnterSpaceLockRequest;
 use App\Http\Requests\SideSpace\IndexSpaceLocksRequest;
 use App\Http\Requests\SideSpace\InteractWithSpaceObjectRequest;
 use App\Http\Requests\SideSpace\StoreSpaceLockRequest;
@@ -27,6 +28,7 @@ use App\Support\SideSpace\Doors;
 use App\Support\SideSpace\MapPresets;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Response;
+use Illuminate\Support\Facades\Hash;
 use Illuminate\Validation\ValidationException;
 
 /**
@@ -329,16 +331,82 @@ class SideSpaceController extends Controller
 
         abort_unless(Doors::mayAdminister($map, $request->user(), $zone), 403);
 
+        $attributes = [
+            'zone_id' => $zone,
+            'created_by' => $request->user()?->id,
+            // Only the explicit key-holders. The three who can always pass are resolved on
+            // the way out — see Doors::keyholders.
+            'allowed' => array_values(array_unique(array_map('intval', $request->validated('allowed', [])))),
+        ];
+
+        /*
+         * The password, which is three states and not two — see StoreSpaceLockRequest.
+         *
+         * A request that doesn't mention it leaves it alone, because the ordinary edit here is
+         * "give Alice a key" and that must not clear the door's phrase as a side effect.
+         *
+         * Setting or clearing it also forgets everybody who had entered the old one. That's the
+         * only thing that makes changing a password mean anything: if the people who knew the
+         * previous phrase kept walking through, changing it would shut out nobody at all.
+         */
+        if ($request->has('password')) {
+            $password = $request->input('password');
+            $attributes['password'] = $password === null || $password === '' ? null : $password;
+            $attributes['passed'] = [];
+        }
+
         SideSpaceLock::updateOrCreate(
             ['side_space_map_id' => $map->id, 'object_id' => $object],
-            [
-                'zone_id' => $zone,
-                'created_by' => $request->user()?->id,
-                // Only the explicit key-holders. The three who can always pass are resolved on
-                // the way out — see Doors::keyholders.
-                'allowed' => array_values(array_unique(array_map('intval', $request->validated('allowed', [])))),
-            ],
+            $attributes,
         );
+
+        return $this->announce($map);
+    }
+
+    /**
+     * Say the password at a door, and keep the key if it's right.
+     *
+     * The other half of what a lock is for. A key-holder list can only let in people the room's
+     * owner could name in advance; a password lets in anybody who was told it, which is how most
+     * private rooms actually work — the phrase goes in a pinned message, and whoever reads it
+     * comes in.
+     *
+     * Two decisions worth stating:
+     *
+     *   - **the answer is remembered**, in `passed`, rather than the door asking every time. A
+     *     door that re-prompted at each crossing is a door people prop open, and the memory is
+     *     what lets changing the password actually shut somebody out (setting a new one empties
+     *     the list — see {@see lockDoor}).
+     *   - **a wrong guess is a 422**, the same shape as any other rejected input, and the door
+     *     stays exactly as it was. Guessing is throttled on the route, because what needs
+     *     limiting is the rate of attempts at a door and not anything about one request.
+     *
+     * Answers on a door that will already open for you rather than making you say the words
+     * anyway: the end state asked for is the end state, and a key-holder typing the password is
+     * not wrong, just redundant.
+     */
+    public function enterDoor(EnterSpaceLockRequest $request, Channel $channel, string $object): JsonResponse
+    {
+        $map = $this->mapFor($channel);
+        $lock = $map->locks->firstWhere('object_id', $object);
+        $user = $request->user();
+
+        // No lock, or no password on it: there is nothing here a password could open. 404 rather
+        // than a polite success, because a client that asked has a stale idea of the door.
+        abort_if($lock === null || ! $lock->hasPassword(), 404);
+        abort_if($user === null, 403);
+
+        if (in_array($user->id, Doors::keyholders($map, $lock), true)) {
+            return $this->announce($map);
+        }
+
+        if (! Hash::check((string) $request->validated('password'), $lock->password)) {
+            throw ValidationException::withMessages(['password' => 'That is not the password.']);
+        }
+
+        $lock->update([
+            'passed' => array_values(array_unique([...array_map('intval', $lock->passed ?? []), $user->id])),
+        ]);
 
         return $this->announce($map);
     }
@@ -429,6 +497,11 @@ class SideSpaceController extends Controller
                  * granted, which is exactly the sort of guess that quietly stops being right.
                  */
                 'granted' => array_values(array_map('intval', $lock->allowed ?? [])),
+                // Whether a password is set, and how many people have used it. Never the phrase
+                // itself — it isn't stored in a form anybody could be shown, including its owner,
+                // which is why the panel offers "change it" and never "what is it".
+                'has_password' => $lock->hasPassword(),
+                'passed_count' => count($lock->passed ?? []),
                 'created_at' => $lock->created_at,
             ]),
             // What the panel needs to know about *itself*: whether to offer the rooms tab, and

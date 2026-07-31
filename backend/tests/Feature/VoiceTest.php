@@ -11,6 +11,7 @@ use App\Models\User;
 use App\Models\VoiceEffectAssignment;
 use App\Models\VoiceParticipant;
 use Illuminate\Support\Facades\Event;
+use Illuminate\Support\Facades\Http;
 use Laravel\Passport\Passport;
 
 it('joins a voice channel and returns the roster and ice servers', function () {
@@ -729,4 +730,69 @@ it('refuses effects in a chat, which is not a venue with an owner', function () 
         'join_effect' => 'fireworks',
         'leave_effect' => null,
     ])->assertForbidden();
+});
+
+it('mints a cloudflare turn credential and hands it to the browser', function () {
+    config([
+        'webrtc.cloudflare.key_id' => 'key-123',
+        'webrtc.cloudflare.api_token' => 'secret-token',
+    ]);
+
+    Http::fake([
+        'rtc.live.cloudflare.com/*' => Http::response([
+            'iceServers' => [
+                'urls' => ['turn:turn.cloudflare.com:3478?transport=udp'],
+                'username' => 'minted-user',
+                'credential' => 'minted-secret',
+            ],
+        ]),
+    ]);
+
+    [$user, , $channel] = ownerWithVoiceChannel();
+
+    Passport::actingAs($user);
+
+    $response = $this->postJson("/api/channels/{$channel->id}/voice/join")->assertOk();
+
+    expect(collect($response->json('ice_servers'))->firstWhere('username', 'minted-user'))
+        ->toMatchArray([
+            'urls' => ['turn:turn.cloudflare.com:3478?transport=udp'],
+            'credential' => 'minted-secret',
+        ]);
+
+    Http::assertSent(fn ($request) => $request->hasHeader('Authorization', 'Bearer secret-token')
+        && str_contains($request->url(), '/keys/key-123/credentials/'));
+});
+
+it('still serves a call when cloudflare turn is down', function () {
+    config([
+        'webrtc.cloudflare.key_id' => 'key-123',
+        'webrtc.cloudflare.api_token' => 'secret-token',
+    ]);
+
+    Http::fake(['rtc.live.cloudflare.com/*' => Http::response(null, 500)]);
+
+    [$user, , $channel] = ownerWithVoiceChannel();
+
+    Passport::actingAs($user);
+
+    // A relay nobody could mint is one fewer candidate, not a failed join: the STUN entry
+    // is still there and the majority who never needed TURN are unaffected.
+    $response = $this->postJson("/api/channels/{$channel->id}/voice/join")->assertOk();
+
+    expect($response->json('ice_servers'))->not->toBeEmpty();
+});
+
+it('leaves cloudflare out entirely when no key is configured', function () {
+    config(['webrtc.cloudflare.key_id' => '', 'webrtc.cloudflare.api_token' => '']);
+
+    Http::fake();
+
+    [$user, , $channel] = ownerWithVoiceChannel();
+
+    Passport::actingAs($user);
+
+    $this->postJson("/api/channels/{$channel->id}/voice/join")->assertOk();
+
+    Http::assertNothingSent();
 });

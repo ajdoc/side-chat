@@ -9,6 +9,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from '~/components/ui/dialog'
+import type { ScreenShareRequest } from '~/composables/useScreenSourcePicker'
 
 /**
  * "Which screen?" — the desktop app's answer to a question the browser normally asks.
@@ -29,14 +30,27 @@ onBeforeUnmount(() => unlisten?.())
 const selected = ref<string | null>(null)
 const withAudio = ref(true)
 
-const screens = computed(() => request.value?.sources.filter(s => s.kind === 'screen') ?? [])
-const windows = computed(() => request.value?.sources.filter(s => s.kind === 'window') ?? [])
+/**
+ * The request the dialog is *drawing*, which outlives the one it's waiting on.
+ *
+ * Answering clears `request`, and that's what closes the dialog — so binding the body to it
+ * directly tore the content out of the DOM in the same tick as the click that closed it.
+ * Reka's dismissable layer and focus scope are still unwinding at that point, and reaching
+ * for a node that no longer exists is the error that came out of pressing the X. Keeping the
+ * last request lets the close animation run against real markup and unmount on its own.
+ */
+const shown = ref<ScreenShareRequest | null>(null)
+
+const screens = computed(() => shown.value?.sources.filter(s => s.kind === 'screen') ?? [])
+const windows = computed(() => shown.value?.sources.filter(s => s.kind === 'window') ?? [])
 
 // Each fresh request opens on the first screen, which is the answer most of the time, and
 // re-arms the audio tick — it's per-share, not a remembered preference.
 watch(request, (next) => {
-  selected.value = next?.sources[0]?.id ?? null
-  withAudio.value = !!next?.audioRequested && !!next?.audioSupported
+  if (!next) return // a cleared request is the dialog closing; leave `shown` for the animation
+  shown.value = next
+  selected.value = next.sources[0]?.id ?? null
+  withAudio.value = next.audioRequested && next.audioSupported
 })
 
 function share() {
@@ -59,7 +73,7 @@ const platformName = computed(() => {
 
 <template>
   <Dialog :open="open" @update:open="onOpenChange">
-    <DialogContent v-if="request" class="max-w-3xl">
+    <DialogContent v-if="shown" class="max-w-3xl">
       <DialogHeader>
         <DialogTitle>Share your screen</DialogTitle>
         <DialogDescription>
@@ -110,18 +124,18 @@ const platformName = computed(() => {
         silent share with a ticked "share audio" box is the more confusing of the two failures.
       -->
       <label
-        v-if="request.audioRequested"
+        v-if="shown.audioRequested"
         class="flex items-center gap-2 rounded-md border bg-muted/40 px-3 py-2 text-sm"
-        :class="request.audioSupported ? '' : 'text-muted-foreground'"
+        :class="shown.audioSupported ? '' : 'text-muted-foreground'"
       >
         <input
           v-model="withAudio"
           type="checkbox"
           class="h-4 w-4 accent-primary"
-          :disabled="!request.audioSupported"
+          :disabled="!shown.audioSupported"
         >
         <AudioLines class="h-4 w-4 shrink-0" />
-        <span v-if="request.audioSupported">Share this computer's sound too</span>
+        <span v-if="shown.audioSupported">Share this computer's sound too</span>
         <span v-else>Sharing computer sound isn't available on {{ platformName }} yet — the picture will be shared without it.</span>
       </label>
 

@@ -39,6 +39,11 @@ class UpdateSpaceAppearanceRequest extends FormRequest
 
             // Null is a real choice — it's how you send the pet home.
             'pet' => ['sometimes', 'nullable', 'string', Rule::in(Avatars::petKeys())],
+
+            // The line over your head. Free text, unlike everything above it — it names no
+            // sprite, so the only things worth enforcing are that it fits in the bubble and
+            // that it's one line. Null, again, is a real choice: it's the bubble going away.
+            'shout' => ['sometimes', 'nullable', 'string', 'max:40'],
         ];
     }
 }

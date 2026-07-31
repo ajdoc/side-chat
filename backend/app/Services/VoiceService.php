@@ -29,6 +29,8 @@ use Illuminate\Database\Eloquent\Collection;
  */
 final class VoiceService
 {
+    public function __construct(private readonly CloudflareTurn $cloudflareTurn) {}
+
     /** Everyone currently in a channel, freshest join first. Ghosts excluded. */
     public function participants(Channel $channel): Collection
     {
@@ -111,6 +113,13 @@ final class VoiceService
                 'username' => $turn['username'] ?? null,
                 'credential' => $turn['credential'] ?? null,
             ];
+        }
+
+        // Cloudflare last, and only if configured: its credentials are minted rather than
+        // read from config, so unlike the entries above it can come back empty on a bad day
+        // (see CloudflareTurn). Ordering is cosmetic — ICE tries every entry regardless.
+        if ($cloudflare = $this->cloudflareTurn->iceServer()) {
+            $servers[] = $cloudflare;
         }
 
         return $servers;

@@ -58,6 +58,8 @@ interface MovePayload {
   pet?: PetKind | null
   /** The furniture they're sitting on, if any — see Occupant.seatedOn. */
   seat?: string | null
+  /** The line over their head, if any — see Occupant.shout. */
+  shout?: string | null
 }
 
 type RemoteOccupant = Occupant & { tx: number, ty: number, at: number }
@@ -261,6 +263,7 @@ export function useSpacePresence(channelId: number, map: Ref<SpaceMap | null>) {
       facing,
       look: normaliseLook(user.value.space_avatar),
       pet: user.value.space_pet ?? null,
+      shout: user.value.space_shout ?? null,
       // Standing beside you rather than on you, so it's visible the moment you walk in.
       petAt: { x: at.x - 0.6, y: at.y + 0.3, facing },
     }
@@ -383,6 +386,7 @@ export function useSpacePresence(channelId: number, map: Ref<SpaceMap | null>) {
     facing: Facing | null
     look?: AvatarLook | null
     pet?: PetKind | null
+    shout?: string | null
   }>) {
     if (!map.value) return
 
@@ -408,6 +412,7 @@ export function useSpacePresence(channelId: number, map: Ref<SpaceMap | null>) {
         look: normaliseLook(o.look),
         pet: o.pet ?? null,
         petAt: { x: o.x - 0.6, y: o.y + 0.3, facing: o.facing ?? 'down' },
+        shout: o.shout ?? null,
         at: Date.now(),
       }
     }
@@ -640,6 +645,7 @@ export function useSpacePresence(channelId: number, map: Ref<SpaceMap | null>) {
       look: me.value.look,
       pet: me.value.pet ?? null,
       seat: me.value.seatedOn ?? null,
+      shout: me.value.shout ?? null,
     } satisfies MovePayload)
   }
 
@@ -661,6 +667,9 @@ export function useSpacePresence(channelId: number, map: Ref<SpaceMap | null>) {
       if (payload.look) existing.look = payload.look
       existing.pet = payload.pet ?? null
       existing.seatedOn = payload.seat ?? null
+      // Same in-place treatment as the look: somebody who has just changed what they're
+      // shouting shouldn't have to walk out and back in for anyone to read it.
+      existing.shout = payload.shout ?? null
       if (existing.pet && !existing.petAt) {
         existing.petAt = { x: payload.x, y: payload.y, facing: payload.facing }
       }
@@ -692,6 +701,7 @@ export function useSpacePresence(channelId: number, map: Ref<SpaceMap | null>) {
         pet: payload.pet ?? null,
         petAt: { x: payload.x - 0.6, y: payload.y + 0.3, facing: payload.facing },
         seatedOn: payload.seat ?? null,
+        shout: payload.shout ?? null,
         at: Date.now(),
       },
     }
@@ -973,6 +983,21 @@ export function useSpacePresence(channelId: number, map: Ref<SpaceMap | null>) {
   }
 
   /**
+   * You changed what you're shouting — or stopped.
+   *
+   * Separate from {@link restyle} rather than folded into it because it's a different gesture
+   * with a different lifetime: a look is a costume you put on in a dialog, and a shout is a
+   * thing you say and then take back, sometimes twice in a minute. Both end with a forced
+   * whisper for the same reason — the room should read it now, not on your next step.
+   */
+  function reshout(shout: string | null) {
+    if (!me.value) return
+
+    me.value = { ...me.value, shout }
+    whisperMove(true)
+  }
+
+  /**
    * Watch people come and go. Returns its own undo — call it when you stop drawing the room.
    *
    * A listener rather than a queue of events to poll, because the thing that notices an arrival
@@ -993,6 +1018,7 @@ export function useSpacePresence(channelId: number, map: Ref<SpaceMap | null>) {
     attached,
     place,
     restyle,
+    reshout,
     warp,
     seed,
     tick,

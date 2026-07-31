@@ -36,6 +36,10 @@ export interface SpaceLockRow {
    * current owners into the row as standing keys, which then survive the room changing hands.
    */
   granted: number[]
+  /** Whether the door also opens for anybody who knows the password. Never the phrase itself. */
+  has_password: boolean
+  /** How many people have got in that way — the reason to change it, in one number. */
+  passed_count: number
   created_at: string
 }
 
@@ -68,12 +72,22 @@ export function useSpaceLocks(channelId: number) {
   }
 
   /**
+   * Lock a door, or edit one that's already locked.
+   *
    * Every write answers with the whole map and broadcasts it, so there is nothing to patch
    * locally: the map stream applies it, the doors change for everybody at once, and this only
    * has to refresh its own scoped list.
+   *
+   * `password` is left out of the body unless it was passed, and that absence is meaningful:
+   * the server reads a missing key as "leave the password alone" and an explicit `null` as
+   * "take it off". Editing the key-holder list must not clear a door's phrase by omission,
+   * which is exactly what sending `password: undefined` on every call would do.
    */
-  async function lock(objectId: string, allowed: number[]) {
-    await api(`${base}/locks/${objectId}`, { method: 'PUT', body: { allowed } })
+  async function lock(objectId: string, allowed: number[], password?: string | null) {
+    const body: Record<string, unknown> = { allowed }
+    if (password !== undefined) body.password = password
+
+    await api(`${base}/locks/${objectId}`, { method: 'PUT', body })
     await load()
   }
 
@@ -95,5 +109,17 @@ export function useSpaceLocks(channelId: number) {
     await load()
   }
 
-  return { locks, canManageRooms, myRooms, loading, error, load, lock, unlock, assignRoom }
+  /**
+   * Say the password at a door.
+   *
+   * The one call here that isn't administration — it's made from the room, by somebody standing
+   * at a door they can't open, and it's the only reason this composable is ever instantiated by
+   * someone with nothing to manage. A wrong phrase throws (422) and is the caller's to show;
+   * a right one broadcasts the map, so the door opens on its own as the new key arrives.
+   */
+  async function enter(objectId: string, password: string) {
+    await api(`${base}/locks/${objectId}/enter`, { method: 'POST', body: { password } })
+  }
+
+  return { locks, canManageRooms, myRooms, loading, error, load, lock, unlock, assignRoom, enter }
 }

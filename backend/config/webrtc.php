@@ -13,7 +13,9 @@ return [
     | ~15% of connections behind symmetric NAT or a strict corporate firewall —
     | without it those users join the call and simply never hear anyone.
     |
-    | There is no free TURN: point these at your own coturn, or a hosted provider.
+    | There is no free TURN: point these at your own coturn, or a hosted provider —
+    | Cloudflare Realtime is wired up separately below, since its credentials are minted
+    | on demand rather than configured.
     |
     | More than one TURN entry is a redundancy play, not a load-balancer: a browser is
     | handed every one and ICE fails over to whichever answers, so the ~15% who need a
@@ -53,6 +55,25 @@ return [
             'credential' => env('WEBRTC_TURN2_CREDENTIAL'),
         ],
     ], static fn (array $turn): bool => $turn['urls'] !== [])),
+
+    /*
+     * Cloudflare Realtime TURN, which is the odd one out: it has no fixed username and
+     * password to put in an env var. You hold a long-lived key id and API token, and mint
+     * a short-lived credential per session against Cloudflare's API — so this entry names
+     * the key rather than the credential, and CloudflareTurn does the minting.
+     *
+     * Leave the key id blank and nothing about the response changes; it's simply not
+     * offered, exactly like an unconfigured WEBRTC_TURN2_*.
+     */
+    'cloudflare' => [
+        'key_id' => env('WEBRTC_CLOUDFLARE_TURN_KEY_ID'),
+        'api_token' => env('WEBRTC_CLOUDFLARE_TURN_API_TOKEN'),
+
+        // How long a minted credential stays valid. Only has to outlive a call, and the
+        // cached copy is retired earlier still (see CloudflareTurn::CACHE_MARGIN) so a
+        // browser is never handed one that expires mid-call.
+        'ttl' => (int) env('WEBRTC_CLOUDFLARE_TURN_TTL', 86400),
+    ],
 
     /*
     |--------------------------------------------------------------------------

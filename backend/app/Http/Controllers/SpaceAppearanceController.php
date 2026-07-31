@@ -38,6 +38,13 @@ class SpaceAppearanceController extends Controller
             $payload['space_pet'] = $request->input('pet');
         }
 
+        // Whitespace collapsed rather than merely trimmed: a bubble is one line whatever was
+        // pasted into it, and a shout of nothing but spaces is somebody turning it off.
+        if ($request->has('shout')) {
+            $shout = trim(preg_replace('/\s+/u', ' ', (string) $request->input('shout')) ?? '');
+            $payload['space_shout'] = $shout === '' ? null : $shout;
+        }
+
         if ($payload !== []) {
             $user->update($payload);
         }

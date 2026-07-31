@@ -39,15 +39,24 @@ import { DECOR, decorSize } from './spaceDecor'
  */
 export const DOOR_REACH = 1.4
 
-/** Which doors a locked-door list says are locked, and who holds a key to each. */
-export type LockMap = Map<string, Set<number>>
+/**
+ * Which doors a locked-door list says are locked, who holds a key to each, and whether the door
+ * will also open for somebody who knows the password.
+ *
+ * The password flag is a *fact about the door*, never the phrase — that never leaves the server.
+ * It's here because a padlock has two different meanings to somebody without a key ("ask the
+ * owner" and "type the words"), and a door that can't tell them apart is a door people give up
+ * at.
+ */
+export type DoorLock = { keys: Set<number>, password: boolean }
+export type LockMap = Map<string, DoorLock>
 
 /** Turn the map's `locks` payload into something the frame loop can ask cheaply. */
 export function lockMap(locks: SpaceMap['locks']): LockMap {
   const map: LockMap = new Map()
 
   for (const lock of locks ?? []) {
-    map.set(lock.object_id, new Set(lock.allowed ?? []))
+    map.set(lock.object_id, { keys: new Set(lock.allowed ?? []), password: !!lock.has_password })
   }
 
   return map
@@ -55,9 +64,19 @@ export function lockMap(locks: SpaceMap['locks']): LockMap {
 
 /** May this person walk through this door? Unlocked doors are open to everybody. */
 export function mayPass(locks: LockMap, doorId: string, userId: number | null | undefined): boolean {
-  const keys = locks.get(doorId)
+  const lock = locks.get(doorId)
 
-  return !keys || (userId != null && keys.has(userId))
+  return !lock || (userId != null && lock.keys.has(userId))
+}
+
+/**
+ * Is this a door that would open for them if they said the right thing?
+ *
+ * Only ever true for a door they can't already pass — somebody with a key is never asked for a
+ * password, and offering them the box would suggest the door was shut when it isn't.
+ */
+export function canTryPassword(locks: LockMap, doorId: string, userId: number | null | undefined): boolean {
+  return !!locks.get(doorId)?.password && !mayPass(locks, doorId, userId)
 }
 
 /** How far a point is from the nearest tile of a door's footprint. */

@@ -4,6 +4,7 @@ use App\Models\Channel;
 use App\Models\SideSpaceLock;
 use App\Models\SideSpaceRoom;
 use App\Models\User;
+use App\Support\SideSpace\Doors;
 use Laravel\Passport\Passport;
 
 /**
@@ -271,13 +272,31 @@ it('sends the locks along with the map when the room changes', function () {
     $this->putJson("/api/channels/{$channel->id}/space/locks/door-1", ['allowed' => []])->assertOk();
 
     /*
-     * The broadcast has to carry them. The resource writes locks with `whenLoaded`, so a map
-     * event that hadn't loaded the relation would send a map with *no locks in it* — and every
-     * client applying it would open every door in the room.
+     * The locks have to reach everybody standing in the room — a client left holding a map with
+     * no locks in it would open every door in it. They travel by refetch rather than by
+     * broadcast (the map is too big for a websocket frame; see SideSpaceMapUpdated), so what
+     * has to be true is that the *read* carries them, unprompted, for anyone in the channel.
+     */
+    $this->getJson("/api/channels/{$channel->id}/space/map")
+        ->assertOk()
+        ->assertJsonCount(1, 'data.locks');
+});
+
+it('keeps the map broadcast small enough to survive the websocket frame limit', function () {
+    [$owner, , $channel] = spaceWithDoor();
+
+    Passport::actingAs($owner);
+
+    /*
+     * The reason the event is a ping and not the map. A furnished room's resource runs to tens
+     * of kilobytes, well past Reverb's default 10KB `max_message_size` — over which the frame is
+     * dropped and the collision grid silently never arrives. Guarded with a generous ceiling:
+     * this asserts the payload is *a notification*, not that it is any particular size.
      */
     $event = new \App\Events\SideSpaceMapUpdated($channel->spaceMap()->sole());
 
-    expect($event->broadcastWith()['locks'])->toHaveCount(1);
+    expect($event->broadcastWith())->toHaveKeys(['id', 'channel_id', 'updated_at'])
+        ->and(strlen(json_encode($event->broadcastWith())))->toBeLessThan(1_000);
 });
 
 it('does not let the server owner walk through a lock somebody else set', function () {
@@ -412,4 +431,172 @@ it('leaves locks and room owners alone when a member saves the map', function ()
 
     expect(SideSpaceLock::count())->toBe(1)
         ->and(SideSpaceRoom::where('zone_id', 'study')->value('owner_id'))->toBe($alice->id);
+});
+
+// --- passwords ---
+
+/**
+ * The other half of a lock: letting in people you couldn't have named in advance.
+ *
+ * A key-holder list only works when the owner knows who's coming. A password is what a room with
+ * a pinned "the code is BADGER" message actually needs, and the properties worth pinning down
+ * are that the phrase never leaves the server, that a wrong one changes nothing, and that
+ * changing it puts everybody back outside.
+ */
+it('lets somebody with no key in when they know the password', function () {
+    [$owner, $server, $channel] = spaceWithDoor();
+    $alice = spaceMember($server, 'Alice');
+
+    Passport::actingAs($owner);
+    $this->putJson("/api/channels/{$channel->id}/space/locks/door-1", [
+        'allowed' => [],
+        'password' => 'badger',
+    ])->assertOk();
+
+    Passport::actingAs($alice);
+    $response = $this->postJson("/api/channels/{$channel->id}/space/locks/door-1/enter", ['password' => 'badger'])
+        ->assertOk();
+
+    // The door now opens for her on every screen in the room — which is what the resolved
+    // key-holder list riding along with the map means.
+    expect($response->json('data.locks.0.allowed'))->toContain($alice->id)
+        ->and(SideSpaceLock::first()->passed)->toBe([$alice->id]);
+});
+
+it('never sends the password itself, only the fact of one', function () {
+    [$owner, $server, $channel] = spaceWithDoor();
+
+    Passport::actingAs($owner);
+    $response = $this->putJson("/api/channels/{$channel->id}/space/locks/door-1", [
+        'allowed' => [],
+        'password' => 'badger',
+    ])->assertOk();
+
+    expect($response->json('data.locks.0.has_password'))->toBeTrue()
+        ->and(json_encode($response->json()))->not->toContain('badger')
+        ->and(SideSpaceLock::first()->password)->not->toBe('badger');
+});
+
+it('turns a wrong password away without changing the door', function () {
+    [$owner, $server, $channel] = spaceWithDoor();
+    $alice = spaceMember($server, 'Alice');
+
+    Passport::actingAs($owner);
+    $this->putJson("/api/channels/{$channel->id}/space/locks/door-1", [
+        'allowed' => [],
+        'password' => 'badger',
+    ])->assertOk();
+
+    Passport::actingAs($alice);
+    $this->postJson("/api/channels/{$channel->id}/space/locks/door-1/enter", ['password' => 'otter'])
+        ->assertStatus(422);
+
+    expect(SideSpaceLock::first()->passed ?? [])->toBe([]);
+});
+
+it('has nothing to say at a door with no password on it', function () {
+    [$owner, $server, $channel] = spaceWithDoor();
+    $alice = spaceMember($server, 'Alice');
+
+    Passport::actingAs($owner);
+    $this->putJson("/api/channels/{$channel->id}/space/locks/door-1", ['allowed' => []])->assertOk();
+
+    Passport::actingAs($alice);
+    $this->postJson("/api/channels/{$channel->id}/space/locks/door-1/enter", ['password' => 'badger'])
+        ->assertStatus(404);
+});
+
+it('shuts out everybody who knew the old password when it changes', function () {
+    [$owner, $server, $channel] = spaceWithDoor();
+    $alice = spaceMember($server, 'Alice');
+
+    Passport::actingAs($owner);
+    $this->putJson("/api/channels/{$channel->id}/space/locks/door-1", [
+        'allowed' => [],
+        'password' => 'badger',
+    ])->assertOk();
+
+    Passport::actingAs($alice);
+    $this->postJson("/api/channels/{$channel->id}/space/locks/door-1/enter", ['password' => 'badger'])->assertOk();
+
+    // Changing it is the only thing that can take a password-holder's key away, so it has to.
+    Passport::actingAs($owner);
+    $this->putJson("/api/channels/{$channel->id}/space/locks/door-1", [
+        'allowed' => [],
+        'password' => 'otter',
+    ])->assertOk();
+
+    expect(SideSpaceLock::first()->passed)->toBe([])
+        ->and(Doors::keyholders($channel->spaceMap, SideSpaceLock::first()))->not->toContain($alice->id);
+});
+
+it('leaves the password alone when only the keys are edited', function () {
+    [$owner, $server, $channel] = spaceWithDoor();
+    $alice = spaceMember($server, 'Alice');
+    $bob = spaceMember($server, 'Bob');
+
+    Passport::actingAs($owner);
+    $this->putJson("/api/channels/{$channel->id}/space/locks/door-1", [
+        'allowed' => [],
+        'password' => 'badger',
+    ])->assertOk();
+
+    Passport::actingAs($alice);
+    $this->postJson("/api/channels/{$channel->id}/space/locks/door-1/enter", ['password' => 'badger'])->assertOk();
+
+    // Handing Bob a key says nothing about the password, and must not clear it — nor forget
+    // that Alice already talked her way in.
+    Passport::actingAs($owner);
+    $this->putJson("/api/channels/{$channel->id}/space/locks/door-1", ['allowed' => [$bob->id]])->assertOk();
+
+    expect(SideSpaceLock::first()->hasPassword())->toBeTrue()
+        ->and(SideSpaceLock::first()->passed)->toBe([$alice->id]);
+});
+
+it('takes the password off, and everybody who used it with it', function () {
+    [$owner, $server, $channel] = spaceWithDoor();
+    $alice = spaceMember($server, 'Alice');
+
+    Passport::actingAs($owner);
+    $this->putJson("/api/channels/{$channel->id}/space/locks/door-1", [
+        'allowed' => [],
+        'password' => 'badger',
+    ])->assertOk();
+
+    Passport::actingAs($alice);
+    $this->postJson("/api/channels/{$channel->id}/space/locks/door-1/enter", ['password' => 'badger'])->assertOk();
+
+    Passport::actingAs($owner);
+    $response = $this->putJson("/api/channels/{$channel->id}/space/locks/door-1", [
+        'allowed' => [],
+        'password' => null,
+    ])->assertOk();
+
+    expect($response->json('data.locks.0.has_password'))->toBeFalse()
+        ->and($response->json('data.locks.0.allowed'))->not->toContain($alice->id);
+});
+
+it('refuses a password too short to be one', function () {
+    [$owner, $server, $channel] = spaceWithDoor();
+
+    Passport::actingAs($owner);
+    $this->putJson("/api/channels/{$channel->id}/space/locks/door-1", [
+        'allowed' => [],
+        'password' => 'ab',
+    ])->assertStatus(422);
+});
+
+it('only lets members of the server try the password at all', function () {
+    [$owner, $server, $channel] = spaceWithDoor();
+    $stranger = User::factory()->create();
+
+    Passport::actingAs($owner);
+    $this->putJson("/api/channels/{$channel->id}/space/locks/door-1", [
+        'allowed' => [],
+        'password' => 'badger',
+    ])->assertOk();
+
+    Passport::actingAs($stranger);
+    $this->postJson("/api/channels/{$channel->id}/space/locks/door-1/enter", ['password' => 'badger'])
+        ->assertForbidden();
 });

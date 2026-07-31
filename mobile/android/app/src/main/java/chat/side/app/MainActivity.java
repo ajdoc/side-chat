@@ -5,6 +5,7 @@ import android.os.Bundle;
 import com.getcapacitor.BridgeActivity;
 
 import chat.side.app.screencapture.ScreenCapturePlugin;
+import chat.side.app.voice.VoicePlugin;
 
 public class MainActivity extends BridgeActivity {
 
@@ -14,6 +15,9 @@ public class MainActivity extends BridgeActivity {
         // to make up for something the WebView hasn't got: getDisplayMedia. Registered before
         // super.onCreate, which is where Capacitor builds the bridge the page talks to.
         registerPlugin(ScreenCapturePlugin.class);
+        // Likewise the call's foreground service: nothing in the WebView can ask Android for
+        // permission to keep the microphone once the app is off screen.
+        registerPlugin(VoicePlugin.class);
         super.onCreate(savedInstanceState);
     }
 }

@@ -23,6 +23,8 @@ export interface User {
    */
   space_avatar: AvatarLook
   space_pet: PetKind | null
+  /** The short line they've left hanging over their head, or null for none. */
+  space_shout: string | null
   created_at: string
 }
 

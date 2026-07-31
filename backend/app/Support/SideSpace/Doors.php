@@ -166,6 +166,12 @@ final class Doors
     {
         $ids = array_map('intval', $lock->allowed ?? []);
 
+        // Anybody who has entered the password. A key earned rather than given, but a key: from
+        // the door's point of view there is no difference, which is the point of it.
+        foreach ($lock->passed ?? [] as $id) {
+            $ids[] = (int) $id;
+        }
+
         if ($lock->created_by !== null) {
             $ids[] = (int) $lock->created_by;
         }

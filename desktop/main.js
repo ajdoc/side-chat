@@ -147,7 +147,10 @@ function registerAppProtocol() {
 
 /** Voice channels: microphone, camera, and the notifications the app already asks for. */
 function grantMediaPermissions(partition) {
-  const allowed = new Set(['media', 'audioCapture', 'videoCapture', 'notifications', 'clipboard-sanitized-write'])
+  // `fullscreen` is in here for the same reason `media` is: Electron denies it by default, so
+  // Element.requestFullscreen() rejects and the fullscreen button on a shared screen or a video
+  // does nothing at all in the desktop app while working fine in a browser tab.
+  const allowed = new Set(['media', 'audioCapture', 'videoCapture', 'fullscreen', 'notifications', 'clipboard-sanitized-write'])
 
   partition.setPermissionRequestHandler((_contents, permission, callback) => {
     callback(allowed.has(permission))
@@ -227,18 +230,28 @@ function provideScreenSources(partition) {
   /** The in-flight request: Electron's callback, plus the sources it may be answered with. */
   let pending = null
 
+  /**
+   * Answer the in-flight request, once.
+   *
+   * `null` is a refusal, and it has to be exactly that: Electron's native handler treats null or
+   * undefined as "the user cancelled" and fails the capture quietly, but reads *any object* as an
+   * answer and throws `TypeError: Video was requested, but no video stream was provided` when it
+   * has no `video` in it. Thrown from the main process, that is an uncaught exception — the
+   * "A JavaScript error occurred in the main process" dialog, over the app, every time somebody
+   * shut the picker without picking. See ElectronBrowserContext::DisplayMediaDeviceChosen.
+   */
   function settle(response) {
     if (!pending) return
     const { callback, abandon } = pending
     pending = null
     // Taken off the window again, or a long session of shares would stack a listener each.
     abandon?.()
-    callback(response)
+    callback(response ?? null)
   }
 
   ipcMain.on('screen-share:pick', (_event, { sourceId, audio } = {}) => {
     const source = pending?.sources.find(s => s.id === sourceId)
-    if (!source) return settle({}) // it went away while the picker was open
+    if (!source) return settle(null) // it went away while the picker was open
 
     // Remember what's on the wire: remote control has to map the controller's normalised
     // pointer back onto the display being captured, and this pick is the only place that's
@@ -253,12 +266,12 @@ function provideScreenSources(partition) {
     })
   })
 
-  // An empty response is how a request is refused. The renderer's getDisplayMedia rejects,
+  // `null` is how a request is refused — see settle. The renderer's getDisplayMedia rejects,
   // which useVoice already treats as "changed their mind at the picker", not as an error.
-  ipcMain.on('screen-share:cancel', () => settle({}))
+  ipcMain.on('screen-share:cancel', () => settle(null))
 
   partition.setDisplayMediaRequestHandler(async (request, callback) => {
-    settle({}) // a previous picker still open is now moot
+    settle(null) // a previous picker still open is now moot
 
     let sources
     try {
@@ -268,14 +281,14 @@ function provideScreenSources(partition) {
         fetchWindowIcons: true,
       })
     } catch {
-      return callback({})
+      return callback(null)
     }
 
     const win = BrowserWindow.getAllWindows()[0]
-    if (!win || win.isDestroyed() || !sources.length) return callback({})
+    if (!win || win.isDestroyed() || !sources.length) return callback(null)
 
     // Closing the window mid-pick would otherwise leave getDisplayMedia hanging forever.
-    const onClosed = () => settle({})
+    const onClosed = () => settle(null)
     win.once('closed', onClosed)
     pending = { callback, sources, abandon: () => win.off('closed', onClosed) }
 

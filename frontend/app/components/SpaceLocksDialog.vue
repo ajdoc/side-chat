@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { DoorClosed, Loader2, Lock, LockOpen, Users, X } from 'lucide-vue-next'
+import { DoorClosed, KeyRound, Loader2, Lock, LockOpen, Users, X } from 'lucide-vue-next'
 import type { SpaceMap } from '~/lib/spaceMapEngine'
 import { decorKind } from '~/lib/spaceDecor'
 import { Button } from '~/components/ui/button'
@@ -155,6 +155,36 @@ function toggleKey(objectId: string, userId: number) {
 const hasKey = (objectId: string, userId: number) =>
   !!lockByDoor.value.get(objectId)?.granted.includes(userId)
 
+/**
+ * The password box, per door — what's typed, not what's stored.
+ *
+ * There is nothing to prefill it with, and that's deliberate rather than an omission: the phrase
+ * is only ever kept as a hash, so even the person who set it can't be shown it. What the panel
+ * can say is whether there *is* one and how many people have used it, which is what the line
+ * under the box says. So the control is always "set a new one", never "edit the current one".
+ */
+const passwords = ref<Record<string, string>>({})
+
+/** Set or replace a door's password — which also forgets everybody who entered the old one. */
+function savePassword(objectId: string) {
+  const row = lockByDoor.value.get(objectId)
+  const phrase = (passwords.value[objectId] ?? '').trim()
+  if (!row || phrase.length < 4) return
+
+  return run(`${objectId}:password`, async () => {
+    await lock(objectId, row.granted, phrase)
+    passwords.value[objectId] = ''
+  })
+}
+
+/** Take the password off. The door goes back to being a list of people. */
+function clearPassword(objectId: string) {
+  const row = lockByDoor.value.get(objectId)
+  if (!row) return
+
+  return run(`${objectId}:password`, () => lock(objectId, row.granted, null))
+}
+
 /** Whether they come through regardless — the room's owners, and whoever set the lock. */
 const passesAnyway = (objectId: string, userId: number) =>
   !hasKey(objectId, userId) && !!lockByDoor.value.get(objectId)?.allowed.some(a => a.id === userId)
@@ -200,7 +230,7 @@ const passesAnyway = (objectId: string, userId: number) =>
         <div v-else-if="tab === 'locks'" class="space-y-4">
           <p class="text-xs text-muted-foreground">
             A locked door still opens — just not for everyone. You and anyone in charge of the room
-            can always come through; anybody else needs a key.
+            can always come through; anybody else needs a key, or the password if you set one.
           </p>
 
           <p v-if="!doors.length" class="rounded border border-dashed px-3 py-6 text-center text-sm text-muted-foreground">
@@ -253,6 +283,58 @@ const passesAnyway = (objectId: string, userId: number) =>
                   {{ nameFor(m) }}
                 </button>
               </div>
+              <!--
+                A password, which is the other way in.
+
+                Under the key list rather than beside it, because it's the same question asked
+                the other way round: keys are for people you can name, a password is for people
+                you can't. Never prefilled — the phrase is stored hashed, so "change it" is the
+                only offer that can honestly be made.
+              -->
+              <div class="mt-3 border-t pt-3">
+                <p class="mb-2 flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
+                  <KeyRound class="h-3.5 w-3.5" /> Password
+                </p>
+                <div class="flex flex-wrap items-center gap-2">
+                  <input
+                    v-model="passwords[d.object.id]"
+                    type="password"
+                    autocomplete="off"
+                    :placeholder="d.lock.has_password ? 'Set a new password' : 'No password — set one'"
+                    class="min-w-0 flex-1 rounded-md border bg-background px-2.5 py-1.5 text-sm outline-none focus:ring-2 focus:ring-ring"
+                    @keydown.enter.prevent="savePassword(d.object.id)"
+                  >
+                  <Button
+                    size="sm"
+                    :disabled="!!busy || (passwords[d.object.id] ?? '').trim().length < 4"
+                    @click="savePassword(d.object.id)"
+                  >
+                    <Loader2 v-if="busy === `${d.object.id}:password`" class="mr-1.5 h-3.5 w-3.5 animate-spin" />
+                    {{ d.lock.has_password ? 'Change' : 'Set' }}
+                  </Button>
+                  <Button
+                    v-if="d.lock.has_password"
+                    size="sm"
+                    variant="outline"
+                    :disabled="!!busy"
+                    @click="clearPassword(d.object.id)"
+                  >
+                    Remove
+                  </Button>
+                </div>
+                <p class="mt-1.5 text-[11px] text-muted-foreground">
+                  <template v-if="d.lock.has_password">
+                    Anyone who knows it can come through.
+                    {{ d.lock.passed_count === 1 ? 'One person has' : `${d.lock.passed_count} people have` }}
+                    used it. Changing or removing it shuts them all out again.
+                  </template>
+                  <template v-else>
+                    At least 4 characters. Anyone you give it to can let themselves in, without
+                    you having to add them here.
+                  </template>
+                </p>
+              </div>
+
               <p v-if="!d.lock.mine" class="mt-2 text-[11px] text-muted-foreground">
                 Locked by {{ d.lock.created_by ?? 'somebody who has since left' }}.
               </p>

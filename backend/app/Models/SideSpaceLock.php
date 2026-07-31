@@ -13,6 +13,10 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
  * such thing as an unlocked lock. Removing a lock is deleting the row, which is why the endpoint
  * is a DELETE and not a flag.
  *
+ * A lock can also carry a **password**: anybody who enters it is remembered in `passed` and walks
+ * through from then on. It's the other half of what a lock is for — letting in people you
+ * couldn't have named in advance. See the migration for why that's a second list.
+ *
  * `allowed` holds only the people who were *given* a key. Three more can always pass and are
  * resolved at read time rather than stored here — whoever set the lock, whoever owns the room,
  * and the server's owner. Copying them in would mean a room changing hands left its previous
@@ -23,11 +27,28 @@ class SideSpaceLock extends Model
     /** @use HasFactory<\Database\Factories\SideSpaceLockFactory> */
     use HasFactory;
 
-    protected $fillable = ['side_space_map_id', 'object_id', 'zone_id', 'created_by', 'allowed'];
+    protected $fillable = ['side_space_map_id', 'object_id', 'zone_id', 'created_by', 'allowed', 'password', 'passed'];
+
+    /**
+     * The phrase never leaves the server, in any form. `hidden` is belt and braces — nothing
+     * serialises this model directly — but a lock's hash appearing in a map payload that every
+     * browser in the room receives is exactly the accident worth making impossible.
+     */
+    protected $hidden = ['password'];
 
     protected function casts(): array
     {
-        return ['allowed' => 'array'];
+        return [
+            'allowed' => 'array',
+            'passed' => 'array',
+            'password' => 'hashed',
+        ];
+    }
+
+    /** Whether this door will open for somebody who knows the words. */
+    public function hasPassword(): bool
+    {
+        return $this->password !== null && $this->password !== '';
     }
 
     public function map(): BelongsTo

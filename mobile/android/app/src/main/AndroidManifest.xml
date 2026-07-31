@@ -33,6 +33,15 @@
             android:exported="false"
             android:foregroundServiceType="mediaProjection" />
 
+        <!-- Voice calls. A backgrounded app loses the microphone from Android 12 and may only
+             hold it from Android 14 behind a foreground service of this exact type, so a call
+             that has to survive the user leaving the app needs this service up for its whole
+             duration. Started and stopped by the page, on join and on leave. -->
+        <service
+            android:name="chat.side.app.voice.VoiceService"
+            android:exported="false"
+            android:foregroundServiceType="microphone" />
+
         <provider
             android:name="androidx.core.content.FileProvider"
             android:authorities="${applicationId}.fileprovider"
@@ -56,8 +65,10 @@
     <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
     <uses-permission android:name="android.permission.CAMERA" />
 
-    <!-- A call has to survive the screen going off. -->
+    <!-- A call has to survive the screen going off, and the app being left. The typed
+         microphone permission is required from Android 14 to start VoiceService. -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
 
     <!-- Screen sharing. The typed foreground-service permission is required from Android 14;

@@ -117,7 +117,7 @@ export interface SpaceMap {
    * for whom. See lib/spaceDoors.ts, and the migration that explains the split.
    */
   rooms?: Array<{ zone_id: string, owner_id: number | null, owner: string | null }>
-  locks?: Array<{ object_id: string, zone_id: string | null, allowed: number[] }>
+  locks?: Array<{ object_id: string, zone_id: string | null, allowed: number[], has_password?: boolean }>
   updated_by?: string | null
   updated_at?: string
 }
@@ -148,6 +148,14 @@ export interface Occupant {
    * difference is intent, and only their own client knows it.
    */
   seatedOn?: string | null
+  /**
+   * The line they're shouting, drawn in a bubble over their head, or null for silence.
+   *
+   * Whispered with the position like the look is, and for the same reason: somebody who has
+   * just walked in has to be able to draw the room from the first thing they hear, without a
+   * lookup per person.
+   */
+  shout?: string | null
 }
 
 // --- the grid ---

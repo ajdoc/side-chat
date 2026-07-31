@@ -62,6 +62,16 @@ class SideSpaceMapResource extends JsonResource
                     'zone_id' => $lock->zone_id,
                     // Resolved, not stored — see Doors::keyholders.
                     'allowed' => Doors::keyholders($this->resource, $lock),
+                    /*
+                     * Whether the door will open for somebody who knows the words.
+                     *
+                     * The fact, never the phrase — the hash is `hidden` on the model and has no
+                     * business in a payload every browser in the room receives. It travels
+                     * because the door has to *say* so: "locked, and there's a password" is an
+                     * invitation to try, while a padlock with no explanation is a dead end, and
+                     * the two must not look the same.
+                     */
+                    'has_password' => $lock->hasPassword(),
                 ])
                 ->values()
                 ->all()),
