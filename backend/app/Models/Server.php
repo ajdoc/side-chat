@@ -110,6 +110,16 @@ class Server extends Model implements MessageContainer
         return $this->members()->pluck('users.id')->all();
     }
 
+    /**
+     * Bots registered here. One server owns a bot outright — see the bots migration.
+     *
+     * @return HasMany<Bot>
+     */
+    public function bots(): HasMany
+    {
+        return $this->hasMany(Bot::class);
+    }
+
     /** @return HasMany<ServerJoinRequest> */
     public function joinRequests(): HasMany
     {

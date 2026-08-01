@@ -288,6 +288,7 @@ onBeforeUnmount(() => clearTimeout(copiedTimer))
 
       <div class="flex items-baseline gap-2">
         <span class="text-sm font-semibold">{{ nameFor(message.user) }}</span>
+        <BotBadge v-if="message.user.is_bot" />
         <span class="text-xs text-muted-foreground">{{ formatTime(message.created_at) }}</span>
       </div>
 

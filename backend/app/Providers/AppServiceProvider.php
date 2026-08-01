@@ -2,11 +2,14 @@
 
 namespace App\Providers;
 
+use App\Events\MessageSent;
+use App\Listeners\NotifyBotsOfMessage;
 use App\Search\LikeSearchDriver;
 use App\Search\PostgresSearchDriver;
 use App\Search\SearchDriver;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Event;
 use Illuminate\Support\ServiceProvider;
 
 class AppServiceProvider extends ServiceProvider
@@ -39,5 +42,11 @@ class AppServiceProvider extends ServiceProvider
         // eager-loaded explicitly. Tests will surface anything we miss.
         Model::preventLazyLoading($strict);
         Model::preventSilentlyDiscardingAttributes($strict);
+
+        // Bot webhooks ride on the message event rather than on the send path — see
+        // NotifyBotsOfMessage for why. Registered explicitly: auto-discovery would work,
+        // but a listener nobody can find by grepping for the event is a listener that gets
+        // broken by accident.
+        Event::listen(MessageSent::class, NotifyBotsOfMessage::class);
     }
 }

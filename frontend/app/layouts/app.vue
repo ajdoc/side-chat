@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import {
   AudioLines,
+  Bot,
   Check, ChevronDown, ChevronRight, Copy, DoorOpen, Hash, HeadphoneOff, Lock, LogOut,
   Map as MapIcon,
   MessageSquarePlus, MicOff, Monitor, Moon, Pencil, Phone, Plus, ScreenShare, Search, Shield, Sun, Trash2,
@@ -445,6 +446,9 @@ const showRenameChannel = ref(false)
 // that only the people who can open it are allowed to see.
 const accessChannel = ref<Channel | null>(null)
 const rolesServer = ref<Server | null>(null)
+// Bots, likewise its own component: it fetches tokens' worth of settings only the owner
+// may see, and it's the one screen where a secret is shown.
+const botsServer = ref<Server | null>(null)
 const showProfile = ref(false)
 const targetChannel = ref<Channel | null>(null)
 const targetServer = ref<Server | null>(null)
@@ -802,6 +806,11 @@ onBeforeUnmount(() => { userStream.unsubscribe(); stopPresence() })
                       <DropdownMenuItem v-if="item.server.is_owner" @select="rolesServer = item.server">
                         <Shield class="mr-2 h-4 w-4" /> Roles
                       </DropdownMenuItem>
+                      <!-- Owner only, for the same reason as Roles: a bot token is standing
+                           write access to the server. -->
+                      <DropdownMenuItem v-if="item.server.is_owner" @select="botsServer = item.server">
+                        <Bot class="mr-2 h-4 w-4" /> Bots
+                      </DropdownMenuItem>
                       <!-- What *you* are called in this server. Other people's nicknames
                            are set from the roster in the channel Info panel, where you can
                            see who you're renaming. -->
@@ -1136,6 +1145,7 @@ onBeforeUnmount(() => { userStream.unsubscribe(); stopPresence() })
          beside the shelf so they survive the sidebar row that opened them being re-rendered. -->
     <ChannelAccessDialog v-if="accessChannel" :channel="accessChannel" @close="accessChannel = null" />
     <ServerRolesDialog v-if="rolesServer" :server="rolesServer" :channel-id="activeChannelId ?? channels[0]?.id ?? null" @close="rolesServer = null" />
+    <ServerBotsDialog v-if="botsServer" :server="botsServer" @close="botsServer = null" />
 
     <NewChatDialog v-model:open="showNewChat" />
 

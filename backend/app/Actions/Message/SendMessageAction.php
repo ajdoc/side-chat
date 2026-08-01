@@ -11,8 +11,10 @@ use App\Models\User;
 use App\Services\AttachmentService;
 use App\Services\LinkPreviewService;
 use App\Services\NicknameService;
+use App\Services\Commands\SlashCommandService;
 use App\Services\Widgets\WidgetService;
 use App\Support\Commands\CommandParser;
+use App\Support\Commands\EphemeralMessage;
 use App\Support\MentionParser;
 
 final class SendMessageAction
@@ -22,6 +24,7 @@ final class SendMessageAction
         private readonly LinkPreviewService $links,
         private readonly CommandParser $commands,
         private readonly WidgetService $widgets,
+        private readonly SlashCommandService $slash,
     ) {}
 
     /** @param  array<int, \Illuminate\Http\UploadedFile>  $files */
@@ -30,13 +33,29 @@ final class SendMessageAction
         // A message that's really a widget command (`m!p …`, `k!add …`) never lands as chat:
         // it drives the channel's music player or board instead. Only a text-only send can be
         // a command — anything with an attachment or a GIF is a plain message. See WidgetService.
-        if ($files === [] && $uploadIds === [] && $data->gif === null && ($command = $this->commands->parse($data->body)) !== null) {
-            return $this->widgets->handleCommand($channel, $user, $command);
+        $body = $data->body;
+
+        if ($files === [] && $uploadIds === [] && $data->gif === null && ($command = $this->commands->parse($body)) !== null) {
+            if ($command->namespace !== CommandParser::SLASH_NAMESPACE) {
+                return $this->widgets->handleCommand($channel, $user, $command);
+            }
+
+            $outcome = $this->slash->handle($channel, $user, $command);
+
+            // A private answer stops here — nothing is written and nothing is broadcast.
+            if ($outcome->ephemeral !== null) {
+                return EphemeralMessage::make($channel, $user, $outcome->ephemeral);
+            }
+
+            // A public one falls through to the ordinary send with the *result* in place of
+            // the instruction, so a roll or an emote is a real message in every respect:
+            // it broadcasts, it can be replied to, it survives a reload. See SlashOutcome.
+            $body = $outcome->body;
         }
 
         $message = $channel->messages()->create([
             'user_id' => $user->id,
-            'body' => $data->body,
+            'body' => $body,
             'reply_to_id' => $data->reply_to_id,
         ]);
 

@@ -3,6 +3,10 @@
 use App\Http\Controllers\AttachmentController;
 use App\Http\Controllers\Auth\AuthController;
 use App\Http\Controllers\Auth\SocialAuthController;
+use App\Http\Controllers\BotCommandController;
+use App\Http\Controllers\BotController;
+use App\Http\Controllers\BotIdentityController;
+use App\Http\Controllers\BotMessageController;
 use App\Http\Controllers\CalendarController;
 use App\Http\Controllers\CanvasController;
 use App\Http\Controllers\ChannelCalendarController;
@@ -14,6 +18,7 @@ use App\Http\Controllers\ChannelMemberController;
 use App\Http\Controllers\ChannelSpaceNoteController;
 use App\Http\Controllers\ChannelWhiteboardController;
 use App\Http\Controllers\ChunkedUploadController;
+use App\Http\Controllers\CommandCatalogueController;
 use App\Http\Controllers\CommentController;
 use App\Http\Controllers\ConversationController;
 use App\Http\Controllers\DecisionController;
@@ -136,6 +141,21 @@ Route::middleware('auth:api')->group(function () {
      */
     Route::patch('servers/{server}/members/{member}/role', [ServerController::class, 'updateRole']);
 
+    /*
+     * Bots, from the owner's side: register one, rename it, rotate its token, retire it.
+     * Owner only — see StoreBotRequest. The bot's own half of the API is the `bot/` group
+     * further down, which authenticates with the token this hands out rather than a
+     * Passport one.
+     */
+    Route::get('servers/{server}/bots', [BotController::class, 'index']);
+    Route::post('servers/{server}/bots', [BotController::class, 'store']);
+    Route::patch('servers/{server}/bots/{bot}', [BotController::class, 'update']);
+    Route::post('servers/{server}/bots/{bot}/token', [BotController::class, 'regenerate']);
+    // The webhook's signing secret, rotated separately from the API token: the two protect
+    // opposite directions and leak through different doors.
+    Route::post('servers/{server}/bots/{bot}/webhook-secret', [BotController::class, 'regenerateWebhookSecret']);
+    Route::delete('servers/{server}/bots/{bot}', [BotController::class, 'destroy']);
+
     Route::get('servers/{server}/nicknames', [NicknameController::class, 'indexForServer']);
     Route::put('servers/{server}/nicknames/{member}', [NicknameController::class, 'updateForServer']);
 
@@ -152,6 +172,9 @@ Route::middleware('auth:api')->group(function () {
     Route::put('channels/{channel}/access', [ChannelController::class, 'access']);
     // Owner only — deletes the channel's threads, messages and uploaded files.
     Route::delete('channels/{channel}', [ChannelController::class, 'destroy']);
+
+    // Every `/command` callable here — what the composer's autocomplete is built from.
+    Route::get('channels/{channel}/commands', CommandCatalogueController::class);
 
     Route::get('channels/{channel}/messages', [MessageController::class, 'index']);
     Route::post('channels/{channel}/messages', [MessageController::class, 'store']);
@@ -449,4 +472,23 @@ Route::middleware('auth:api')->group(function () {
     Route::delete('side-chats/{sideChat}/documents/{document}', [DocumentController::class, 'destroy']);
     // Record a message as a decision (the ✅ on a side chat's card), or take it back.
     Route::post('messages/{message}/decision', [DecisionController::class, 'toggle']);
+});
+
+/*
+ * The bot API.
+ *
+ * Everything above authenticates a person holding a short-lived Passport token. These two
+ * routes authenticate a *bot* holding the long-lived string its server's owner was shown
+ * once — see App\Http\Middleware\AuthenticateBot. Kept as its own prefix rather than mixed
+ * into the routes above so the whole of a bot's reach is legible in one place: it can find
+ * out where it is, and it can talk. Nothing else is exposed to a credential that lives in
+ * somebody's CI config.
+ */
+Route::middleware('auth.bot')->prefix('bot')->group(function () {
+    Route::get('me', BotIdentityController::class);
+    Route::post('channels/{channel}/messages', [BotMessageController::class, 'store']);
+    // What this bot answers to. Declared by the bot on boot, replacing whatever the last
+    // version of it registered — see BotCommandController.
+    Route::get('commands', [BotCommandController::class, 'index']);
+    Route::put('commands', [BotCommandController::class, 'update']);
 });

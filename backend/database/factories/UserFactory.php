@@ -33,6 +33,15 @@ class UserFactory extends Factory
         ];
     }
 
+    /** A bot's account: no password to log in with, and marked so the UI can badge it. */
+    public function bot(): static
+    {
+        return $this->state(fn (array $attributes) => [
+            'is_bot' => true,
+            'password' => null,
+        ]);
+    }
+
     /**
      * Indicate that the model's email address should be unverified.
      */

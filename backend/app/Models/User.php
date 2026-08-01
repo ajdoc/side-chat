@@ -9,11 +9,12 @@ use Illuminate\Database\Eloquent\Attributes\Hidden;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Relations\BelongsToMany;
 use Illuminate\Database\Eloquent\Relations\HasMany;
+use Illuminate\Database\Eloquent\Relations\HasOne;
 use Illuminate\Foundation\Auth\User as Authenticatable;
 use Illuminate\Notifications\Notifiable;
 use Laravel\Passport\HasApiTokens;
 
-#[Fillable(['name', 'email', 'password', 'avatar', 'provider', 'provider_id', 'theme_mode', 'theme_color', 'space_avatar', 'space_pet', 'space_shout', 'spotify_id', 'spotify_access_token', 'spotify_refresh_token', 'spotify_token_expires_at', 'spotify_product'])]
+#[Fillable(['name', 'email', 'password', 'is_bot', 'avatar', 'provider', 'provider_id', 'theme_mode', 'theme_color', 'space_avatar', 'space_pet', 'space_shout', 'spotify_id', 'spotify_access_token', 'spotify_refresh_token', 'spotify_token_expires_at', 'spotify_product'])]
 #[Hidden(['password', 'remember_token'])]
 class User extends Authenticatable
 {
@@ -40,6 +41,7 @@ class User extends Authenticatable
         return [
             'email_verified_at' => 'datetime',
             'password' => 'hashed',
+            'is_bot' => 'boolean',
             // How you're drawn in a Side Space — see App\Support\SideSpace\Avatars. One setting
             // with five parts, never queried by, so it rides as JSON rather than five columns.
             'space_avatar' => 'array',
@@ -78,6 +80,18 @@ class User extends Authenticatable
         return $this->belongsToMany(Server::class)
             ->withPivot('role')
             ->withTimestamps();
+    }
+
+    /**
+     * The bot registration behind this account, or null for a person.
+     *
+     * `is_bot` answers "is this a bot" on its own, without a join — which is what the
+     * timeline and every resource ask. This relation is for the handful of places that
+     * need the registration itself: the management screens and the token guard.
+     */
+    public function bot(): HasOne
+    {
+        return $this->hasOne(Bot::class);
     }
 
     /** DMs and group chats this user is in. */

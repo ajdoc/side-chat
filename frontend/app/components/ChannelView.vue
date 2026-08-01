@@ -75,6 +75,8 @@ const {
 const { noteTyping, forgetTyping, noteSaid, clearBubbles } = useSpaceChatBubbles()
 
 const { members: mentionMembers, names: mentionNames, load: loadMembers } = useChannelMembers()
+// What `/` offers in this channel — built-ins plus whatever the bots here answer to.
+const { commands: slashCommands, load: loadCommands } = useSlashCommands()
 // Pop this conversation out into a floating window that follows you around the app.
 const { open: openFloating, isConversationFloating } = useFloatingWindows()
 function floatConversation() {
@@ -280,6 +282,7 @@ async function openChannel(id: number) {
   replyingTo.value = null
   bubbledUpTo = 0 // a different channel's ids say nothing about this one's
   loadMembers(id) // for @mention autocomplete + chips; not worth blocking the timeline on
+  loadCommands(id) // likewise for the `/` menu
   loadSideChats(id) // for the header badge; also not worth blocking the timeline on
   await Promise.all([load(id), loadReads(id)])
   subscribe(id)
@@ -642,6 +645,7 @@ onBeforeUnmount(() => {
           :sending="sending"
           :channel-id="channelId"
           :mention-members="mentionMembers"
+          :commands="slashCommands"
           @submit="onSend"
           @typing="onTyping"
         />

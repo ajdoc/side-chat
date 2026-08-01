@@ -45,7 +45,7 @@ class SafeUrlFetcher
     public function get(string $url): ?array
     {
         for ($hop = 0; $hop <= self::MAX_REDIRECTS; $hop++) {
-            $target = $this->validate($url);
+            $target = $this->pin($url);
 
             if ($target === null) {
                 return null;
@@ -125,9 +125,14 @@ class SafeUrlFetcher
     /**
      * Validate a URL and pin the address we'll connect to.
      *
+     * Public because unfurling is no longer the only place we make a request to an address
+     * somebody typed: bot webhooks POST to one too, and they need this exact set of checks
+     * (including the pinning, which is what closes the DNS-rebinding window) rather than a
+     * second, subtly weaker copy of them. See App\Jobs\DeliverBotEvent.
+     *
      * @return array{0: string, 1: int, 2: string}|null  [host, port, ip]
      */
-    private function validate(string $url): ?array
+    public function pin(string $url): ?array
     {
         $parts = parse_url($url);
 

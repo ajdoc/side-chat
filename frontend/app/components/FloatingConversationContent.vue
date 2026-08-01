@@ -29,6 +29,7 @@ const props = defineProps<{
 const { user } = useAuth()
 const { messages, hasMore, loadingOlder, load, loadOlder, ensureLoaded, send, edit, remove, toggleReaction, togglePin, subscribe, unsubscribe } = useMessages()
 const { members: mentionMembers, names: mentionNames, load: loadMembers } = useChannelMembers()
+const { commands: slashCommands, load: loadCommands } = useSlashCommands()
 provide(mentionNamesKey, mentionNames)
 
 const channelId = computed(() => props.channelId)
@@ -96,6 +97,7 @@ watch(() => messages.value.at(-1)?.id, (nid, oid) => {
 let openedId: number | null = null
 async function openChannel(id: number) {
   loadMembers(id)
+  loadCommands(id)
   await load(id)
   subscribe(id)
   scrollToBottom()
@@ -162,6 +164,7 @@ onBeforeUnmount(() => { if (openedId) closeChannel(openedId) })
         :sending="sending"
         :channel-id="channelId"
         :mention-members="mentionMembers"
+        :commands="slashCommands"
         @submit="onSend"
       />
     </div>

@@ -347,6 +347,15 @@ only accepts client events from channel members (`accept_client_events_from`), s
 private-channel auth we already do is what stops someone whispering into a channel they
 can't see.
 
+## Bots
+
+Servers can have bots: ordinary members that happen to be programs. A bot posts through a
+long-lived API token, can be told about messages through a signed webhook, and can register
+its own `/slash` commands alongside the built-in ones (`/roll`, `/8ball`, `/me`, `/shrug`,
+`/remind`, `/web`, `/help`). Owner-only to create, from the server dropdown → **Bots**.
+
+Full API reference for writing one: **[BOTS.md](BOTS.md)**.
+
 ## Link previews (unfurling)
 
 Post a URL and it unfurls: a card with the page's Open Graph title, description, site and

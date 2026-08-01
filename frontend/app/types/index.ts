@@ -6,12 +6,32 @@ export type ThemeMode = 'light' | 'dark' | 'system'
 // accent — see the accent registry in assets/css/tailwind.css.
 export type ThemeColor = 'slate' | 'blue' | 'violet' | 'rose' | 'red' | 'amber' | 'green' | 'teal'
 
+/**
+ * A `/command` callable in the channel you're looking at.
+ *
+ * Fetched per channel rather than held as a constant, because the list genuinely differs
+ * between channels: bots register their own commands, and a bot that isn't in this channel
+ * can't be called from it. `bot` names whose command it is, or null for a built-in.
+ */
+export interface SlashCommand {
+  name: string
+  description: string | null
+  usage: string | null
+  bot: string | null
+}
+
 export interface User {
   id: number
   name: string
   email: string
   avatar: string | null
   provider: string | null
+  /**
+   * An automated account rather than a person: it posts through the bot API with a token its
+   * server's owner issued. Everything else about it is an ordinary user, which is why the
+   * flag has to be rendered — see BotBadge.
+   */
+  is_bot: boolean
   theme_mode: ThemeMode
   theme_color: ThemeColor
   /**
@@ -992,6 +1012,31 @@ export interface Peer {
    * proximity into `volume` would have the room quietly overwriting your preferences.
    */
   proximity: number
+}
+
+/**
+ * A bot, as its server's owner sees it.
+ *
+ * Neither of its two secrets is ever in here. The API token and the webhook signing secret
+ * are each shown exactly once — in the response that mints them — and after that they can
+ * only be replaced, so there is nothing for this shape to carry.
+ */
+export interface Bot {
+  id: number
+  server_id: number
+  description: string | null
+  webhook_url: string | null
+  events: string[]
+  /** False once delivery has been switched off after too many failures. */
+  webhook_enabled: boolean
+  webhook_failures: number
+  webhook_disabled_at: string | null
+  last_used_at: string | null
+  created_at: string
+  /** The account it posts as — its name and avatar are edited through the bot. */
+  user: User
+  /** Who created it, or null if their account is gone. */
+  created_by: string | null
 }
 
 export interface ServerJoinRequest {

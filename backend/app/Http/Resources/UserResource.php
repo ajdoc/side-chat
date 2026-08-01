@@ -18,6 +18,10 @@ class UserResource extends JsonResource
             'name' => $this->name,
             'email' => $this->email,
             'avatar' => $this->avatar,
+            // Drives the BOT badge next to the name. Always present rather than merged in
+            // only for bots: the client branches on it, and an absent key would read as false
+            // in some places and as "not loaded" in others.
+            'is_bot' => (bool) $this->is_bot,
             'provider' => $this->provider,
             'theme_mode' => $this->theme_mode,
             'theme_color' => $this->theme_color,

@@ -33,6 +33,10 @@ return Application::configure(basePath: dirname(__DIR__))
          * App\Support\SideSpace\Tiles.
          */
         $middleware->trimStrings(except: ['tiles.*']);
+
+        // Bots authenticate with their own long-lived token rather than a Passport one —
+        // see App\Http\Middleware\AuthenticateBot.
+        $middleware->alias(['auth.bot' => \App\Http\Middleware\AuthenticateBot::class]);
     })
     ->withExceptions(function (Exceptions $exceptions): void {
         $exceptions->shouldRenderJsonWhen(

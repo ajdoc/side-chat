@@ -10,6 +10,7 @@ use App\Models\Message;
 use App\Models\User;
 use App\Models\Widget;
 use App\Support\Commands\CommandParser;
+use App\Support\Commands\EphemeralMessage;
 use App\Support\Commands\ParsedCommand;
 use App\Support\DeskApps;
 
@@ -241,17 +242,6 @@ final class WidgetService
      */
     private function ephemeral(Channel $channel, User $user, string $body): Message
     {
-        $message = new Message([
-            'channel_id' => $channel->id,
-            'user_id' => $user->id,
-            'body' => $body,
-            'type' => 'system',
-        ]);
-        $message->id = -(int) round(microtime(true) * 1000);
-        $message->created_at = now();
-        $message->updated_at = now();
-        $message->setRelation('user', $user);
-
-        return $message;
+        return EphemeralMessage::make($channel, $user, $body);
     }
 }

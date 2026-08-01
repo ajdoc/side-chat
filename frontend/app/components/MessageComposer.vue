@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { Mic, Paperclip, SendHorizontal, X } from 'lucide-vue-next'
-import type { ChannelMember, GifResult } from '~/types'
+import type { ChannelMember, GifResult, SlashCommand } from '~/types'
 import { Button } from '~/components/ui/button'
 import { CHUNK_THRESHOLD, useChunkedUpload } from '~/composables/useChunkedUpload'
 import { chunkMessage, MESSAGE_LIMIT } from '~/lib/chunkMessage'
@@ -11,6 +11,8 @@ const props = defineProps<{
   maxFiles?: number
   /** Roster for the `@` autocomplete — passed straight through to the editor. */
   mentionMembers?: ChannelMember[]
+  /** What `/` offers here — likewise straight through. See useSlashCommands. */
+  commands?: SlashCommand[]
   /** The channel this composer belongs to — the key its unsent draft is remembered under. */
   channelId?: number
 }>()
@@ -277,6 +279,7 @@ onBeforeUnmount(() => {
         v-model="draft"
         :placeholder="placeholder ?? 'Message'"
         :mention-members="mentionMembers"
+        :commands="commands"
         @submit="submit"
         @paste="onPaste"
       >

@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import { AtSign, Bold, Code, Eye, Italic, Link2, List, SquareCode, Strikethrough, TextQuote } from 'lucide-vue-next'
-import type { ChannelMember } from '~/types'
+import { AtSign, Bold, Code, Eye, Italic, Link2, List, Slash, SquareCode, Strikethrough, TextQuote } from 'lucide-vue-next'
+import type { ChannelMember, SlashCommand } from '~/types'
 
 const props = withDefaults(defineProps<{
   modelValue: string
@@ -11,10 +11,13 @@ const props = withDefaults(defineProps<{
   maxHeight?: number
   /** Roster for the `@` autocomplete. Empty is fine — `@all` is always offered. */
   mentionMembers?: ChannelMember[]
+  /** What `/` offers. Empty turns the command menu off entirely. */
+  commands?: SlashCommand[]
 }>(), {
   placeholder: 'Message',
   maxHeight: 220,
   mentionMembers: () => [],
+  commands: () => [],
 })
 
 const emit = defineEmits<{
@@ -152,18 +155,30 @@ const tools = [
   { icon: TextQuote, title: 'Quote', run: () => prefixLines('> ') },
 ]
 
-/* ------------------------------------------------------- @mention autocomplete */
+/* --------------------------------------------- @mention and /command autocomplete */
 
-interface MentionOption {
-  /** -1 marks the synthetic "all"; otherwise a real member id. */
-  id: number
+/**
+ * One menu, two triggers.
+ *
+ * `@` and `/` behave identically from the caret's point of view — a token that opens at a
+ * word boundary, a query running to the caret, arrow keys to choose, Enter to insert — so
+ * they share the detection, the keyboard handling and the popup. Only what fills the list
+ * and what gets typed back differ. Two parallel menus would have meant two chances for the
+ * arrow keys to fight over the same keystroke.
+ */
+interface MenuOption {
+  /** -1 marks the synthetic `@all`; a member id for a mention; the name for a command. */
+  id: number | string
   name: string
   hint: string
 }
 
+type MenuKind = 'mention' | 'command'
+
 const menuOpen = ref(false)
+const menuKind = ref<MenuKind>('mention')
 const mentionQuery = ref('')
-const mentionStart = ref(0) // index of the `@` in the draft
+const mentionStart = ref(0) // index of the `@` or `/` in the draft
 const activeIndex = ref(0)
 
 /**
@@ -178,10 +193,24 @@ const activeIndex = ref(0)
  */
 const { publicNameFor } = useNicknames()
 
-const options = computed<MentionOption[]>(() => {
+const options = computed<MenuOption[]>(() => {
   const q = mentionQuery.value.toLowerCase()
-  const all: MentionOption = { id: -1, name: 'all', hint: 'Notify everyone here' }
-  const members: MentionOption[] = props.mentionMembers.map((m) => {
+
+  if (menuKind.value === 'command') {
+    return props.commands
+      .filter(c => c.name.toLowerCase().startsWith(q))
+      // A command's hint says what it does, and whose it is when it belongs to a bot —
+      // "which of these leaves the building" is the one thing worth calling out.
+      .map(c => ({
+        id: c.name,
+        name: c.name,
+        hint: c.bot ? `${c.description ?? ''} (${c.bot})`.trim() : (c.description ?? ''),
+      }))
+      .slice(0, 8)
+  }
+
+  const all: MenuOption = { id: -1, name: 'all', hint: 'Notify everyone here' }
+  const members: MenuOption[] = props.mentionMembers.map((m) => {
     const name = publicNameFor(m)
 
     return { id: m.id, name, hint: name === m.name ? '' : m.name }
@@ -195,18 +224,36 @@ const options = computed<MentionOption[]>(() => {
 const showMenu = computed(() => menuOpen.value && options.value.length > 0)
 
 /**
- * Is the caret sitting in an `@…` token? If so, arm the menu and remember where the token
- * starts. The `@` must open the token — start of line or after whitespace — and the query
- * runs to the caret with no space in it, so "@" in an email never trips it.
+ * Is the caret sitting in an `@…` or `/…` token? If so, arm the menu and remember where the
+ * token starts.
+ *
+ * The `@` must open the token — start of line or after whitespace — and the query runs to
+ * the caret with no space in it, so "@" in an email never trips it.
+ *
+ * The `/` is stricter: it only counts at the very start of the message. A slash command *is*
+ * the whole message (that's what the server's parser accepts), and a looser rule would pop
+ * a menu over every URL and file path somebody types mid-sentence.
  */
 function detectMention() {
   const el = textarea.value
   if (!el || props.disabled) return closeMenu()
 
   const pos = el.selectionStart ?? 0
-  const match = /(?:^|\s)@([^\s@]*)$/.exec(props.modelValue.slice(0, pos))
+  const upToCaret = props.modelValue.slice(0, pos)
+
+  const command = props.commands.length > 0 ? /^\/([^\s/]*)$/.exec(upToCaret) : null
+  if (command) {
+    menuKind.value = 'command'
+    mentionQuery.value = command[1] ?? ''
+    mentionStart.value = 0
+    menuOpen.value = true
+    return
+  }
+
+  const match = /(?:^|\s)@([^\s@]*)$/.exec(upToCaret)
   if (!match) return closeMenu()
 
+  menuKind.value = 'mention'
   mentionQuery.value = match[1] ?? ''
   mentionStart.value = pos - mentionQuery.value.length - 1
   menuOpen.value = true
@@ -217,13 +264,13 @@ function closeMenu() {
   mentionQuery.value = ''
 }
 
-/** Swap the half-typed `@query` for the chosen name and drop the caret after it. */
-function selectMention(option: MentionOption) {
+/** Swap the half-typed token for the chosen name and drop the caret after it. */
+function selectMention(option: MenuOption) {
   const el = textarea.value
   const caretNow = el?.selectionStart ?? props.modelValue.length
   const before = props.modelValue.slice(0, mentionStart.value)
   const after = props.modelValue.slice(caretNow)
-  const inserted = `@${option.name} `
+  const inserted = menuKind.value === 'command' ? `/${option.name} ` : `@${option.name} `
 
   draft.value = before + inserted + after
   closeMenu()
@@ -356,8 +403,8 @@ defineExpose({ focus: () => textarea.value?.focus() })
         @paste="emit('paste', $event)"
       />
 
-      <!-- @mention picker: floats just above the caret's line. Mousedown (not click) so it
-           fires before the textarea's blur tears the menu down. -->
+      <!-- @mention / slash-command picker: floats just above the caret's line. Mousedown
+           (not click) so it fires before the textarea's blur tears the menu down. -->
       <ul
         v-if="showMenu"
         class="absolute bottom-full left-2 z-20 mb-1 max-h-56 w-64 overflow-y-auto rounded-md border bg-popover p-1 text-popover-foreground shadow-md"
@@ -370,7 +417,7 @@ defineExpose({ focus: () => textarea.value?.focus() })
           @mouseenter="activeIndex = i"
           @mousedown.prevent="selectMention(option)"
         >
-          <AtSign class="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+          <component :is="menuKind === 'command' ? Slash : AtSign" class="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
           <span class="truncate font-medium">{{ option.name }}</span>
           <span v-if="option.hint" class="ml-auto truncate text-xs text-muted-foreground">{{ option.hint }}</span>
         </li>
