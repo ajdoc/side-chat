@@ -32,7 +32,7 @@ final class DeskApps
      * Widgets promoted to apps. Must stay in step with the widget handler types — the same list
      * {@see \App\Http\Requests\Canvas\CanvasItemRules} validates a widget card against.
      */
-    public const WIDGET_APPS = ['music', 'video', 'kanban', 'poll', 'shooter', 'racing', 'skribbl'];
+    public const WIDGET_APPS = ['music', 'video', 'kanban', 'poll', 'shooter', 'racing', 'skribbl', 'poker'];
 
     /** Everything a surface may store, in no particular order (the stored array carries order). */
     public static function all(): array

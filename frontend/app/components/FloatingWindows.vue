@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { AtSign, Columns3, Film, Flag, Gamepad2, Hash, LayoutGrid, ListMusic, Palette, Users, Vote } from 'lucide-vue-next'
+import { AtSign, Columns3, Film, Flag, Gamepad2, Hash, LayoutGrid, ListMusic, Palette, Spade, Users, Vote } from 'lucide-vue-next'
 import type { FloatingWindow } from '~/composables/useFloatingWindows'
 
 /**
@@ -12,7 +12,7 @@ const { windows, hydrate } = useFloatingWindows()
 const { restore: restorePinnedMusic } = useMusicPin()
 
 const WIDGET_ICON: Record<string, any> = {
-  music: ListMusic, video: Film, kanban: Columns3, poll: Vote, shooter: Gamepad2, racing: Flag, skribbl: Palette,
+  music: ListMusic, video: Film, kanban: Columns3, poll: Vote, shooter: Gamepad2, racing: Flag, skribbl: Palette, poker: Spade,
 }
 const CONVERSATION_ICON = { channel: Hash, dm: AtSign, group: Users }
 

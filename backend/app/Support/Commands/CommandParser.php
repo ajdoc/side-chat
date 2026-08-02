@@ -7,7 +7,8 @@ namespace App\Support\Commands;
  *
  * A command is a single line beginning `<x>!<verb>` where `<x>` is a known widget prefix
  * — `m` for music, `v` for the watch-along video player, `k` for kanban, `p` for a poll,
- * `g` for the co-op shooter, `r` for the co-op racer, `s` for Skribbl.
+ * `g` for the co-op shooter, `r` for the co-op racer, `s` for Skribbl, `h` for hold'em (the poker table — `p` was
+ * long since spoken for by polls).
  *
  * One prefix isn't a widget: `a` is the *app launcher* ({@see self::APP_NAMESPACE}). Its verb
  * is an app id rather than an action — `a!poll`, `a!board`, `a!notes` — so a single command
@@ -22,7 +23,7 @@ namespace App\Support\Commands;
 final class CommandParser
 {
     /** Prefix letter → widget type. The set of things `<x>!…` is allowed to be. */
-    public const NAMESPACES = ['m' => 'music', 'v' => 'video', 'k' => 'kanban', 'p' => 'poll', 'g' => 'shooter', 'r' => 'racing', 's' => 'skribbl'];
+    public const NAMESPACES = ['m' => 'music', 'v' => 'video', 'k' => 'kanban', 'p' => 'poll', 'g' => 'shooter', 'r' => 'racing', 's' => 'skribbl', 'h' => 'poker'];
 
     /** The app launcher's prefix — `a!<app>`. Not a widget type; handled on its own path. */
     public const APP_NAMESPACE = 'a';

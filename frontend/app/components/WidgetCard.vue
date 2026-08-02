@@ -18,7 +18,7 @@ const { isPinned, unpin } = useMusicPin()
 const { open: openFloating, isWidgetFloating } = useFloatingWindows()
 
 const WIDGET_LABEL: Record<string, string> = {
-  video: 'Video', kanban: 'Kanban', poll: 'Poll', shooter: 'Galaga', racing: 'Racing', skribbl: 'Skribbl',
+  video: 'Video', kanban: 'Kanban', poll: 'Poll', shooter: 'Galaga', racing: 'Racing', skribbl: 'Skribbl', poker: 'Poker',
 }
 const canFloat = computed(() => props.widget.type !== 'music' && !!props.widget.state)
 
@@ -67,5 +67,6 @@ function popOut() {
   <CoopShooter v-else-if="widget.type === 'shooter'" :widget="widget" />
   <CoopRacer v-else-if="widget.type === 'racing'" :widget="widget" />
   <SkribblGame v-else-if="widget.type === 'skribbl'" :widget="widget" />
+  <PokerTable v-else-if="widget.type === 'poker'" :widget="widget" />
   </div>
 </template>

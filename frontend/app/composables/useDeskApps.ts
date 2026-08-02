@@ -1,6 +1,6 @@
 import {
   CalendarDays, Columns3, FileText, Film, Flag, Gamepad2, LayoutGrid, Music,
-  NotebookPen, Palette, PenTool, Vote,
+  NotebookPen, Palette, PenTool, Spade, Vote,
 } from 'lucide-vue-next'
 import type { Component } from 'vue'
 import type { SideDeskAppId, WidgetType } from '~/types'
@@ -86,6 +86,7 @@ export const DESK_APPS: DeskApp[] = [
   { id: 'poll', label: 'Poll', icon: Vote, family: 'widget', removable: true, canvasable: true, card: { w: 280, h: 260 }, group: 'tool' },
   { id: 'shooter', label: 'Galaga', icon: Gamepad2, family: 'widget', removable: true, canvasable: true, card: { w: 320, h: 420 }, group: 'game' },
   { id: 'racing', label: 'Racing', icon: Flag, family: 'widget', removable: true, canvasable: true, card: { w: 340, h: 380 }, group: 'game' },
+  { id: 'poker', label: 'Poker', icon: Spade, family: 'widget', removable: true, canvasable: true, card: { w: 360, h: 460 }, group: 'game' },
   { id: 'skribbl', label: 'Skribbl', icon: Palette, family: 'widget', removable: true, canvasable: true, card: { w: 360, h: 520 }, group: 'game' },
 ]
 

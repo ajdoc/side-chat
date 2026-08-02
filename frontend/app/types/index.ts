@@ -304,7 +304,7 @@ export interface Message {
  * `widget` canvas card, and — since widgets were promoted to full Side Desk apps — a tab. One
  * union keeps those from drifting apart. Must stay in step with `App\Support\DeskApps`.
  */
-export type WidgetType = 'music' | 'video' | 'kanban' | 'poll' | 'shooter' | 'racing' | 'skribbl'
+export type WidgetType = 'music' | 'video' | 'kanban' | 'poll' | 'shooter' | 'racing' | 'skribbl' | 'poker'
 
 export interface Widget {
   id: number
@@ -315,7 +315,7 @@ export interface Widget {
    * *reference* over the socket (WidgetUpdated / a MessageSent card): its full state is
    * too big for Pusher's 10KB event cap, so the client fetches it from `/api/widgets/{id}`.
    */
-  state?: MusicState | VideoState | KanbanState | PollState | ShooterState | RacingState | SkribblState
+  state?: MusicState | VideoState | KanbanState | PollState | ShooterState | RacingState | SkribblState | PokerState
   created_at?: string
 }
 
@@ -1227,4 +1227,65 @@ export interface SearchFilters {
   after?: string
   before?: string
   has?: SearchHas
+}
+
+/**
+ * One seat at the Side Poker table, keyed by user id in `players`.
+ *
+ * `cards` is the field to read carefully: the server only ever sends you *your* hole cards.
+ * Everyone else's arrive as an array of `null`s of the right length — enough to draw the
+ * right number of face-down cards, and nothing more. At a showdown the players still in the
+ * hand get real strings; folded hands stay face down, as they would on a table.
+ */
+export interface PokerPlayer {
+  name: string
+  /** Their stack, not counting what's already out in front of them this street. */
+  chips: number
+  /** Out in front of them on the current street. */
+  bet: number
+  /** Everything they've put in across the whole hand — what side pots are cut from. */
+  committed: number
+  folded: boolean
+  allIn: boolean
+  /** They've had their say on this street (a raise behind them takes this back). */
+  acted: boolean
+  /** Two cards: real ones if they're yours or face-up at a showdown, otherwise `null`s. */
+  cards: (string | null)[]
+  /** The English name of their made hand, filled in at the showdown. */
+  hand: string | null
+  /** Chips won in the hand just finished. */
+  won: number
+  /**
+   * A house bot rather than a person — a seat with no account behind it, so that one player
+   * can have a game. Its hole cards are hidden from everyone, including whoever added it.
+   */
+  bot: boolean
+}
+
+/**
+ * The Side Poker table (see PokerTable + the PokerWidget handler).
+ *
+ * Unlike the other games, none of this game runs on the client: the deck, the turn order,
+ * what a legal raise is and who won are all decided server-side, and the card only draws
+ * what it's given. The `deck` field of the server's state is never sent to anyone at all.
+ */
+export interface PokerState {
+  status: 'idle' | 'betting' | 'showdown'
+  stage: 'preflop' | 'flop' | 'turn' | 'river'
+  handNo: number
+  /** Community cards — 0, 3, 4 or 5 of them, as `"As"`, `"Td"`. */
+  board: string[]
+  /** Chips already swept in from finished streets; the current street's bets sit on the players. */
+  pot: number
+  /** The amount to match on this street. */
+  bet: number
+  /** The smallest legal raise increment right now. */
+  minRaise: number
+  buttonId: number | null
+  /** Whose decision the table is waiting on, or null between hands. */
+  turnId: number | null
+  /** Seating order, clockwise — blinds and turn order follow it. */
+  seats: number[]
+  players: Record<string, PokerPlayer>
+  log: string[]
 }

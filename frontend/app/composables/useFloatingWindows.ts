@@ -97,6 +97,7 @@ const WIDGET_SIZE: Record<string, { w: number, h: number }> = {
   shooter: { w: 360, h: 520 },
   racing: { w: 380, h: 480 },
   skribbl: { w: 380, h: 560 },
+  poker: { w: 400, h: 560 },
 }
 const DEFAULT_WIDGET_SIZE = { w: 380, h: 480 }
 const DEFAULT_CONVERSATION_SIZE = { w: 360, h: 480 }
