@@ -188,6 +188,33 @@ function saveName(bot: Bot, value: string) {
   patch(bot, { name })
 }
 
+/**
+ * Make this the bot the server's automations speak as.
+ *
+ * Exactly one per server, so this reads as a radio button rather than a switch: choosing a
+ * bot takes the job off whichever had it, which is what the endpoint does in one
+ * transaction. There is deliberately no "none" — a server that has stopped wanting
+ * automations turns the *rules* off, and leaving them on with nobody to run them would mean
+ * every one of them silently skipping.
+ */
+async function setAutomationBot(bot: Bot) {
+  if (bot.runs_automations || working.value) return
+  working.value = bot.id
+  error.value = null
+  try {
+    await api(`/api/servers/${props.server.id}/bots/${bot.id}/automations`, { method: 'PUT' })
+    // Reloaded rather than patched locally: this moves a flag on *another* row too, and a
+    // local edit would leave the previous holder still looking chosen.
+    await load()
+  }
+  catch (e: any) {
+    error.value = e?.data?.message ?? `Couldn't make ${bot.user.name} the automation bot.`
+  }
+  finally {
+    working.value = null
+  }
+}
+
 async function destroy(bot: Bot) {
   if (!confirm(`Remove ${bot.user.name}? Its token stops working. What it has already posted stays.`)) return
   working.value = bot.id
@@ -233,6 +260,18 @@ async function destroy(bot: Bot) {
         </div>
       </div>
 
+      <!-- The state that makes every rule on the bot dashboard skip. Said here, once,
+           because this is the only screen that can fix it. -->
+      <div
+        v-if="!loading && bots.length && !bots.some(b => b.runs_automations)"
+        class="mb-3 rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs"
+      >
+        <p class="font-medium text-amber-600 dark:text-amber-400">No bot runs this server's automations.</p>
+        <p class="mt-0.5 text-muted-foreground">
+          Rules, welcome messages and schedules will save but never post. Pick one below.
+        </p>
+      </div>
+
       <div v-if="loading" class="flex justify-center py-8">
         <Loader2 class="h-5 w-5 animate-spin text-muted-foreground" />
       </div>
@@ -276,6 +315,20 @@ async function destroy(bot: Bot) {
             <span>{{ bot.last_used_at ? `Last used ${new Date(bot.last_used_at).toLocaleString()}` : 'Never used' }}</span>
             <span v-if="bot.created_by">· by {{ bot.created_by }}</span>
           </div>
+
+          <!-- Which bot the automations speak as. Here rather than on the bot dashboard
+               because issuing and assigning a bot is the owner's, and the dashboard is
+               staff — see StoreBotRequest for the same argument about tokens. -->
+          <label class="mt-2 flex items-center gap-2 px-1 text-xs" :class="bot.runs_automations ? 'text-foreground' : 'text-muted-foreground'">
+            <input
+              type="radio"
+              :name="`automation-bot-${server.id}`"
+              :checked="bot.runs_automations"
+              :disabled="working === bot.id"
+              @change="setAutomationBot(bot)"
+            >
+            Runs this server's automations
+          </label>
 
           <div class="mt-2 flex flex-wrap gap-2">
             <Button size="sm" variant="ghost" :disabled="working === bot.id" @click="rotateToken(bot)">

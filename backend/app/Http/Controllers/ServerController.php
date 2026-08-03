@@ -18,7 +18,10 @@ use App\Http\Requests\Server\ViewServerRequest;
 use App\Http\Resources\ServerResource;
 use App\Models\Server;
 use App\Models\User;
+use App\Services\Automation\AutomationEngine;
+use App\Services\Automation\TriggerRegistry;
 use App\Services\ServerService;
+use App\Support\Automation\AutomationContext;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Http\Resources\Json\AnonymousResourceCollection;
@@ -68,14 +71,36 @@ class ServerController extends Controller
      * not from the pivot, so writing a role for them would be a no-op that looked like a
      * demotion. 404 says the same thing more honestly.
      */
-    public function updateRole(UpdateMemberRoleRequest $request, Server $server, User $member): JsonResponse
-    {
+    public function updateRole(
+        UpdateMemberRoleRequest $request,
+        Server $server,
+        User $member,
+        AutomationEngine $automations,
+    ): JsonResponse {
         abort_if($server->isOwner($member) || ! $server->hasMember($member), 404);
 
         $role = $request->validated()['role'];
+        // Read before the write: a rule that wants to congratulate somebody on becoming an
+        // admin needs to know they weren't one a moment ago, and only this line knows that.
+        $previous = $server->roleFor($member);
         $server->members()->updateExistingPivot($member->id, ['role' => $role]);
 
         broadcast(new ServerRoleUpdated($server, $member->id, $role));
+
+        // Only on a real change. Saving the form without touching the dropdown is not
+        // somebody being promoted.
+        if ($previous !== $role) {
+            $automations->fire(new AutomationContext(
+                $server->getKey(),
+                TriggerRegistry::ROLE_ASSIGNED,
+                [
+                    'user_id' => $member->getKey(),
+                    'user_name' => $member->name,
+                    'role' => $role,
+                    'previous_role' => $previous,
+                ],
+            ));
+        }
 
         return response()->json(['data' => ['user_id' => $member->id, 'role' => $role]]);
     }

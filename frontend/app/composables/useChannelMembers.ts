@@ -1,5 +1,5 @@
 import type { InjectionKey, Ref } from 'vue'
-import type { ChannelMember } from '~/types'
+import type { ChannelMember, MemberBadge } from '~/types'
 
 /**
  * The channel roster — everyone who can be @mentioned here.
@@ -12,6 +12,22 @@ import type { ChannelMember } from '~/types'
 
 /** Provided by the timeline so a message body deep in the virtual list can resolve chips. */
 export const mentionNamesKey: InjectionKey<Ref<string[]>> = Symbol('channel-mention-names')
+
+/**
+ * The badges each member holds here, keyed by user id.
+ *
+ * Provided the same way, and for the same reason, as the mention names: the timeline needs
+ * them on every author line, and handing the roster to each MessageItem would mean passing
+ * the same array through the virtual list a hundred times.
+ *
+ * Reading badges off the *roster* rather than off each message is the whole trick. Badges
+ * are per-server and the roster is already fetched, already cached and already scoped to
+ * this channel — so putting them on the message payload instead would mean loading a
+ * constrained relation in ten different query paths, an N+1 waiting to happen in each, and
+ * a badge that only updates when the message is re-fetched.
+ */
+export const memberBadgesKey: InjectionKey<Ref<Record<number, MemberBadge[]>>> =
+  Symbol('channel-member-badges')
 
 export function useChannelMembers() {
   const api = useApi()
@@ -35,6 +51,11 @@ export function useChannelMembers() {
   const names = computed(() => [
     ...new Set(members.value.flatMap(m => [m.name, publicNameFor(m)])),
   ])
+
+  /** Badges by user id, for the timeline's author lines. Members without any are omitted. */
+  const badges = computed(() => Object.fromEntries(
+    members.value.filter(m => m.badges?.length).map(m => [m.id, m.badges!]),
+  ) as Record<number, MemberBadge[]>)
 
   /**
    * @param force Skip the cache. The roster is stable enough to cache for autocomplete,
@@ -60,5 +81,5 @@ export function useChannelMembers() {
     }
   }
 
-  return { members, names, load }
+  return { members, names, badges, load }
 }

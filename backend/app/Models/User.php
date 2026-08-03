@@ -94,6 +94,20 @@ class User extends Authenticatable
         return $this->hasOne(Bot::class);
     }
 
+    /**
+     * Badges this user holds, across every server they're in.
+     *
+     * Scoped by the caller where it matters — a badge belongs to one server, so rendering a
+     * member list filters to that server's. Kept unscoped here because the relation has no
+     * server to scope by, and a second relation per server would be worse.
+     *
+     * @return BelongsToMany<Badge>
+     */
+    public function badges(): BelongsToMany
+    {
+        return $this->belongsToMany(Badge::class)->withTimestamps();
+    }
+
     /** DMs and group chats this user is in. */
     public function conversations(): BelongsToMany
     {

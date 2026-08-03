@@ -43,6 +43,12 @@ it('queues a delivery when a person posts in a channel the bot can see', functio
             && $job->event === 'message.created'
             && $job->data['body'] === 'hello bot';
     });
+
+    // Exactly one. Every listener here is registered by hand *and* lives in app/Listeners,
+    // which Laravel discovers by default — so for a while this fired twice and delivered
+    // every event twice, invisibly, because the assertion above is happy with either.
+    // Discovery is off (see bootstrap/app.php); this is the line that notices if it returns.
+    Queue::assertPushed(DeliverBotEvent::class, 1);
 });
 
 it('never tells a bot about a message a bot wrote', function () {

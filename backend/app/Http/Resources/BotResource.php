@@ -31,6 +31,13 @@ class BotResource extends JsonResource
             'webhook_enabled' => $this->webhook_url !== null && $this->webhook_disabled_at === null,
             'webhook_failures' => (int) $this->webhook_failures,
             'webhook_disabled_at' => $this->webhook_disabled_at,
+            /*
+             * Whether this is the bot the server's automations speak as. One per server.
+             *
+             * On the resource because the Bots screen is where it's chosen, and a toggle
+             * that can't read its own current state is a toggle that lies after a reload.
+             */
+            'runs_automations' => (bool) $this->runs_automations,
             // Null once the token has never been used — i.e. nobody has wired it up yet.
             'last_used_at' => $this->last_used_at,
             'created_at' => $this->created_at,

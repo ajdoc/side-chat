@@ -17,6 +17,7 @@ use App\Models\Server;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Resources\Json\AnonymousResourceCollection;
 use Illuminate\Http\Response;
+use Illuminate\Support\Facades\DB;
 
 /**
  * Bot registration, for the owner of a server.
@@ -89,6 +90,27 @@ class BotController extends Controller
         abort_if($bot->webhook_url === null, 404, 'This bot has no webhook.');
 
         return response()->json(['data' => ['webhook_secret' => $action->handle($bot)]]);
+    }
+
+    /**
+     * Make this the bot the server's automations speak as, taking it off whichever bot had
+     * it before.
+     *
+     * Exactly one per server, enforced here rather than by a unique index — MySQL has no
+     * filtered index, and a unique on (server_id, runs_automations) would also forbid a
+     * server having two ordinary bots, which is what the platform is for. Both writes go in
+     * one transaction so there is no instant with two, or with none.
+     */
+    public function setAutomationBot(ManageBotsRequest $request, Server $server, Bot $bot): BotResource
+    {
+        $this->assertBelongsTo($bot, $server);
+
+        DB::transaction(function () use ($server, $bot): void {
+            $server->bots()->where('runs_automations', true)->update(['runs_automations' => false]);
+            $bot->update(['runs_automations' => true]);
+        });
+
+        return new BotResource($bot->load('user', 'creator'));
     }
 
     /** Retire the bot. Its past messages stay — see DeleteBotAction. */

@@ -89,6 +89,8 @@ export interface ChannelMember {
   name: string
   email: string
   avatar: string | null
+  /** This server's badges for them. Empty in a DM or group chat, which have no server. */
+  badges?: MemberBadge[]
   /** Server channels only — a chat has no roles, and the field is simply 'member' there. */
   role?: ServerRole
 }
@@ -1037,6 +1039,202 @@ export interface Bot {
   user: User
   /** Who created it, or null if their account is gone. */
   created_by: string | null
+  /** Whether this is the bot the server's automations speak as. One per server. */
+  runs_automations?: boolean
+}
+
+/**
+ * A "when X, do Y" rule, configured on the bot dashboard and run by the server.
+ *
+ * `actions` is ordered and complete — the list and the editor read the same object, because
+ * a rule is small and a list that had to fetch each row to open it would flicker on
+ * every edit.
+ */
+export interface Automation {
+  id: number
+  server_id: number
+  name: string
+  trigger: string
+  trigger_config: Record<string, unknown>
+  conditions: AutomationCondition[]
+  enabled: boolean
+  /**
+   * Set for the rules that have a dashboard page of their own (the welcome message, a
+   * reaction role). The generic list hides these; the feature page finds its row by it.
+   */
+  builtin: string | null
+  run_count: number
+  last_run_at: string | null
+  created_at: string
+  updated_at: string
+  actions: AutomationActionRow[]
+}
+
+export interface AutomationActionRow {
+  id?: number
+  type: string
+  config: Record<string, unknown>
+  position?: number
+}
+
+export interface AutomationCondition {
+  field: string
+  operator: string
+  value: unknown
+}
+
+/**
+ * What the builder may offer, served by the backend rather than duplicated here.
+ *
+ * An action added in PHP appears in the UI on its own — the alternative is two lists that
+ * agree until they don't.
+ */
+export interface AutomationCatalogue {
+  triggers: { name: string, label: string, description: string, fields: string[] }[]
+  actions: { name: string, label: string, schema: AutomationFieldSchema[] }[]
+  operators: { name: string, label: string }[]
+  /**
+   * The pickers an action's schema can name, sent alongside so the builder never has to
+   * know which field types imply an extra request.
+   */
+  commands: { id: number, name: string }[]
+  schedules: { id: number, name: string }[]
+  giveaways: { id: number, name: string }[]
+}
+
+/** One field of an action's form. `type` names a *picker*, not a primitive. */
+export interface AutomationFieldSchema {
+  key: string
+  type: 'text' | 'textarea' | 'channel' | 'badge' | 'role' | 'command' | 'schedule' | 'giveaway' | 'number' | 'boolean'
+  label: string
+  required?: boolean
+  help?: string
+  options?: string[]
+  placeholders?: string[]
+}
+
+/**
+ * A badge as it rides along on a member in a roster — just enough to draw the pill.
+ *
+ * Deliberately not the full {@link Badge}: a roster has no use for the description or the
+ * holder count, and sending them for every member of a large server would be waste.
+ */
+export interface MemberBadge {
+  id: number
+  name: string
+  emoji: string | null
+  color: string | null
+}
+
+/** A label a server hands out. Cosmetic and addressable — never a permission. */
+export interface Badge {
+  id: number
+  server_id: number
+  name: string
+  emoji: string | null
+  color: string | null
+  description: string | null
+  holders_count?: number
+}
+
+/** A canned answer a server declared for itself — `/rules`, `!ip`. */
+export interface CustomCommand {
+  id: number
+  server_id: number
+  name: string
+  /** Which syntax answers to it: `/name`, `!name`, or both. */
+  kind: 'slash' | 'prefix' | 'both'
+  description: string | null
+  response: string
+  /** Only members holding this badge may run it. Null is anybody. */
+  required_badge_id: number | null
+  /** Per person, not per channel. Zero is no limit. */
+  cooldown_seconds: number
+  enabled: boolean
+  use_count: number
+}
+
+/** A recurring post. `next_run_at` is stored, not recomputed on read. */
+export interface BotSchedule {
+  id: number
+  server_id: number
+  name: string
+  /** Null falls back to the server's configured reminder channel. */
+  channel_id: number | null
+  body: string
+  cron: string
+  timezone: string
+  enabled: boolean
+  last_run_at: string | null
+  next_run_at: string | null
+}
+
+/**
+ * One reaction-role message, as the page shows it: a post and its emoji→badge pairs.
+ *
+ * Underneath it's two automations per pair (grant on react, revoke on un-react) — the API
+ * regroups them so the screen doesn't have to know that.
+ */
+export interface ReactionRoleGroup {
+  message_id: number
+  channel_id: number
+  pairs: { emoji: string, badge_id: number, badge_name: string | null }[]
+}
+
+export interface Giveaway {
+  id: number
+  server_id: number
+  channel_id: number
+  message_id: number | null
+  prize: string
+  emoji: string
+  winner_count: number
+  required_badge: string | null
+  ends_at: string
+  drawn_at: string | null
+  /** Derived from the timestamps, not stored: running | ending | drawn | cancelled. */
+  status: 'running' | 'ending' | 'drawn' | 'cancelled'
+  entries_count: number
+  winners: string[]
+}
+
+export interface BotSettings {
+  command_prefix: string
+  mod_log_channel_id: number | null
+  announcement_channel_id: number | null
+  reminder_channel_id: number | null
+  /** Empty means nobody — moderation commands stay off until somebody says who has them. */
+  mod_roles: ServerRole[]
+}
+
+/** The welcome message. A settings form on the outside, a `member.joined` rule inside. */
+export interface BotWelcome {
+  enabled: boolean
+  channel_id: number | null
+  body: string | null
+}
+
+export interface BotOverview {
+  bot: Bot | null
+  /** Whether the server has any bots at all — "none chosen" and "none exist" differ. */
+  has_bots: boolean
+  member_count: number
+  channel_count: number
+  automation_count: number
+  enabled_automation_count: number
+  badge_count: number
+  recent: BotAuditLine[]
+}
+
+export interface BotAuditLine {
+  id: number
+  action: string
+  /** 'ok' | 'failed' | 'skipped'. A skip is not a failure — it's "there was nothing to do". */
+  outcome: 'ok' | 'failed' | 'skipped'
+  message: string | null
+  automation: string | null
+  subject: string | null
+  created_at: string
 }
 
 export interface ServerJoinRequest {

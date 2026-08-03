@@ -3,7 +3,7 @@ import { ArrowDown, Loader2, Menu, PictureInPicture2, Search, X } from 'lucide-v
 import type { Channel, GifResult, Message } from '~/types'
 import type { FloatingConversationIcon } from '~/composables/useFloatingWindows'
 import { Button } from '~/components/ui/button'
-import { mentionNamesKey, useChannelMembers } from '~/composables/useChannelMembers'
+import { memberBadgesKey, mentionNamesKey, useChannelMembers } from '~/composables/useChannelMembers'
 
 /**
  * A channel's timeline: the messages, the composer, threads, pins, read receipts, typing.
@@ -74,7 +74,7 @@ const {
 // with the first one torn down. See useSpaceChatBubbles.
 const { noteTyping, forgetTyping, noteSaid, clearBubbles } = useSpaceChatBubbles()
 
-const { members: mentionMembers, names: mentionNames, load: loadMembers } = useChannelMembers()
+const { members: mentionMembers, names: mentionNames, badges: memberBadges, load: loadMembers } = useChannelMembers()
 // What `/` offers in this channel — built-ins plus whatever the bots here answer to.
 const { commands: slashCommands, load: loadCommands } = useSlashCommands()
 // Pop this conversation out into a floating window that follows you around the app.
@@ -91,6 +91,9 @@ const { isMobile } = usePlatform()
 // So a message body deep in the virtual list can render `@Name` as a chip without each
 // MessageItem having to be handed the roster. See MarkdownBody / useChannelMembers.
 provide(mentionNamesKey, mentionNames)
+// Same reasoning: the author line on every message wants these, and the roster already
+// has them scoped to this channel's server. See useChannelMembers.
+provide(memberBadgesKey, memberBadges)
 
 const channelId = computed(() => props.channel.id)
 

@@ -120,6 +120,48 @@ class Server extends Model implements MessageContainer
         return $this->hasMany(Bot::class);
     }
 
+    /**
+     * The bot this server's automations speak as, if one has been chosen.
+     *
+     * Null is an ordinary state, not a broken one: a server can have rules configured
+     * before it has a bot to run them. Actions that need a voice skip and say so in the
+     * audit log rather than failing — see PostMessageAction.
+     */
+    public function automationBot(): ?Bot
+    {
+        return $this->bots()->where('runs_automations', true)->with('user')->first();
+    }
+
+    /** @return HasMany<Automation> */
+    public function automations(): HasMany
+    {
+        return $this->hasMany(Automation::class);
+    }
+
+    /** @return HasMany<CustomCommand> */
+    public function customCommands(): HasMany
+    {
+        return $this->hasMany(CustomCommand::class);
+    }
+
+    /** @return HasMany<BotSchedule> */
+    public function schedules(): HasMany
+    {
+        return $this->hasMany(BotSchedule::class);
+    }
+
+    /** @return HasMany<Giveaway> */
+    public function giveaways(): HasMany
+    {
+        return $this->hasMany(Giveaway::class);
+    }
+
+    /** @return HasMany<Badge> */
+    public function badges(): HasMany
+    {
+        return $this->hasMany(Badge::class)->orderBy('name');
+    }
+
     /** @return HasMany<ServerJoinRequest> */
     public function joinRequests(): HasMany
     {

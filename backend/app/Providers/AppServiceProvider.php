@@ -4,6 +4,7 @@ namespace App\Providers;
 
 use App\Events\MessageSent;
 use App\Listeners\NotifyBotsOfMessage;
+use App\Listeners\RunMessageAutomations;
 use App\Search\LikeSearchDriver;
 use App\Search\PostgresSearchDriver;
 use App\Search\SearchDriver;
@@ -48,5 +49,10 @@ class AppServiceProvider extends ServiceProvider
         // but a listener nobody can find by grepping for the event is a listener that gets
         // broken by accident.
         Event::listen(MessageSent::class, NotifyBotsOfMessage::class);
+        // The in-app half of the same idea: a message is also a trigger. Two listeners
+        // rather than one that does both, because the two answer different questions —
+        // "which external bots subscribed to this" and "which of this server's rules match
+        // it" — and they fail independently.
+        Event::listen(MessageSent::class, RunMessageAutomations::class);
     }
 }

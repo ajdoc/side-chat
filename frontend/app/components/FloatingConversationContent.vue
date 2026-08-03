@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ArrowDown, Loader2 } from 'lucide-vue-next'
 import type { GifResult, Message } from '~/types'
-import { mentionNamesKey, useChannelMembers } from '~/composables/useChannelMembers'
+import { memberBadgesKey, mentionNamesKey, useChannelMembers } from '~/composables/useChannelMembers'
 
 /**
  * A conversation, rendered away from its own page. Every conversation — server channel, DM,
@@ -28,9 +28,12 @@ const props = defineProps<{
 
 const { user } = useAuth()
 const { messages, hasMore, loadingOlder, load, loadOlder, ensureLoaded, send, edit, remove, toggleReaction, togglePin, subscribe, unsubscribe } = useMessages()
-const { members: mentionMembers, names: mentionNames, load: loadMembers } = useChannelMembers()
+const { members: mentionMembers, names: mentionNames, badges: memberBadges, load: loadMembers } = useChannelMembers()
 const { commands: slashCommands, load: loadCommands } = useSlashCommands()
 provide(mentionNamesKey, mentionNames)
+// Same reasoning: the author line on every message wants these, and the roster already
+// has them scoped to this channel's server. See useChannelMembers.
+provide(memberBadgesKey, memberBadges)
 
 const channelId = computed(() => props.channelId)
 

@@ -356,6 +356,13 @@ its own `/slash` commands alongside the built-in ones (`/roll`, `/8ball`, `/me`,
 
 Full API reference for writing one: **[BOTS.md](BOTS.md)**.
 
+A bot doesn't have to be a program, though. The **Bot dashboard** (server dropdown, owner or
+admin) configures one that already lives here: welcome messages, custom `/rules`-style
+commands, recurring posts, badges, reaction roles, giveaways, and a general
+"when X happens, do Y" builder that every one of those is built out of. No code, no webhook.
+
+Guide: **[AUTOMATION.md](AUTOMATION.md)**.
+
 ## Link previews (unfurling)
 
 Post a URL and it unfurls: a card with the page's Open Graph title, description, site and

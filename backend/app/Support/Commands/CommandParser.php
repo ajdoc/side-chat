@@ -39,6 +39,58 @@ final class CommandParser
      */
     public const SLASH_NAMESPACE = '/';
 
+    /**
+     * The namespace a server's *own* prefix commands land in — `!rules`, `?ip`.
+     *
+     * Unlike every other shape here, this one can't be recognised by looking at the string:
+     * the prefix character is per-server configuration (see bot_settings), so the caller has
+     * to supply it. Hence {@see self::parsePrefixed} rather than a branch inside parse().
+     */
+    public const CUSTOM_NAMESPACE = 'custom';
+
+    /**
+     * Could this line be a prefix command at all?
+     *
+     * A cheap string test, used to decide whether looking the server's prefix up is worth a
+     * query. Ordinary chat overwhelmingly starts with a letter, so this answers no without
+     * touching the database for almost every message sent.
+     */
+    public static function mightBePrefixed(?string $body): bool
+    {
+        $line = trim((string) $body);
+
+        // A single punctuation mark, then a letter: `!rules`. Anything else — a word, an
+        // emoji, "!!!", "! spaced" — is not.
+        return preg_match('/^[^\w\s\/][a-zA-Z]/', $line) === 1;
+    }
+
+    /**
+     * `<prefix><verb> [args]`, for the one prefix this server has configured.
+     *
+     * Deliberately strict about the whole line being the command, exactly like the widget
+     * namespaces: somebody writing "!!! it worked" or "wait, !rules is wrong" has not run a
+     * command, and swallowing their message would be worse than the feature is useful.
+     */
+    public function parsePrefixed(?string $body, string $prefix): ?ParsedCommand
+    {
+        if ($body === null || $prefix === '') {
+            return null;
+        }
+
+        $line = trim($body);
+        $quoted = preg_quote($prefix, '/');
+
+        if (! preg_match('/^'.$quoted.'([a-zA-Z][a-zA-Z0-9-]*)(?:\s+(.*))?$/s', $line, $m)) {
+            return null;
+        }
+
+        return new ParsedCommand(
+            namespace: self::CUSTOM_NAMESPACE,
+            verb: strtolower($m[1]),
+            args: trim($m[2] ?? ''),
+        );
+    }
+
     public function parse(?string $body): ?ParsedCommand
     {
         if ($body === null) {

@@ -5,7 +5,7 @@ import {
   Check, ChevronDown, ChevronRight, Copy, DoorOpen, Hash, HeadphoneOff, Lock, LogOut,
   Map as MapIcon,
   MessageSquarePlus, MicOff, Monitor, Moon, Pencil, Phone, Plus, ScreenShare, Search, Shield, Sun, Trash2,
-  User, UserPlus, Users, Volume2,
+  User, UserPlus, Users, Volume2, Zap,
 } from 'lucide-vue-next'
 import { useLocalStorage } from '@vueuse/core'
 import type { Channel, Conversation, Server, ThemeColor, ThemeMode } from '~/types'
@@ -449,6 +449,9 @@ const rolesServer = ref<Server | null>(null)
 // Bots, likewise its own component: it fetches tokens' worth of settings only the owner
 // may see, and it's the one screen where a secret is shown.
 const botsServer = ref<Server | null>(null)
+// The bot's control panel — rules, badges, how it behaves. Staff, unlike Bots above:
+// configuring what the bot *does* is running the place, not holding its credential.
+const botDashboardServer = ref<Server | null>(null)
 const showProfile = ref(false)
 const targetChannel = ref<Channel | null>(null)
 const targetServer = ref<Server | null>(null)
@@ -811,6 +814,12 @@ onBeforeUnmount(() => { userStream.unsubscribe(); stopPresence() })
                       <DropdownMenuItem v-if="item.server.is_owner" @select="botsServer = item.server">
                         <Bot class="mr-2 h-4 w-4" /> Bots
                       </DropdownMenuItem>
+                      <!-- Staff, not owner-only: a welcome message or a scheduled post is
+                           running the place, which is what an admin is for. The one rule an
+                           admin can't write (handing out roles) is refused by the API. -->
+                      <DropdownMenuItem v-if="item.server.is_staff ?? item.server.is_owner" @select="botDashboardServer = item.server">
+                        <Zap class="mr-2 h-4 w-4" /> Bot dashboard
+                      </DropdownMenuItem>
                       <!-- What *you* are called in this server. Other people's nicknames
                            are set from the roster in the channel Info panel, where you can
                            see who you're renaming. -->
@@ -1146,6 +1155,12 @@ onBeforeUnmount(() => { userStream.unsubscribe(); stopPresence() })
     <ChannelAccessDialog v-if="accessChannel" :channel="accessChannel" @close="accessChannel = null" />
     <ServerRolesDialog v-if="rolesServer" :server="rolesServer" :channel-id="activeChannelId ?? channels[0]?.id ?? null" @close="rolesServer = null" />
     <ServerBotsDialog v-if="botsServer" :server="botsServer" @close="botsServer = null" />
+    <ServerBotDashboard
+      v-if="botDashboardServer"
+      :server="botDashboardServer"
+      :channels="channels"
+      @close="botDashboardServer = null"
+    />
 
     <NewChatDialog v-model:open="showNewChat" />
 

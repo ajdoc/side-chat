@@ -1,6 +1,9 @@
 <?php
 
+use App\Console\Commands\DrawGiveaways;
+use App\Console\Commands\PruneBotAuditLog;
 use App\Console\Commands\PruneChunkedUploads;
+use App\Console\Commands\RunBotSchedules;
 use Illuminate\Foundation\Application;
 use Illuminate\Foundation\Configuration\Exceptions;
 use Illuminate\Foundation\Configuration\Middleware;
@@ -15,7 +18,24 @@ return Application::configure(basePath: dirname(__DIR__))
     )
     // Command *classes* need naming: passing routes/console.php above as the commands path
     // means app/Console/Commands isn't scanned for them.
-    ->withCommands([PruneChunkedUploads::class])
+    ->withCommands([
+        PruneChunkedUploads::class,
+        RunBotSchedules::class,
+        DrawGiveaways::class,
+        PruneBotAuditLog::class,
+    ])
+    /*
+     * Listeners are registered by hand, in AppServiceProvider, and *only* by hand.
+     *
+     * Discovery is on by default and scans app/Listeners, which means a listener that is
+     * also registered explicitly — as both of ours are, deliberately, so they can be found
+     * by grepping for the event — gets registered twice and therefore runs twice. That is
+     * not a theoretical problem: it was delivering every bot webhook twice.
+     *
+     * Off rather than dropping the explicit calls, because "which listeners does this event
+     * have" should be answerable by reading a file rather than by knowing a convention.
+     */
+    ->withEvents(discover: false)
     // Authenticate the /broadcasting/auth endpoint with the Passport token guard
     // (the SPA uses Bearer tokens, not session cookies).
     ->withBroadcasting(

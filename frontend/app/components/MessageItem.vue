@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { Check, CheckCircle2, Copy, CornerUpLeft, Forward, Info, MessagesSquare, MoreHorizontal, Paperclip, Pencil, Pin, PinOff, Rocket, Trash2, X } from 'lucide-vue-next'
 import type { Message, User } from '~/types'
+import { memberBadgesKey } from '~/composables/useChannelMembers'
 import { Button } from '~/components/ui/button'
 import {
   AlertDialog,
@@ -77,6 +78,15 @@ const { stripMarkdown } = useMarkdown()
 // Everyone on a message — author, the person replied to, whoever forwarded it — is shown
 // under whatever they're called in this server or chat. See useNicknames.
 const { nameFor, nameOf } = useNicknames()
+
+/**
+ * This author's badges in this channel's server.
+ *
+ * Injected with a default, so a MessageItem rendered outside a timeline that provides the
+ * roster — a search result, a pinned-message list — simply shows none rather than throwing.
+ */
+const memberBadges = inject(memberBadgesKey, () => ref({}), true)
+const authorBadges = computed(() => memberBadges.value[props.message.user.id] ?? [])
 
 /**
  * The two compact references carry a name and an id rather than a whole user, and either
@@ -289,6 +299,9 @@ onBeforeUnmount(() => clearTimeout(copiedTimer))
       <div class="flex items-baseline gap-2">
         <span class="text-sm font-semibold">{{ nameFor(message.user) }}</span>
         <BotBadge v-if="message.user.is_bot" />
+        <!-- Read off the channel roster rather than the message: badges are per-server and
+             the roster is already fetched and scoped to this one. See useChannelMembers. -->
+        <MemberBadges v-if="authorBadges.length" :badges="authorBadges" :max="2" />
         <span class="text-xs text-muted-foreground">{{ formatTime(message.created_at) }}</span>
       </div>
 

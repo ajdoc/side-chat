@@ -5,11 +5,17 @@ namespace App\Actions\Invite;
 use App\Actions\Message\PostSystemMessageAction;
 use App\Events\JoinRequestResolved;
 use App\Models\Server;
+use App\Services\Automation\AutomationEngine;
+use App\Services\Automation\TriggerRegistry;
+use App\Support\Automation\AutomationContext;
 use Illuminate\Support\Facades\DB;
 
 final class ApproveJoinRequestsAction
 {
-    public function __construct(private readonly PostSystemMessageAction $postSystemMessage) {}
+    public function __construct(
+        private readonly PostSystemMessageAction $postSystemMessage,
+        private readonly AutomationEngine $automations,
+    ) {}
 
     /**
      * Approves one or many join requests: each user becomes a member, the request is
@@ -17,7 +23,7 @@ final class ApproveJoinRequestsAction
      * If the server has no text channel, no notification is posted.
      *
      * @param  array<int, int>  $requestIds
-     * @return int  number of users admitted
+     * @return int number of users admitted
      */
     public function handle(Server $server, array $requestIds): int
     {
@@ -52,6 +58,17 @@ final class ApproveJoinRequestsAction
                     "{$request->user->name} joined the server"
                 );
             }
+        }
+
+        // After the notice, and after the transaction: a rule that greets somebody should
+        // land below "X joined the server", and it must not run against a membership that
+        // could still roll back.
+        foreach ($requests as $request) {
+            $this->automations->fire(new AutomationContext(
+                $server->getKey(),
+                TriggerRegistry::MEMBER_JOINED,
+                ['user_id' => $request->user_id, 'user_name' => $request->user?->name],
+            ));
         }
 
         return $requests->count();

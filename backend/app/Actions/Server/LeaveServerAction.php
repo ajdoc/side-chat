@@ -9,11 +9,16 @@ use App\Models\ChannelRead;
 use App\Models\Server;
 use App\Models\User;
 use App\Models\VoiceParticipant;
+use App\Services\Automation\AutomationEngine;
+use App\Services\Automation\TriggerRegistry;
+use App\Support\Automation\AutomationContext;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\ValidationException;
 
 final class LeaveServerAction
 {
+    public function __construct(private readonly AutomationEngine $automations) {}
+
     /**
      * Removes a member from a server.
      *
@@ -66,5 +71,14 @@ final class LeaveServerAction
         }
 
         broadcast(new MemberLeft($server->id, $user->id));
+
+        // Fired knowing the subject is no longer a member, which is the whole point of the
+        // trigger — a farewell rule can still name them. Actions that need them present
+        // (a DM, a badge) check for themselves and skip.
+        $this->automations->fire(new AutomationContext(
+            $server->getKey(),
+            TriggerRegistry::MEMBER_LEFT,
+            ['user_id' => $user->getKey(), 'user_name' => $user->name],
+        ));
     }
 }

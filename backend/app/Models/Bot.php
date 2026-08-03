@@ -25,6 +25,7 @@ class Bot extends Model
     protected $fillable = [
         'user_id', 'server_id', 'created_by', 'description', 'token_hash', 'last_used_at',
         'webhook_url', 'webhook_secret', 'events', 'webhook_failures', 'webhook_disabled_at',
+        'runs_automations',
     ];
 
     /** Never serialise either secret — nothing outside the delivery job has a use for them. */
@@ -35,6 +36,7 @@ class Bot extends Model
         return [
             'last_used_at' => 'datetime',
             'webhook_disabled_at' => 'datetime',
+            'runs_automations' => 'boolean',
             'events' => 'array',
             // Reversible, unlike the API token: signing requires the value itself. See the
             // webhooks migration.

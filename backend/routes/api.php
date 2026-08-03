@@ -3,8 +3,13 @@
 use App\Http\Controllers\AttachmentController;
 use App\Http\Controllers\Auth\AuthController;
 use App\Http\Controllers\Auth\SocialAuthController;
+use App\Http\Controllers\AutomationController;
+use App\Http\Controllers\BadgeController;
 use App\Http\Controllers\BotCommandController;
+use App\Http\Controllers\BotAuditLogController;
 use App\Http\Controllers\BotController;
+use App\Http\Controllers\BotDashboardController;
+use App\Http\Controllers\BotScheduleController;
 use App\Http\Controllers\BotIdentityController;
 use App\Http\Controllers\BotMessageController;
 use App\Http\Controllers\CalendarController;
@@ -19,12 +24,14 @@ use App\Http\Controllers\ChannelSpaceNoteController;
 use App\Http\Controllers\ChannelWhiteboardController;
 use App\Http\Controllers\ChunkedUploadController;
 use App\Http\Controllers\CommandCatalogueController;
+use App\Http\Controllers\CustomCommandController;
 use App\Http\Controllers\CommentController;
 use App\Http\Controllers\ConversationController;
 use App\Http\Controllers\DecisionController;
 use App\Http\Controllers\DeskAppsController;
 use App\Http\Controllers\DocumentController;
 use App\Http\Controllers\GifController;
+use App\Http\Controllers\GiveawayController;
 use App\Http\Controllers\InviteController;
 use App\Http\Controllers\JoinRequestController;
 use App\Http\Controllers\LyricsController;
@@ -35,6 +42,7 @@ use App\Http\Controllers\PinController;
 use App\Http\Controllers\PreferencesController;
 use App\Http\Controllers\ProfileController;
 use App\Http\Controllers\ReactionController;
+use App\Http\Controllers\ReactionRoleController;
 use App\Http\Controllers\ReadReceiptController;
 use App\Http\Controllers\SearchController;
 use App\Http\Controllers\ServerController;
@@ -155,6 +163,82 @@ Route::middleware('auth:api')->group(function () {
     // opposite directions and leak through different doors.
     Route::post('servers/{server}/bots/{bot}/webhook-secret', [BotController::class, 'regenerateWebhookSecret']);
     Route::delete('servers/{server}/bots/{bot}', [BotController::class, 'destroy']);
+    // Which bot the server's automations speak as. Owner only, like every other write on a
+    // bot — see the runs_automations migration for why there's exactly one.
+    Route::put('servers/{server}/bots/{bot}/automations', [BotController::class, 'setAutomationBot']);
+
+    /*
+     * The bot dashboard: rules, badges, and how the bot behaves.
+     *
+     * Staff rather than owner-only — running the place is what an admin is for, and a
+     * welcome message is squarely that. The one exception is enforced on the payload
+     * instead of the route: a rule that hands out *roles* may only be written by the owner
+     * (see StoreAutomationRequest), because who is an admin is the owner's alone.
+     */
+    Route::get('servers/{server}/bot/overview', [BotDashboardController::class, 'overview']);
+    // What the builder renders its trigger and action forms from. Served rather than
+    // duplicated in TypeScript, so an action added in PHP appears in the UI on its own.
+    Route::get('servers/{server}/bot/catalogue', [BotDashboardController::class, 'catalogue']);
+    Route::get('servers/{server}/bot/settings', [BotDashboardController::class, 'settings']);
+    Route::put('servers/{server}/bot/settings', [BotDashboardController::class, 'updateSettings']);
+    // The welcome message. A settings form on the outside; a `member.joined` rule on the
+    // inside, so it fires through the same engine as anything hand-built.
+    Route::get('servers/{server}/bot/welcome', [BotDashboardController::class, 'welcome']);
+    Route::put('servers/{server}/bot/welcome', [BotDashboardController::class, 'updateWelcome']);
+
+    Route::get('servers/{server}/automations', [AutomationController::class, 'index']);
+    Route::post('servers/{server}/automations', [AutomationController::class, 'store']);
+    Route::put('servers/{server}/automations/{automation}', [AutomationController::class, 'update']);
+    // Off and on without opening the editor — the edit people make in a hurry.
+    Route::post('servers/{server}/automations/{automation}/toggle', [AutomationController::class, 'toggle']);
+    // Runs it for real, against the person who pressed the button. See the controller.
+    Route::post('servers/{server}/automations/{automation}/run', [AutomationController::class, 'run']);
+    Route::delete('servers/{server}/automations/{automation}', [AutomationController::class, 'destroy']);
+
+    /*
+     * Commands a server declares for itself, and the recurring posts it schedules. Both
+     * staff, both reachable from a rule as well as on their own — see RunCommandAction and
+     * RunScheduleAction for why the built-ins compose rather than sit in silos.
+     */
+    Route::get('servers/{server}/commands', [CustomCommandController::class, 'index']);
+    Route::post('servers/{server}/commands', [CustomCommandController::class, 'store']);
+    Route::patch('servers/{server}/commands/{command}', [CustomCommandController::class, 'update']);
+    Route::delete('servers/{server}/commands/{command}', [CustomCommandController::class, 'destroy']);
+
+    Route::get('servers/{server}/schedules', [BotScheduleController::class, 'index']);
+    Route::post('servers/{server}/schedules', [BotScheduleController::class, 'store']);
+    Route::patch('servers/{server}/schedules/{schedule}', [BotScheduleController::class, 'update']);
+    Route::post('servers/{server}/schedules/{schedule}/toggle', [BotScheduleController::class, 'toggle']);
+    // Sends it now without moving its clock — the Monday post is still due on Monday.
+    Route::post('servers/{server}/schedules/{schedule}/run', [BotScheduleController::class, 'run']);
+    Route::delete('servers/{server}/schedules/{schedule}', [BotScheduleController::class, 'destroy']);
+
+    /*
+     * Reaction roles: react to a message, get a badge. Creating one posts the announcement,
+     * seeds the emoji and writes the rules in a breath — see the controller for why doing
+     * those three separately is exactly the work this removes.
+     */
+    Route::get('servers/{server}/reaction-roles', [ReactionRoleController::class, 'index']);
+    Route::post('servers/{server}/reaction-roles', [ReactionRoleController::class, 'store']);
+    // Addressed by message: what gets removed is "that post and what it does", and half a
+    // pair would leave a badge nobody could give up.
+    Route::delete('servers/{server}/reaction-roles/{message}', [ReactionRoleController::class, 'destroy']);
+
+    Route::get('servers/{server}/giveaways', [GiveawayController::class, 'index']);
+    Route::post('servers/{server}/giveaways', [GiveawayController::class, 'store']);
+    Route::post('servers/{server}/giveaways/{giveaway}/draw', [GiveawayController::class, 'draw']);
+    // Cancelled, not deleted — people entered, and the record is more honest than a silence.
+    Route::delete('servers/{server}/giveaways/{giveaway}', [GiveawayController::class, 'destroy']);
+
+    // Everything the bot did, paged and filterable. The Overview's glance, at length.
+    Route::get('servers/{server}/bot/log', [BotAuditLogController::class, 'index']);
+
+    Route::get('servers/{server}/badges', [BadgeController::class, 'index']);
+    Route::post('servers/{server}/badges', [BadgeController::class, 'store']);
+    Route::patch('servers/{server}/badges/{badge}', [BadgeController::class, 'update']);
+    Route::delete('servers/{server}/badges/{badge}', [BadgeController::class, 'destroy']);
+    Route::put('servers/{server}/badges/{badge}/members/{member}', [BadgeController::class, 'grant']);
+    Route::delete('servers/{server}/badges/{badge}/members/{member}', [BadgeController::class, 'revoke']);
 
     Route::get('servers/{server}/nicknames', [NicknameController::class, 'indexForServer']);
     Route::put('servers/{server}/nicknames/{member}', [NicknameController::class, 'updateForServer']);

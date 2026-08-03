@@ -7,14 +7,18 @@ use App\Events\ChannelActivity;
 use App\Events\MessageSent;
 use App\Models\Channel;
 use App\Models\Message;
+use App\Models\BotSettings;
+use App\Models\CustomCommand;
 use App\Models\User;
 use App\Services\AttachmentService;
 use App\Services\LinkPreviewService;
 use App\Services\NicknameService;
+use App\Services\Commands\CustomCommandService;
 use App\Services\Commands\SlashCommandService;
 use App\Services\Widgets\WidgetService;
 use App\Support\Commands\CommandParser;
 use App\Support\Commands\EphemeralMessage;
+use App\Support\Commands\SlashOutcome;
 use App\Support\MentionParser;
 
 final class SendMessageAction
@@ -25,6 +29,7 @@ final class SendMessageAction
         private readonly CommandParser $commands,
         private readonly WidgetService $widgets,
         private readonly SlashCommandService $slash,
+        private readonly CustomCommandService $custom,
     ) {}
 
     /** @param  array<int, \Illuminate\Http\UploadedFile>  $files */
@@ -35,7 +40,9 @@ final class SendMessageAction
         // a command — anything with an attachment or a GIF is a plain message. See WidgetService.
         $body = $data->body;
 
-        if ($files === [] && $uploadIds === [] && $data->gif === null && ($command = $this->commands->parse($body)) !== null) {
+        $isPlainText = $files === [] && $uploadIds === [] && $data->gif === null;
+
+        if ($isPlainText && ($command = $this->commands->parse($body)) !== null) {
             if ($command->namespace !== CommandParser::SLASH_NAMESPACE) {
                 return $this->widgets->handleCommand($channel, $user, $command);
             }
@@ -50,6 +57,13 @@ final class SendMessageAction
             // A public one falls through to the ordinary send with the *result* in place of
             // the instruction, so a roll or an emote is a real message in every respect:
             // it broadcasts, it can be replied to, it survives a reload. See SlashOutcome.
+            $body = $outcome->body;
+        }
+        elseif ($isPlainText && ($outcome = $this->prefixed($channel, $user, $body)) !== null) {
+            if ($outcome->ephemeral !== null) {
+                return EphemeralMessage::make($channel, $user, $outcome->ephemeral);
+            }
+
             $body = $outcome->body;
         }
 
@@ -80,6 +94,36 @@ final class SendMessageAction
         broadcast(new ChannelActivity($message, ...$this->mentioned($channel, $message, $user)));
 
         return $message;
+    }
+
+    /**
+     * `!rules` — a command this server invented, on the prefix it chose.
+     *
+     * Last of the command shapes to be tried, and the only one that needs a database read to
+     * *recognise*: the prefix is per-server configuration, so the string alone can't say
+     * whether `!rules` is a command here. The read is gated twice — a cheap string test that
+     * rejects almost every message, then a cached prefix lookup — so an ordinary "hello"
+     * costs one preg_match and nothing else.
+     *
+     * Returns null for anything that isn't one, including a prefix that matched no command:
+     * unlike a slash, a stray `!` is far more likely to be punctuation than a typo, so it
+     * falls through and posts as written rather than being answered with "no such command".
+     */
+    private function prefixed(Channel $channel, User $user, ?string $body): ?SlashOutcome
+    {
+        if ($channel->server_id === null || ! CommandParser::mightBePrefixed($body)) {
+            return null;
+        }
+
+        $parsed = $this->commands->parsePrefixed($body, BotSettings::prefixFor($channel->server_id));
+
+        if ($parsed === null) {
+            return null;
+        }
+
+        $command = $this->custom->find($channel->server_id, $parsed->verb, CustomCommand::PREFIX);
+
+        return $command === null ? null : $this->custom->run($command, $channel, $user);
     }
 
     /**

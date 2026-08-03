@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import type { MemberBadge } from '~/types'
+
 /**
  * A roster of people, each as avatar · name · email — the shared presentation behind every
  * "who's here" list: the channel/DM/group Info panel, a thread's participants, a side chat's
@@ -9,6 +11,8 @@ interface Participant {
   name: string
   email?: string | null
   avatar?: string | null
+  /** A server's own labels for this member. Absent in a DM or group chat — see MemberBadges. */
+  badges?: MemberBadge[]
 }
 
 withDefaults(defineProps<{
@@ -59,6 +63,9 @@ function subtitle(member: Participant) {
         <div class="flex items-center gap-1.5">
           <span class="truncate text-sm font-medium">{{ nameFor(m) }}</span>
           <span v-if="creatorId != null && m.id === creatorId" class="shrink-0 rounded bg-muted px-1 text-[10px] text-muted-foreground">creator</span>
+          <!-- After the name and the creator mark: a badge says what a server has decided
+               about somebody, which is the least urgent thing on this line. -->
+          <MemberBadges v-if="m.badges?.length" :badges="m.badges" />
         </div>
         <p v-if="subtitle(m)" class="truncate text-xs text-muted-foreground">{{ subtitle(m) }}</p>
       </div>
