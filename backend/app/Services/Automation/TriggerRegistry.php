@@ -50,7 +50,11 @@ final class TriggerRegistry
         return [
             self::MEMBER_JOINED => [
                 'label' => 'Member joined',
-                'description' => 'Somebody was admitted to the server.',
+                // Says *approved* rather than "joined", because in Side Chat those are two
+                // different moments: an invite files a request, and membership only starts
+                // when staff approve it. "Somebody joined" reads as the click, and people
+                // testing a welcome message on the click alone conclude it's broken.
+                'description' => 'A join request was approved. Opening an invite only files the request — this fires when staff accept it.',
                 'fields' => ['user_id', 'user_name'],
             ],
             self::MEMBER_LEFT => [

@@ -149,7 +149,13 @@ class BotDashboardController extends Controller
 
         DB::transaction(function () use ($automation, $server, $data): void {
             $automation->server_id = $server->getKey();
-            $automation->enabled = $data['enabled'] ?? true;
+            /*
+             * Setting a welcome channel means "switch this on". An `enabled` sent by the
+             * client is only honoured for a rule that already exists — belt and braces
+             * against the payload bug above, and the right reading either way: nobody
+             * picks a channel in order to create something that does nothing.
+             */
+            $automation->enabled = $automation->exists ? ($data['enabled'] ?? $automation->enabled) : true;
             $automation->save();
 
             $automation->actions()->delete();
@@ -172,7 +178,15 @@ class BotDashboardController extends Controller
         $action = $rule?->actions->first();
 
         return [
-            'enabled' => (bool) $rule?->enabled,
+            /*
+             * True when there is no rule yet — because that is what saving one would
+             * produce, and this payload is what the form round-trips back on save.
+             *
+             * Reporting false here meant the first save of a welcome message echoed
+             * `enabled: false` straight back and created the rule switched off. It could
+             * then never fire, and nothing on the screen said why.
+             */
+            'enabled' => $rule === null || (bool) $rule->enabled,
             'channel_id' => $action?->option('channel_id'),
             'body' => $action?->option('body'),
         ];

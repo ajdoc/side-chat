@@ -171,6 +171,40 @@ it('stores the welcome message as a real member.joined rule', function () {
     expect($automation->actions->first()->option('channel_id'))->toBe($channel->id);
 });
 
+it('switches the welcome message on when it is first set', function () {
+    [$owner, $server, $channel] = ownerWithChannel();
+    Passport::actingAs($owner);
+
+    // With no rule yet, the form's own state has to say "on" — it round-trips this back on
+    // save, and reporting false here created every first welcome message switched off,
+    // never firing, with nothing on screen to say why.
+    $this->getJson("/api/servers/{$server->id}/bot/welcome")
+        ->assertOk()->assertJsonPath('data.enabled', true);
+
+    // Even if a client insists otherwise: picking a channel means "switch this on".
+    $this->putJson("/api/servers/{$server->id}/bot/welcome", [
+        'channel_id' => $channel->id,
+        'body' => 'Welcome {user}!',
+        'enabled' => false,
+    ])->assertOk()->assertJsonPath('data.enabled', true);
+
+    expect($server->automations()->where('builtin', Automation::BUILTIN_WELCOME)->first()->enabled)->toBeTrue();
+});
+
+it('still lets an existing welcome message be switched off', function () {
+    [$owner, $server, $channel] = ownerWithChannel();
+    Passport::actingAs($owner);
+
+    $this->putJson("/api/servers/{$server->id}/bot/welcome", [
+        'channel_id' => $channel->id, 'body' => 'hi',
+    ])->assertOk();
+
+    // The forced-on rule applies to creation only — an existing one stays yours to pause.
+    $this->putJson("/api/servers/{$server->id}/bot/welcome", [
+        'channel_id' => $channel->id, 'body' => 'hi', 'enabled' => false,
+    ])->assertOk()->assertJsonPath('data.enabled', false);
+});
+
 it('deletes the welcome rule rather than leaving a disabled one behind', function () {
     [$owner, $server, $channel] = ownerWithChannel();
     Passport::actingAs($owner);

@@ -77,12 +77,17 @@ const editing = ref<Partial<Automation> | null>(null)
 const badgeDraft = ref<Partial<Badge> | null>(null)
 
 /**
- * The pending destructive action, or null.
+ * The pending destructive action, and whether its dialog is open.
  *
  * One dialog driven by a description of what's about to happen, rather than an
  * `<AlertDialog>` per button: this screen has seven destructive actions and seven copies of
  * the same markup would be seven places to forget a wording change. `run` is the thing that
  * actually happens on confirm, so the button that opens it also owns what it does.
+ *
+ * Two refs rather than one, and the second is not redundant. Reka closes the dialog itself
+ * when the action button is clicked, which fires `update:open(false)` — so if the payload
+ * were cleared there, it would already be null by the time the click handler read it and
+ * confirming would silently do nothing. Open-ness and the payload have to be separable.
  */
 const pendingAction = ref<{
   title: string
@@ -91,13 +96,16 @@ const pendingAction = ref<{
   run: () => Promise<void> | void
 } | null>(null)
 
+const confirmOpen = ref(false)
+
 function askToConfirm(action: NonNullable<typeof pendingAction.value>) {
   pendingAction.value = action
+  confirmOpen.value = true
 }
 
 async function runPendingAction() {
   const action = pendingAction.value
-  pendingAction.value = null
+  confirmOpen.value = false
   if (!action) return
 
   try {
@@ -107,6 +115,19 @@ async function runPendingAction() {
     saveError.value = e?.data?.message ?? 'That didn\'t work.'
   }
 }
+
+/**
+ * Dismissed — by Cancel, Escape, or a click outside.
+ *
+ * Only closes; the payload is deliberately left alone. Reka fires this on the *confirm*
+ * path too, and clearing here would race the click handler for the same value — which is
+ * exactly the bug that made Delete do nothing. A stale closure behind a closed dialog costs
+ * nothing, and the next askToConfirm overwrites it.
+ */
+function dismissConfirm() {
+  confirmOpen.value = false
+}
+
 const commandDraft = ref<Partial<CustomCommand> | null>(null)
 const scheduleDraft = ref<Partial<BotSchedule> | null>(null)
 
@@ -1105,7 +1126,7 @@ const outcomeClass = {
     </div>
 
     <!-- One dialog for every destructive action on this screen — see pendingAction. -->
-    <AlertDialog :open="pendingAction !== null" @update:open="!$event && (pendingAction = null)">
+    <AlertDialog :open="confirmOpen" @update:open="!$event && dismissConfirm()">
       <AlertDialogContent v-if="pendingAction">
         <AlertDialogHeader>
           <AlertDialogTitle>{{ pendingAction.title }}</AlertDialogTitle>

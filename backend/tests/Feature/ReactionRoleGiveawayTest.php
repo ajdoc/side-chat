@@ -145,6 +145,27 @@ it('removes both halves of a pair when the reaction role is deleted', function (
     expect($server->automations()->where('builtin', Automation::BUILTIN_REACTION_ROLE)->count())->toBe(0);
 });
 
+it('survives the badge a reaction role names being deleted', function () {
+    [$owner, $server, $channel] = ownerWithChannel();
+    serverWithAutomationBot($server);
+    $badge = Badge::create(['server_id' => $server->id, 'name' => 'Griefer']);
+    Passport::actingAs($owner);
+
+    $this->postJson("/api/servers/{$server->id}/reaction-roles", [
+        'channel_id' => $channel->id, 'body' => 'Pick',
+        'pairs' => [['emoji' => '🎮', 'badge_id' => $badge->id]],
+    ])->assertCreated();
+
+    // Deleting a badge is allowed and merely makes the rule start failing — it must not
+    // take the page that lists the rule down with it. This 500'd, which broke the whole
+    // dashboard for anybody who deleted a badge a reaction role was using.
+    $this->deleteJson("/api/servers/{$server->id}/badges/{$badge->id}")->assertNoContent();
+
+    $this->getJson("/api/servers/{$server->id}/reaction-roles")
+        ->assertOk()
+        ->assertJsonPath('data.0.pairs.0.badge_name', null);
+});
+
 /*
  * Giveaways.
  */

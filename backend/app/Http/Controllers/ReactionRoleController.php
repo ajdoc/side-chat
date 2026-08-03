@@ -130,11 +130,19 @@ class ReactionRoleController extends Controller
             ->map(fn ($group, $messageId) => [
                 'message_id' => (int) $messageId,
                 'channel_id' => (int) $group->first()->triggerOption('channel_id'),
-                'pairs' => $group->map(fn (Automation $rule) => [
-                    'emoji' => $rule->triggerOption('emoji'),
-                    'badge_id' => (int) $rule->actions->first()?->option('badge_id'),
-                    'badge_name' => $badges[(int) $rule->actions->first()?->option('badge_id')]?->name,
-                ])->values(),
+                'pairs' => $group->map(function (Automation $rule) use ($badges) {
+                    $badgeId = (int) $rule->actions->first()?->option('badge_id');
+
+                    return [
+                        'emoji' => $rule->triggerOption('emoji'),
+                        'badge_id' => $badgeId,
+                        // `get`, not `[...]`: a rule can outlive the badge it names — deleting
+                        // a badge is allowed and merely makes the rule start failing (see
+                        // BadgeController) — and indexing a collection with a missing key
+                        // throws, which took the whole dashboard down with a 500.
+                        'badge_name' => $badges->get($badgeId)?->name,
+                    ];
+                })->values(),
             ])
             ->values()
             ->all();
