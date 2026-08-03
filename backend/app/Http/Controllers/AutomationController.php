@@ -9,6 +9,7 @@ use App\Models\Automation;
 use App\Models\Server;
 use App\Services\Automation\AutomationEngine;
 use App\Support\Automation\AutomationContext;
+use App\Support\Automation\Subject;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Resources\Json\AnonymousResourceCollection;
 use Illuminate\Http\Response;
@@ -92,8 +93,7 @@ class AutomationController extends Controller
         $user = $request->user();
 
         $engine->run($automation, new AutomationContext($server->getKey(), $automation->trigger, [
-            'user_id' => $user->getKey(),
-            'user_name' => $user->name,
+            ...Subject::fields($user, $server),
             'server_name' => $server->name,
         ]));
 

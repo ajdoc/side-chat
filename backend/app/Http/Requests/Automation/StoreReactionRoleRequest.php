@@ -18,6 +18,13 @@ class StoreReactionRoleRequest extends ServerStaffRequest
                 'integer',
                 Rule::exists('channels', 'id')->where('server_id', $serverId),
             ],
+            // The same post, in several rooms. Each gets its own message and its own rules,
+            // so reacting in any of them grants the badge.
+            'extra_channel_ids' => ['nullable', 'array', 'max:9'],
+            'extra_channel_ids.*' => [
+                'integer',
+                Rule::exists('channels', 'id')->where('server_id', $serverId),
+            ],
             'body' => ['required', 'string', 'max:2000'],
             'pairs' => ['required', 'array', 'min:1', 'max:20'],
             'pairs.*.emoji' => ['required', 'string', 'max:16'],

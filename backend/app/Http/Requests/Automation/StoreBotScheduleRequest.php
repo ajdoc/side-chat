@@ -20,6 +20,13 @@ class StoreBotScheduleRequest extends ServerStaffRequest
                 'integer',
                 Rule::exists('channels', 'id')->where('server_id', $this->resolveServer()?->getKey()),
             ],
+            // Extra channels, beyond the first. Capped: a schedule that posts to twenty
+            // rooms is an announcement nobody reads twice.
+            'extra_channel_ids' => ['nullable', 'array', 'max:9'],
+            'extra_channel_ids.*' => [
+                'integer',
+                Rule::exists('channels', 'id')->where('server_id', $this->resolveServer()?->getKey()),
+            ],
             'body' => [$post ? 'required' : 'sometimes', 'string', 'max:2000'],
             'cron' => [
                 $post ? 'required' : 'sometimes',

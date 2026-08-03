@@ -16,6 +16,7 @@ use App\Services\Automation\AutomationEngine;
 use App\Services\Automation\TriggerRegistry;
 use App\Services\Commands\Handlers\WebCommand;
 use App\Support\Automation\AutomationContext;
+use App\Support\Automation\Subject;
 use App\Support\Commands\ParsedCommand;
 use App\Support\Commands\SlashOutcome;
 use Illuminate\Support\Str;
@@ -162,12 +163,13 @@ class SlashCommandService
             return;
         }
 
+        $channel->loadMissing('server');
+
         $this->automations->fire(new AutomationContext(
             $channel->server_id,
             TriggerRegistry::COMMAND_INVOKED,
             [
-                'user_id' => $user->getKey(),
-                'user_name' => $user->name,
+                ...Subject::fields($user, $channel->server),
                 'channel_id' => $channel->getKey(),
                 'channel_name' => $channel->name,
                 'command' => $command->verb,

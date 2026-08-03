@@ -57,19 +57,25 @@ class RunBotSchedules extends Command
 
         // A schedule with no channel of its own falls back to the server's reminder channel,
         // so moving every unassigned schedule is one setting rather than an edit each.
-        $channelId = $schedule->channel_id ?? BotSettings::forServer($server)->reminder_channel_id;
+        $channelIds = $schedule->channelIds(BotSettings::forServer($server)->reminder_channel_id);
 
         $context = new AutomationContext($server->getKey(), TriggerRegistry::SCHEDULE_DUE, [
             'schedule_id' => $schedule->getKey(),
             'schedule_name' => $schedule->name,
-            'channel_id' => $channelId,
+            'channel_id' => $channelIds[0] ?? null,
             'server_name' => $server->name,
         ]);
 
-        // Straight through the automation action, not a private copy of "post a message":
-        // the bot lookup, the private-channel check and the placeholder rendering are all
-        // things a schedule needs and all things that action already gets right.
-        if ($channelId !== null) {
+        /*
+         * Straight through the automation action, not a private copy of "post a message":
+         * the bot lookup, the private-channel check and the placeholder rendering are all
+         * things a schedule needs and all things that action already gets right.
+         *
+         * One call per channel, and a channel that refuses doesn't stop the others — a
+         * schedule posting to three rooms shouldn't go silent because the bot was removed
+         * from one of them.
+         */
+        foreach ($channelIds as $channelId) {
             $post->handle(['channel_id' => $channelId, 'body' => $schedule->body], $context);
         }
 

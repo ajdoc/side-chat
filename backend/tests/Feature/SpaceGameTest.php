@@ -4,8 +4,10 @@ use App\Events\SpaceGameUpdated;
 use App\Models\Channel;
 use App\Models\User;
 use App\Models\VoiceParticipant;
+use App\Services\Games\GameService;
 use Illuminate\Support\Facades\Event;
 use Laravel\Passport\Passport;
+use Tests\Support\OpenTestGame;
 
 /*
  * Games in a Side Space. The framework is generic — propose, vote, act, redact, end — so the
@@ -373,4 +375,128 @@ it('tells the whole room when a game is proposed, voted on, or challenged', func
     Passport::actingAs($users[1]);
     $this->postJson("/api/channels/{$channel->id}/space/game/vote", ['vote' => true])->assertOk();
     Event::assertDispatchedTimes(SpaceGameUpdated::class, 2);
+});
+
+// --- open games and drop-in co-op ---
+
+/**
+ * Put {@see OpenTestGame} in the catalogue for this test.
+ *
+ * The service is resolved fresh per request, so registering on some instance wouldn't reach the
+ * controller — the whole service goes in the container instead, carrying the extra game.
+ */
+function withOpenGame(): void
+{
+    // Resolved rather than constructed, so adding a game to the app's own catalogue doesn't
+    // break this helper the way spelling out its constructor would.
+    $service = app(GameService::class);
+    $service->register(new OpenTestGame);
+    app()->instance(GameService::class, $service);
+}
+
+it('starts an open game the moment it is proposed, with nobody else asked', function () {
+    withOpenGame();
+    [$channel, $users] = roomWithPlayers(3);
+
+    // Three people in the room and no vote: an open game isn't put to anyone.
+    Passport::actingAs($users[0]);
+    $game = $this->postJson("/api/channels/{$channel->id}/space/game", ['type' => 'opentest'])
+        ->assertOk()
+        ->assertJsonPath('data.game.status', 'running')
+        ->assertJsonPath('data.game.vote', null)
+        ->json('data.game');
+
+    // And it starts with the opener alone, however many people were standing there.
+    expect(array_keys($game['state']['players']))->toBe([$users[0]->id]);
+});
+
+it('lets one person play an open game alone in an empty room', function () {
+    withOpenGame();
+    [$channel, $users] = roomWithPlayers(1);
+
+    Passport::actingAs($users[0]);
+    $this->postJson("/api/channels/{$channel->id}/space/game", ['type' => 'opentest'])
+        ->assertOk()
+        ->assertJsonPath('data.game.status', 'running');
+
+    $this->postJson("/api/channels/{$channel->id}/space/game/act", ['action' => 'score'])
+        ->assertOk()
+        ->assertJsonPath("data.game.state.players.{$users[0]->id}.score", 1);
+});
+
+it('lets someone in the room drop into a running open game', function () {
+    withOpenGame();
+    [$channel, $users] = roomWithPlayers(2);
+    [$opener, $latecomer] = $users;
+
+    Passport::actingAs($opener);
+    $this->postJson("/api/channels/{$channel->id}/space/game", ['type' => 'opentest'])->assertOk();
+
+    // The bystander is offered the way in, takes it, and can then play.
+    Passport::actingAs($latecomer);
+    $this->getJson("/api/channels/{$channel->id}/space/game")->assertJsonPath('data.game.can_join', true);
+
+    $this->postJson("/api/channels/{$channel->id}/space/game/join")
+        ->assertOk()
+        // Joined, and no longer offered a second seat.
+        ->assertJsonPath('data.game.can_join', false)
+        ->assertJsonPath("data.game.state.players.{$latecomer->id}.score", 0);
+
+    $this->postJson("/api/channels/{$channel->id}/space/game/act", ['action' => 'score'])->assertOk();
+});
+
+it('refuses a second helping, a full game, and an outsider', function () {
+    withOpenGame();
+    [$channel, $users] = roomWithPlayers(3);
+
+    Passport::actingAs($users[0]);
+    $this->postJson("/api/channels/{$channel->id}/space/game", ['type' => 'opentest'])->assertOk();
+
+    // Already playing.
+    $this->postJson("/api/channels/{$channel->id}/space/game/join")->assertStatus(422);
+
+    // The second seat is the last one — OpenTestGame holds two.
+    Passport::actingAs($users[1]);
+    $this->postJson("/api/channels/{$channel->id}/space/game/join")->assertOk();
+
+    Passport::actingAs($users[2]);
+    $this->getJson("/api/channels/{$channel->id}/space/game")->assertJsonPath('data.game.can_join', false);
+    $this->postJson("/api/channels/{$channel->id}/space/game/join")->assertStatus(422);
+
+    // And someone who never walked into the room is not a candidate at all.
+    $outsider = User::factory()->create();
+    $channel->server->members()->attach($outsider->id, ['role' => 'member']);
+    Passport::actingAs($outsider);
+    $this->getJson("/api/channels/{$channel->id}/space/game")->assertJsonPath('data.game.can_join', false);
+    $this->postJson("/api/channels/{$channel->id}/space/game/join")->assertForbidden();
+});
+
+it('refuses to let anyone drop into a game whose roster is closed', function () {
+    [$channel, $users] = startedGame();
+
+    // Among Us deals its crew once. A latecomer spectates; there is no seat to take.
+    $latecomer = User::factory()->create();
+    $channel->server->members()->attach($latecomer->id, ['role' => 'member']);
+    VoiceParticipant::create([
+        'channel_id' => $channel->id,
+        'user_id' => $latecomer->id,
+        'last_seen_at' => now(),
+    ]);
+
+    Passport::actingAs($latecomer);
+    $this->getJson("/api/channels/{$channel->id}/space/game")->assertJsonPath('data.game.can_join', false);
+    $this->postJson("/api/channels/{$channel->id}/space/game/join")->assertStatus(422);
+});
+
+it('tells the room when somebody joins', function () {
+    withOpenGame();
+    [$channel, $users] = roomWithPlayers(2);
+
+    Passport::actingAs($users[0]);
+    $this->postJson("/api/channels/{$channel->id}/space/game", ['type' => 'opentest'])->assertOk();
+
+    Event::fake([SpaceGameUpdated::class]);
+    Passport::actingAs($users[1]);
+    $this->postJson("/api/channels/{$channel->id}/space/game/join")->assertOk();
+    Event::assertDispatched(SpaceGameUpdated::class);
 });

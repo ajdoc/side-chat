@@ -2,6 +2,7 @@
 import {
   AudioLines,
   ChevronLeft,
+  DoorOpen,
   Headphones,
   HeadphoneOff,
   Loader2,
@@ -163,6 +164,7 @@ const {
   loadCatalogue: loadGameCatalogue,
   propose: proposeGame,
   vote: voteGame,
+  join: joinGame,
   act: actGame,
   cancel: cancelGame,
   subscribe: subscribeGame,
@@ -526,6 +528,14 @@ const challengeType = ref<string | null>(null)
 const challengeTargets = computed(() =>
   Object.values(others.value).map(o => ({ id: o.id, name: o.name })))
 
+/**
+ * Which hero you're taking down, asked before a portal opens — and before joining one, since
+ * you're seated with whoever you last played either way.
+ *
+ * 'propose' opens a new run once you've picked; 'join' walks into the one already going.
+ */
+const heroPrompt = ref<'propose' | 'join' | null>(null)
+
 async function onProposeGame(type: string) {
   const info = gameCatalogue.value.find(g => g.type === type)
 
@@ -537,7 +547,24 @@ async function onProposeGame(type: string) {
   }
 
   showPropose.value = false
+
+  // The crawl asks who's going before it opens the portal.
+  if (type === 'arpg') {
+    heroPrompt.value = 'propose'
+
+    return
+  }
+
   await proposeGame(type).catch(() => {})
+}
+
+/** The hero is chosen (and selected server-side); now actually open or enter the dungeon. */
+async function onHeroChosen() {
+  const intent = heroPrompt.value
+  heroPrompt.value = null
+
+  if (intent === 'propose') await proposeGame('arpg').catch(() => {})
+  else if (intent === 'join') await joinGame().catch(() => {})
 }
 
 async function onChallenge(opponentId: number) {
@@ -552,6 +579,18 @@ function togglePropose() {
   challengeType.value = null
   if (showPropose.value) void loadGameCatalogue()
 }
+/** Walk into a game that's already going. Only ever offered when the server says you may. */
+async function onJoinGame() {
+  // Same question as opening one: which hero is walking through the portal.
+  if (game.value?.type === 'arpg') {
+    heroPrompt.value = 'join'
+
+    return
+  }
+
+  await joinGame().catch(() => {})
+}
+
 async function onGameDismiss() {
   // An ended game is just cleared away locally; anything still live is called off for the room.
   if (game.value?.status === 'ended') game.value = null
@@ -2529,6 +2568,26 @@ watch(inThisRoom, (now) => {
           </template>
         </div>
 
+        <!-- Which hero is going down — asked before a portal opens, and before joining one. -->
+        <ArpgHeroDialog
+          v-if="heroPrompt"
+          @enter="onHeroChosen"
+          @close="heroPrompt = null"
+        />
+
+        <!-- Drop-in co-op: a game running here that you could still walk into. Framework-level
+             rather than any panel's, because whether there's a seat is a question the service
+             answers the same way for every game — `can_join` is the whole rule. -->
+        <button
+          v-if="game && inThisRoom && game.can_join"
+          type="button"
+          class="pointer-events-auto absolute left-1/2 top-3 z-20 flex -translate-x-1/2 items-center gap-1.5 rounded-full border bg-background/95 py-1.5 pl-3 pr-3.5 text-xs font-medium shadow-lg backdrop-blur transition hover:bg-muted"
+          @click="onJoinGame"
+        >
+          <DoorOpen class="h-3.5 w-3.5 text-primary" />
+          Join {{ game.label }}
+        </button>
+
         <!-- The game, when there is one. Which panel is a question of which game: Among Us draws
              its HUD and meetings over the map, a pet battle its arena. Both draw their own overlays
              and manage their own pointer events; the stage just feeds them what they can't know
@@ -2549,6 +2608,17 @@ watch(inThisRoom, (now) => {
             @meeting="onReportOrMeeting"
             @kill="onKill"
             @game-vote="onGameVote"
+          />
+          <!-- The crawl draws its own world rather than the room's: it's the one game that isn't
+               played on this map. It also does its own networking (positions and monsters over
+               whispers), so all the stage passes it is the channel to whisper on. -->
+          <ArpgPanel
+            v-else-if="game.type === 'arpg'"
+            :game="game"
+            :channel-id="channel.id"
+            :my-id="user?.id ?? null"
+            @act="(action, payload) => actGame(action, payload)"
+            @dismiss="onGameDismiss"
           />
           <PetBattlePanel
             v-else-if="game.type === 'petbattle'"

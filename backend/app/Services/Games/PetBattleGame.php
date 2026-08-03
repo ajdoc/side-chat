@@ -32,6 +32,9 @@ use Illuminate\Validation\ValidationException;
  */
 class PetBattleGame implements GameHandler
 {
+    // A duel is two people. There is no third seat to drop into.
+    use NoDropIn;
+
     private const MAX_HP = 100;
 
     /** grass → water → fire → grass. What each element is strong against. */

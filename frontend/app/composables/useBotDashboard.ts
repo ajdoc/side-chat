@@ -187,6 +187,7 @@ export function useBotDashboard(serverId: number) {
     const body = {
       name: draft.name,
       channel_id: draft.channel_id || null,
+      extra_channel_ids: draft.extra_channel_ids ?? [],
       body: draft.body,
       cron: draft.cron,
       timezone: draft.timezone || Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC',
@@ -229,9 +230,29 @@ export function useBotDashboard(serverId: number) {
     schedules.value = schedules.value.filter(s => s.id !== schedule.id)
   }
 
-  async function saveReactionRole(draft: { channel_id: number, body: string, pairs: { emoji: string, badge_id: number }[] }) {
+  async function saveReactionRole(draft: {
+    channel_id: number
+    extra_channel_ids?: number[]
+    body: string
+    pairs: { emoji: string, badge_id: number }[]
+  }) {
     const res = await api<{ data: ReactionRoleGroup[] }>(`${base}/reaction-roles`, { method: 'POST', body: draft })
     reactionRoles.value = res.data
+  }
+
+  /** Repost a buried announcement; the rules follow it onto the new message. */
+  async function resendReactionRole(group: ReactionRoleGroup) {
+    const res = await api<{ data: ReactionRoleGroup[] }>(
+      `${base}/reaction-roles/${group.message_id}/resend`,
+      { method: 'POST' },
+    )
+    reactionRoles.value = res.data
+  }
+
+  async function resendGiveaway(giveaway: Giveaway) {
+    const res = await api<{ data: Giveaway }>(`${base}/giveaways/${giveaway.id}/resend`, { method: 'POST' })
+    const index = giveaways.value.findIndex(g => g.id === res.data.id)
+    if (index !== -1) giveaways.value[index] = res.data
   }
 
   async function deleteReactionRole(group: ReactionRoleGroup) {
@@ -244,6 +265,7 @@ export function useBotDashboard(serverId: number) {
       method: 'POST',
       body: {
         channel_id: draft.channel_id,
+        extra_channel_ids: (draft as any).extra_channel_ids ?? [],
         prize: draft.prize,
         emoji: draft.emoji || '🎉',
         winner_count: draft.winner_count ?? 1,
@@ -344,6 +366,8 @@ export function useBotDashboard(serverId: number) {
     deleteCommand,
     saveSchedule,
     saveReactionRole,
+    resendReactionRole,
+    resendGiveaway,
     deleteReactionRole,
     saveGiveaway,
     drawGiveaway,

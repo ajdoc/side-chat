@@ -49,19 +49,29 @@ class GiveawayController extends Controller
             ], 422);
         }
 
-        $channel = Channel::where('server_id', $server->getKey())->findOrFail($data['channel_id']);
+        /*
+         * One giveaway, announced in as many channels as asked for.
+         *
+         * Each announcement gets its own entry rule, and entries are unique per person — so
+         * somebody who finds it in two channels and reacts to both still has one chance.
+         */
+        $channelIds = array_values(array_unique([$data['channel_id'], ...($data['extra_channel_ids'] ?? [])]));
+        $channels = Channel::where('server_id', $server->getKey())->findMany($channelIds);
 
-        if (! $channel->hasMember($bot->user)) {
-            return response()->json(['message' => "The bot isn't in #{$channel->name}."], 422);
+        $unreachable = $channels->reject(fn (Channel $channel) => $channel->hasMember($bot->user));
+
+        if ($unreachable->isNotEmpty()) {
+            return response()->json(['message' => 'The bot isn’t in #'.$unreachable->first()->name.'.'], 422);
         }
 
-        $giveaway = DB::transaction(function () use ($server, $channel, $data, $bot, $send) {
+        $giveaway = DB::transaction(function () use ($server, $channels, $data, $bot, $send) {
             $emoji = $data['emoji'] ?? '🎉';
 
             // The row first: the announcement has to name it, and the entry rule has to
             // point at both it and the message.
             $giveaway = $server->giveaways()->create([
-                'channel_id' => $channel->getKey(),
+                // The first channel is the giveaway's home — where the winners are announced.
+                'channel_id' => $channels->first()->getKey(),
                 'prize' => $data['prize'],
                 'emoji' => $emoji,
                 'winner_count' => $data['winner_count'] ?? 1,
@@ -69,35 +79,40 @@ class GiveawayController extends Controller
                 'ends_at' => $data['ends_at'],
             ]);
 
-            $message = $send->handle($channel, $bot->user, SendMessageData::fromArray([
-                'body' => $this->announcement($giveaway),
-            ]));
+            foreach ($channels as $index => $channel) {
+                $message = $send->handle($channel, $bot->user, SendMessageData::fromArray([
+                    'body' => $this->announcement($giveaway),
+                ]));
 
-            $giveaway->forceFill(['message_id' => $message->getKey()])->save();
+                // `message_id` names the first one, which is what a resend replaces.
+                if ($index === 0) {
+                    $giveaway->forceFill(['message_id' => $message->getKey()])->save();
+                }
 
-            // Seeded directly rather than through ToggleReactionAction: that fires the
-            // triggers, and the bot placing the emoji must not enter itself.
-            $message->reactions()->firstOrCreate([
-                'user_id' => $bot->user->getKey(),
-                'emoji' => $emoji,
-            ]);
+                // Seeded directly rather than through ToggleReactionAction: that fires the
+                // triggers, and the bot placing the emoji must not enter itself.
+                $message->reactions()->firstOrCreate([
+                    'user_id' => $bot->user->getKey(),
+                    'emoji' => $emoji,
+                ]);
 
-            $rule = $server->automations()->create([
-                'name' => "Giveaway: {$giveaway->prize}",
-                'trigger' => TriggerRegistry::REACTION_ADDED,
-                'builtin' => Automation::BUILTIN_GIVEAWAY,
-                'trigger_config' => ['giveaway_id' => $giveaway->getKey(), 'message_id' => $message->getKey()],
-                'conditions' => [
-                    ['field' => 'message_id', 'operator' => 'equals', 'value' => $message->getKey()],
-                    ['field' => 'emoji', 'operator' => 'equals', 'value' => $emoji],
-                ],
-            ]);
+                $rule = $server->automations()->create([
+                    'name' => "Giveaway: {$giveaway->prize}",
+                    'trigger' => TriggerRegistry::REACTION_ADDED,
+                    'builtin' => Automation::BUILTIN_GIVEAWAY,
+                    'trigger_config' => ['giveaway_id' => $giveaway->getKey(), 'message_id' => $message->getKey()],
+                    'conditions' => [
+                        ['field' => 'message_id', 'operator' => 'equals', 'value' => $message->getKey()],
+                        ['field' => 'emoji', 'operator' => 'equals', 'value' => $emoji],
+                    ],
+                ]);
 
-            $rule->actions()->create([
-                'type' => 'enter_giveaway',
-                'config' => ['giveaway_id' => $giveaway->getKey()],
-                'position' => 0,
-            ]);
+                $rule->actions()->create([
+                    'type' => 'enter_giveaway',
+                    'config' => ['giveaway_id' => $giveaway->getKey()],
+                    'position' => 0,
+                ]);
+            }
 
             return $giveaway;
         });
@@ -124,6 +139,65 @@ class GiveawayController extends Controller
         }
 
         $drawer->draw($giveaway);
+
+        return response()->json(['data' => $this->present($giveaway->fresh()->loadCount('entries'))]);
+    }
+
+    /**
+     * Post the announcement again, and move entry onto the new message.
+     *
+     * Same reasoning as reaction roles: the original gets buried or deleted, and the emoji
+     * nobody can see becomes the only way in. Entries already recorded are untouched — this
+     * moves where *new* ones come from, it doesn't restart the draw.
+     */
+    public function resend(
+        ManageAutomationsRequest $request,
+        Server $server,
+        Giveaway $giveaway,
+        SendMessageAction $send,
+    ): JsonResponse {
+        $this->belongsTo($server, $giveaway);
+
+        $bot = $server->automationBot();
+
+        if ($bot?->user === null) {
+            return response()->json(['message' => 'Pick a bot to run automations first.'], 422);
+        }
+
+        if (! $giveaway->isOpen()) {
+            return response()->json(['message' => 'That giveaway has closed.'], 422);
+        }
+
+        $channel = Channel::where('server_id', $server->getKey())->find($giveaway->channel_id);
+
+        if ($channel === null || ! $channel->hasMember($bot->user)) {
+            return response()->json(['message' => 'The bot can’t post in that channel.'], 422);
+        }
+
+        DB::transaction(function () use ($server, $giveaway, $channel, $bot, $send) {
+            $message = $send->handle($channel, $bot->user, SendMessageData::fromArray([
+                'body' => $this->announcement($giveaway),
+            ]));
+
+            $message->reactions()->firstOrCreate([
+                'user_id' => $bot->user->getKey(),
+                'emoji' => $giveaway->emoji,
+            ]);
+
+            $giveaway->forceFill(['message_id' => $message->getKey()])->save();
+
+            // The entry rule follows the message. Reacting to the old post stops entering
+            // people, which is the honest outcome — that post is no longer the giveaway.
+            foreach ($this->entryRules($server, $giveaway) as $rule) {
+                $rule->update([
+                    'trigger_config' => ['giveaway_id' => $giveaway->getKey(), 'message_id' => $message->getKey()],
+                    'conditions' => [
+                        ['field' => 'message_id', 'operator' => 'equals', 'value' => $message->getKey()],
+                        ['field' => 'emoji', 'operator' => 'equals', 'value' => $giveaway->emoji],
+                    ],
+                ]);
+            }
+        });
 
         return response()->json(['data' => $this->present($giveaway->fresh()->loadCount('entries'))]);
     }

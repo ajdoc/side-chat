@@ -66,6 +66,16 @@ export function useSpaceGame(channelId: number) {
     apply(await api(`/api/channels/${channelId}/space/game/vote`, { method: 'POST', body: { vote: yes } }))
   }
 
+  /**
+   * Walk into a game that's already running — drop-in co-op.
+   *
+   * Only offered when the server says `can_join`, which is the whole of the rule: running,
+   * joinable, room left, and you're not already in it.
+   */
+  async function join() {
+    apply(await api(`/api/channels/${channelId}/space/game/join`, { method: 'POST' }))
+  }
+
   /** Make a move — a task, a kill, a report, a vote. The handler decides what it means. */
   async function act(action: string, payload: Record<string, unknown> = {}) {
     apply(await api(`/api/channels/${channelId}/space/game/act`, { method: 'POST', body: { action, payload } }))
@@ -88,5 +98,5 @@ export function useSpaceGame(channelId: number) {
     channel = null
   }
 
-  return { game, catalogue, load, loadCatalogue, propose, vote, act, cancel, subscribe, unsubscribe }
+  return { game, catalogue, load, loadCatalogue, propose, vote, join, act, cancel, subscribe, unsubscribe }
 }

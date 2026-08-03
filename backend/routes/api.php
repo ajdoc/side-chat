@@ -1,5 +1,6 @@
 <?php
 
+use App\Http\Controllers\ArpgCharacterController;
 use App\Http\Controllers\AttachmentController;
 use App\Http\Controllers\Auth\AuthController;
 use App\Http\Controllers\Auth\SocialAuthController;
@@ -223,10 +224,14 @@ Route::middleware('auth:api')->group(function () {
     // Addressed by message: what gets removed is "that post and what it does", and half a
     // pair would leave a badge nobody could give up.
     Route::delete('servers/{server}/reaction-roles/{message}', [ReactionRoleController::class, 'destroy']);
+    // Repost a buried or deleted announcement and move the rules onto the new message.
+    Route::post('servers/{server}/reaction-roles/{message}/resend', [ReactionRoleController::class, 'resend']);
 
     Route::get('servers/{server}/giveaways', [GiveawayController::class, 'index']);
     Route::post('servers/{server}/giveaways', [GiveawayController::class, 'store']);
     Route::post('servers/{server}/giveaways/{giveaway}/draw', [GiveawayController::class, 'draw']);
+    // Same as reaction roles: repost, and move entry onto the new message. Entries stand.
+    Route::post('servers/{server}/giveaways/{giveaway}/resend', [GiveawayController::class, 'resend']);
     // Cancelled, not deleted — people entered, and the record is more honest than a silence.
     Route::delete('servers/{server}/giveaways/{giveaway}', [GiveawayController::class, 'destroy']);
 
@@ -389,9 +394,28 @@ Route::middleware('auth:api')->group(function () {
      * (a task, a kill, a vote) come through here. See App\Services\Games.
      */
     Route::get('space/games', [SpaceGameController::class, 'catalogue']);
+
+    /*
+     * Dungeon heroes. No channel in the path on purpose: a character belongs to a player, not to
+     * a room, and is the one thing in a crawl that outlives the run — see ArpgCharacterController.
+     */
+    Route::get('arpg/characters', [ArpgCharacterController::class, 'index']);
+    Route::post('arpg/characters', [ArpgCharacterController::class, 'store']);
+    Route::post('arpg/characters/{character}/select', [ArpgCharacterController::class, 'select']);
+    Route::post('arpg/characters/{character}/skills', [ArpgCharacterController::class, 'learn']);
+    // Taking the next job in the line — mage to wizard. A decision, hence a POST of its own.
+    Route::post('arpg/characters/{character}/advance', [ArpgCharacterController::class, 'advance']);
+    /*
+     * What a skill *is* — served rather than duplicated in the engine, so tuning a number is a
+     * change in one file. The engine implements six kinds, not thirty-two skills.
+     */
+    Route::get('arpg/skills', [ArpgCharacterController::class, 'skills']);
+    Route::delete('arpg/characters/{character}', [ArpgCharacterController::class, 'destroy']);
+
     Route::get('channels/{channel}/space/game', [SpaceGameController::class, 'show']);
     Route::post('channels/{channel}/space/game', [SpaceGameController::class, 'propose']);
     Route::post('channels/{channel}/space/game/vote', [SpaceGameController::class, 'vote']);
+    Route::post('channels/{channel}/space/game/join', [SpaceGameController::class, 'join']);
     Route::post('channels/{channel}/space/game/act', [SpaceGameController::class, 'act']);
     Route::delete('channels/{channel}/space/game', [SpaceGameController::class, 'cancel']);
 

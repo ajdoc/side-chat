@@ -37,6 +37,9 @@ use Illuminate\Validation\ValidationException;
  */
 class AmongUsGame implements GameHandler
 {
+    // The crew is dealt in one go; somebody who walks in mid-round watches.
+    use NoDropIn;
+
     private const KILL_COOLDOWN_MS = 20_000;
 
     private const MEETING_MS = 45_000;

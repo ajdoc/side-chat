@@ -82,21 +82,27 @@ class BotScheduleController extends Controller
     ): JsonResponse {
         $this->belongsTo($server, $schedule);
 
-        $channelId = $schedule->channel_id ?? BotSettings::forServer($server)->reminder_channel_id;
+        $channelIds = $schedule->channelIds(BotSettings::forServer($server)->reminder_channel_id);
 
-        if ($channelId === null) {
+        if ($channelIds === []) {
             return response()->json(['data' => ['sent' => false, 'reason' => 'This schedule has nowhere to post.']]);
         }
 
-        $result = $post->handle(
-            ['channel_id' => $channelId, 'body' => $schedule->body],
-            new AutomationContext($server->getKey(), TriggerRegistry::SCHEDULE_DUE, [
-                'schedule_id' => $schedule->getKey(),
-                'schedule_name' => $schedule->name,
-                'channel_id' => $channelId,
-                'server_name' => $server->name,
-            ]),
+        $context = new AutomationContext($server->getKey(), TriggerRegistry::SCHEDULE_DUE, [
+            'schedule_id' => $schedule->getKey(),
+            'schedule_name' => $schedule->name,
+            'channel_id' => $channelIds[0],
+            'server_name' => $server->name,
+        ]);
+
+        // Reported as sent if *any* channel took it — one room refusing shouldn't read as a
+        // total failure when the other two got it.
+        $results = array_map(
+            fn (int $id) => $post->handle(['channel_id' => $id, 'body' => $schedule->body], $context),
+            $channelIds,
         );
+
+        $result = collect($results)->firstWhere(fn ($r) => $r->succeeded()) ?? $results[0];
 
         // The action's own words for why nothing happened — "the bot isn't in #private" is
         // more use than a generic failure.
@@ -123,6 +129,7 @@ class BotScheduleController extends Controller
             'server_id' => $schedule->server_id,
             'name' => $schedule->name,
             'channel_id' => $schedule->channel_id,
+            'extra_channel_ids' => $schedule->extra_channel_ids ?? [],
             'body' => $schedule->body,
             'cron' => $schedule->cron,
             'timezone' => $schedule->timezone,

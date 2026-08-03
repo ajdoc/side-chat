@@ -18,6 +18,12 @@ class StoreGiveawayRequest extends ServerStaffRequest
                 'integer',
                 Rule::exists('channels', 'id')->where('server_id', $serverId),
             ],
+            // Announced in several rooms if asked. Entries stay unique per person.
+            'extra_channel_ids' => ['nullable', 'array', 'max:9'],
+            'extra_channel_ids.*' => [
+                'integer',
+                Rule::exists('channels', 'id')->where('server_id', $serverId),
+            ],
             'prize' => ['required', 'string', 'max:200'],
             'emoji' => ['sometimes', 'string', 'max:16'],
             // Twenty is well past what anybody runs, and an unbounded number would let one

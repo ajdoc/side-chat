@@ -14,13 +14,14 @@ use Throwable;
 class BotSchedule extends Model
 {
     protected $fillable = [
-        'server_id', 'name', 'channel_id', 'body', 'cron', 'timezone', 'enabled',
+        'server_id', 'name', 'channel_id', 'extra_channel_ids', 'body', 'cron', 'timezone', 'enabled',
     ];
 
     protected function casts(): array
     {
         return [
             'enabled' => 'boolean',
+            'extra_channel_ids' => 'array',
             'last_run_at' => 'datetime',
             'next_run_at' => 'datetime',
         ];
@@ -47,6 +48,22 @@ class BotSchedule extends Model
     public function channel(): BelongsTo
     {
         return $this->belongsTo(Channel::class);
+    }
+
+    /**
+     * Every channel this posts to, in order, with the fallback applied.
+     *
+     * Ids only — the caller resolves them, and the ones that no longer exist drop out there.
+     * `$fallback` is the server's reminder channel, used when the schedule names none of its
+     * own; it never applies when the schedule *does* name channels.
+     *
+     * @return array<int, int>
+     */
+    public function channelIds(?int $fallback = null): array
+    {
+        $ids = array_filter([$this->channel_id, ...($this->extra_channel_ids ?? [])]);
+
+        return array_values(array_unique($ids === [] ? array_filter([$fallback]) : $ids));
     }
 
     /** Is this a cron expression we can actually run? Used to refuse a bad one on save. */

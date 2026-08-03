@@ -14,6 +14,7 @@ import {
   Pencil,
   Play,
   Plus,
+  RefreshCw,
   Settings2,
   TriangleAlert,
   X,
@@ -134,12 +135,14 @@ const scheduleDraft = ref<Partial<BotSchedule> | null>(null)
 /** A reaction-role post being composed: one message, several emoji→badge pairs. */
 const reactionRoleDraft = ref<{
   channel_id: number | null
+  extra_channel_ids: number[]
   body: string
   pairs: { emoji: string, badge_id: number | null }[]
 } | null>(null)
 
 const giveawayDraft = ref<{
   channel_id: number | null
+  extra_channel_ids: number[]
   prize: string
   emoji: string
   winner_count: number
@@ -164,6 +167,7 @@ watch([section, logFilter], ([current, outcome]) => {
 function newReactionRole() {
   reactionRoleDraft.value = {
     channel_id: channelsProp.value[0]?.id ?? null,
+    extra_channel_ids: [],
     body: 'React with the emoji below to receive the badge!',
     pairs: [{ emoji: '', badge_id: null }],
   }
@@ -172,6 +176,7 @@ function newReactionRole() {
 function newGiveaway() {
   giveawayDraft.value = {
     channel_id: channelsProp.value[0]?.id ?? null,
+    extra_channel_ids: [],
     prize: '',
     emoji: '🎉',
     winner_count: 1,
@@ -191,6 +196,7 @@ async function saveReactionRole() {
   try {
     await dashboard.saveReactionRole({
       channel_id: draft.channel_id,
+      extra_channel_ids: draft.extra_channel_ids,
       body: draft.body,
       pairs: pairs.map(p => ({ emoji: p.emoji.trim(), badge_id: p.badge_id! })),
     })
@@ -254,19 +260,6 @@ function cancelGiveaway(giveaway: Giveaway) {
     run: () => dashboard.cancelGiveaway(giveaway),
   })
 }
-
-/**
- * What the Schedules form offers instead of asking anybody to write cron.
- *
- * The column stays a general expression — these are just the shapes people actually ask
- * for. Anything else is still typeable, it just isn't the first thing you meet.
- */
-const cronPresets = [
-  { label: 'Every hour', cron: '0 * * * *' },
-  { label: 'Every day at 9am', cron: '0 9 * * *' },
-  { label: 'Every Monday at 9am', cron: '0 9 * * 1' },
-  { label: 'First of the month', cron: '0 9 1 * *' },
-]
 
 onMounted(dashboard.load)
 
@@ -681,28 +674,19 @@ const outcomeClass = {
                 placeholder="What to post"
               />
               <div class="mt-2 grid grid-cols-2 gap-2">
-                <label class="block">
-                  <span class="mb-0.5 block text-[11px] text-muted-foreground">When</span>
-                  <select
-                    class="w-full rounded border bg-background px-2 py-1 text-xs"
-                    :value="scheduleDraft.cron"
-                    @change="scheduleDraft.cron = ($event.target as HTMLSelectElement).value"
-                  >
-                    <option v-for="preset in cronPresets" :key="preset.cron" :value="preset.cron">{{ preset.label }}</option>
-                    <!-- An expression typed by hand stays selectable rather than snapping
-                         back to a preset that isn't what it says. -->
-                    <option v-if="!cronPresets.some(p => p.cron === scheduleDraft!.cron)" :value="scheduleDraft.cron">
-                      {{ scheduleDraft.cron }}
-                    </option>
-                  </select>
-                </label>
-                <label class="block">
-                  <span class="mb-0.5 block text-[11px] text-muted-foreground">Channel</span>
-                  <select v-model.number="scheduleDraft.channel_id" class="w-full rounded border bg-background px-2 py-1 text-xs">
-                    <option :value="null">— the reminders channel —</option>
-                    <option v-for="channel in channels" :key="channel.id" :value="channel.id"># {{ channel.name }}</option>
-                  </select>
-                </label>
+                <div>
+                  <span class="mb-0.5 block text-[11px] text-muted-foreground">Channels</span>
+                  <ChannelMultiSelect
+                    v-model:primary="scheduleDraft.channel_id"
+                    v-model:extras="scheduleDraft.extra_channel_ids"
+                    :channels="channels"
+                    empty-label="— the reminders channel —"
+                  />
+                </div>
+              </div>
+              <div class="mt-2">
+                <span class="mb-0.5 block text-[11px] text-muted-foreground">When</span>
+                <CronPicker v-model="scheduleDraft.cron" />
               </div>
               <div class="mt-2 flex gap-2">
                 <Button size="sm" :disabled="saving" @click="saveSchedule">Save</Button>
@@ -830,10 +814,12 @@ const outcomeClass = {
             </div>
 
             <div v-if="reactionRoleDraft" class="mb-3 rounded-lg border p-3">
-              <label class="mb-0.5 block text-[11px] text-muted-foreground">Channel</label>
-              <select v-model.number="reactionRoleDraft.channel_id" class="w-full rounded border bg-background px-2 py-1 text-sm">
-                <option v-for="channel in channels" :key="channel.id" :value="channel.id"># {{ channel.name }}</option>
-              </select>
+              <label class="mb-0.5 block text-[11px] text-muted-foreground">Channels</label>
+              <ChannelMultiSelect
+                v-model:primary="reactionRoleDraft.channel_id"
+                v-model:extras="reactionRoleDraft.extra_channel_ids"
+                :channels="channels"
+              />
 
               <label class="mb-0.5 mt-2 block text-[11px] text-muted-foreground">Message to post</label>
               <textarea v-model="reactionRoleDraft.body" class="w-full rounded border bg-background px-2 py-1 text-sm" rows="2" />
@@ -881,6 +867,16 @@ const outcomeClass = {
                 <span class="min-w-0 flex-1 text-xs text-muted-foreground">
                   #{{ channels.find(c => c.id === group.channel_id)?.name ?? 'channel' }}
                 </span>
+                <button
+                  class="text-muted-foreground hover:text-foreground"
+                  aria-label="Post again"
+                  title="Post the message again — the rules follow it"
+                  :disabled="running === group.message_id"
+                  @click="resend(() => dashboard.resendReactionRole(group))"
+                >
+                  <Loader2 v-if="running === group.message_id" class="h-3.5 w-3.5 animate-spin" />
+                  <RefreshCw v-else class="h-3.5 w-3.5" />
+                </button>
                 <button class="text-muted-foreground hover:text-destructive" aria-label="Delete" @click="removeReactionRole(group)">
                   <X class="h-3.5 w-3.5" />
                 </button>
@@ -911,12 +907,14 @@ const outcomeClass = {
                 <input v-model="giveawayDraft.prize" class="min-w-0 flex-1 rounded border bg-background px-2 py-1 text-sm" placeholder="What they win">
               </div>
               <div class="mt-2 grid grid-cols-2 gap-2">
-                <label class="block">
-                  <span class="mb-0.5 block text-[11px] text-muted-foreground">Channel</span>
-                  <select v-model.number="giveawayDraft.channel_id" class="w-full rounded border bg-background px-2 py-1 text-xs">
-                    <option v-for="channel in channels" :key="channel.id" :value="channel.id"># {{ channel.name }}</option>
-                  </select>
-                </label>
+                <div>
+                  <span class="mb-0.5 block text-[11px] text-muted-foreground">Channels</span>
+                  <ChannelMultiSelect
+                    v-model:primary="giveawayDraft.channel_id"
+                    v-model:extras="giveawayDraft.extra_channel_ids"
+                    :channels="channels"
+                  />
+                </div>
                 <label class="block">
                   <span class="mb-0.5 block text-[11px] text-muted-foreground">Closes</span>
                   <input v-model="giveawayDraft.ends_at" type="datetime-local" class="w-full rounded border bg-background px-2 py-1 text-xs">
@@ -953,6 +951,15 @@ const outcomeClass = {
                       : 'bg-primary/10 text-primary'"
                 >{{ giveaway.status }}</span>
                 <template v-if="giveaway.status === 'running' || giveaway.status === 'ending'">
+                  <button
+                    class="text-muted-foreground hover:text-foreground"
+                    aria-label="Post again"
+                    title="Post the announcement again — entry follows it"
+                    :disabled="running === giveaway.id"
+                    @click="resend(() => dashboard.resendGiveaway(giveaway))"
+                  >
+                    <RefreshCw class="h-3.5 w-3.5" />
+                  </button>
                   <button class="text-muted-foreground hover:text-foreground" aria-label="Draw now" :disabled="running === giveaway.id" @click="drawNow(giveaway)">
                     <Loader2 v-if="running === giveaway.id" class="h-3.5 w-3.5 animate-spin" />
                     <Play v-else class="h-3.5 w-3.5" />

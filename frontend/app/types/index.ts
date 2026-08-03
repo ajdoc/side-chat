@@ -1,3 +1,4 @@
+import type { Attribute, HeroClass, HeroJob, Item } from '~/lib/arpgEngine'
 import type { AvatarLook } from '~/lib/spaceAvatar'
 import type { PetKind } from '~/lib/spacePets'
 
@@ -1105,7 +1106,11 @@ export interface AutomationCatalogue {
 /** One field of an action's form. `type` names a *picker*, not a primitive. */
 export interface AutomationFieldSchema {
   key: string
-  type: 'text' | 'textarea' | 'channel' | 'badge' | 'role' | 'command' | 'schedule' | 'giveaway' | 'number' | 'boolean'
+  type:
+    | 'text' | 'textarea' | 'number' | 'boolean'
+    | 'channel' | 'badge' | 'role' | 'command' | 'schedule' | 'giveaway'
+    /** A list of channels — one step that happens in several places at once. */
+    | 'channels'
   label: string
   required?: boolean
   help?: string
@@ -1161,6 +1166,8 @@ export interface BotSchedule {
   name: string
   /** Null falls back to the server's configured reminder channel. */
   channel_id: number | null
+  /** Further channels it also posts to. The primary keeps its own column and its cascade. */
+  extra_channel_ids: number[]
   body: string
   cron: string
   timezone: string
@@ -1268,13 +1275,18 @@ export interface SpaceGamePayload {
   created_by: number | null
   /** Who was challenged, for a duel — null for a room-wide game. */
   opponent: number | null
-  /** 'vote' (put to the room) or 'challenge' (aimed at one person). */
-  start_mode: 'vote' | 'challenge'
+  /**
+   * 'vote' (put to the room), 'challenge' (aimed at one person), or 'open' (starts the moment
+   * it's proposed, with the proposer alone, and fills up through joining).
+   */
+  start_mode: 'vote' | 'challenge' | 'open'
   min_players: number
+  /** Could you walk into this game right now? True only for a running, joinable, unfull one. */
+  can_join: boolean
   /** Present only while a room-wide vote is open. */
   vote: { yes: number, present: number, mine: boolean | null } | null
   /** The game's own state, typed per game — null while only being proposed. */
-  state: AmongUsState | PetBattleState | null
+  state: AmongUsState | PetBattleState | ArpgState | null
 }
 
 /** One entry of the propose menu — a game the room can be asked to play. */
@@ -1282,8 +1294,10 @@ export interface SpaceGameInfo {
   type: string
   label: string
   blurb: string
-  /** How it starts: put to the room, or aimed at one person. */
-  mode: 'vote' | 'challenge'
+  /** How it starts: put to the room, aimed at one person, or straight away. */
+  mode: 'vote' | 'challenge' | 'open'
+  /** Whether latecomers can drop into it once it's running. */
+  joinable: boolean
   min: number
   max: number
 }
@@ -1311,6 +1325,82 @@ export interface PetBattleState {
   log: string[]
   /** The winner's id, once there is one. */
   winner: number | null
+}
+
+/** What a hero can become next, and whether they've earned it yet. Null at the end of a line. */
+export interface ArpgAdvancement {
+  id: HeroJob
+  name: string
+  level: number
+  ready: boolean
+}
+
+/** A hero in the dungeon, as their own player sees them — the character sheet. */
+export interface ArpgHero {
+  character_id: number
+  name: string
+  /** The line they were born into — never changes. */
+  class: HeroClass
+  /** Where along it they stand now, and its display name ('wizard' / 'Wizard'). */
+  job: HeroJob
+  job_name: string
+  advance_to: ArpgAdvancement | null
+  level: number
+  xp: number
+  gold: number
+  stats: Record<string, number>
+  /** What they've learned: skill id → the level they've pushed it to. */
+  skills: Record<string, number>
+  skill_points: number
+  /** Which attribute this class's damage comes off. */
+  primary: Attribute
+  equipment: Partial<Record<Item['slot'], Item>>
+  inventory: Item[]
+  alive: boolean
+}
+
+/**
+ * A dungeon run, as this viewer sees it.
+ *
+ * `seed` and `depth` are the *whole* world: the client generates the floor from them, which is
+ * why a payload this small can describe a dungeon. `me` is your character sheet and nobody
+ * else's — a party sees each other's level, not each other's bags.
+ */
+export interface ArpgState {
+  seed: number
+  depth: number
+  max_depth: number
+  players: Record<number, {
+    name: string
+    class: HeroClass
+    job: HeroJob
+    job_name: string
+    level: number
+    alive: boolean
+  }>
+  me: ArpgHero | null
+  log: string[]
+  /** 'party' (beat it), 'dungeon' (wiped), 'empty' (everyone left), or null while it runs. */
+  winner: 'party' | 'dungeon' | 'empty' | null
+}
+
+/** One of your heroes, from /api/arpg/characters. */
+export interface ArpgCharacter {
+  id: number
+  name: string
+  class: HeroClass
+  job: HeroJob
+  job_name: string
+  level: number
+  xp: number
+  gold: number
+  stats: Record<string, number>
+  skills: Record<string, number>
+  skill_points: number
+  inventory: Item[]
+  equipment: Partial<Record<Item['slot'], Item>>
+  depth: number
+  last_played_at: string | null
 }
 
 /** A crewmate's task: a spot on the map to walk to and a flag for whether it's done. */

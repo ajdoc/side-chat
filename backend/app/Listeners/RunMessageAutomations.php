@@ -7,6 +7,7 @@ use App\Models\Message;
 use App\Services\Automation\AutomationEngine;
 use App\Services\Automation\TriggerRegistry;
 use App\Support\Automation\AutomationContext;
+use App\Support\Automation\Subject;
 
 /**
  * Turns a message into the `message.created` trigger.
@@ -40,7 +41,7 @@ class RunMessageAutomations
             return;
         }
 
-        $message->loadMissing('channel');
+        $message->loadMissing('channel.server');
         $channel = $message->channel;
 
         if ($channel === null || $channel->server_id === null) {
@@ -51,8 +52,7 @@ class RunMessageAutomations
             $channel->server_id,
             TriggerRegistry::MESSAGE_CREATED,
             [
-                'user_id' => $message->user?->getKey(),
-                'user_name' => $message->user?->name,
+                ...Subject::fields($message->user, $channel->server),
                 'channel_id' => $channel->getKey(),
                 'channel_name' => $channel->name,
                 'message_id' => $message->getKey(),

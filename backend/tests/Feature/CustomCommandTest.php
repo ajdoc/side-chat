@@ -3,6 +3,7 @@
 use App\Models\Badge;
 use App\Models\BotSchedule;
 use App\Models\BotSettings;
+use App\Models\Channel;
 use App\Models\CustomCommand;
 use App\Models\Message;
 use App\Models\Server;
@@ -224,6 +225,39 @@ it('posts a due schedule and moves its window forward', function () {
     expect($channel->messages()->latest('id')->first()->body)->toBe('Who is in this week?');
     expect($schedule->fresh()->next_run_at->isFuture())->toBeTrue();
     expect($schedule->fresh()->last_run_at)->not->toBeNull();
+});
+
+it('posts a schedule to every channel it names', function () {
+    [, $server, $first] = ownerWithChannel();
+    $second = Channel::factory()->create(['server_id' => $server->id]);
+    serverWithAutomationBot($server);
+
+    BotSchedule::create([
+        'server_id' => $server->id, 'name' => 'Headcount', 'channel_id' => $first->id,
+        'extra_channel_ids' => [$second->id], 'body' => 'Who is in?', 'cron' => '0 9 * * 1',
+    ])->forceFill(['next_run_at' => now()->subMinute()])->save();
+
+    $this->artisan('bot:run-schedules')->assertSuccessful();
+
+    expect($first->messages()->latest('id')->first()->body)->toBe('Who is in?');
+    expect($second->messages()->latest('id')->first()->body)->toBe('Who is in?');
+});
+
+it('keeps posting to the other channels when one refuses', function () {
+    [, $server, $open] = ownerWithChannel();
+    $private = Channel::factory()->create(['server_id' => $server->id, 'is_private' => true]);
+    serverWithAutomationBot($server);
+
+    BotSchedule::create([
+        'server_id' => $server->id, 'name' => 'Headcount', 'channel_id' => $private->id,
+        'extra_channel_ids' => [$open->id], 'body' => 'Who is in?', 'cron' => '0 9 * * 1',
+    ])->forceFill(['next_run_at' => now()->subMinute()])->save();
+
+    $this->artisan('bot:run-schedules')->assertSuccessful();
+
+    // The bot isn't in the private one, but that must not silence the rest.
+    expect($private->messages()->count())->toBe(0);
+    expect($open->messages()->latest('id')->first()->body)->toBe('Who is in?');
 });
 
 it('leaves a schedule that is not due alone', function () {

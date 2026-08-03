@@ -29,12 +29,25 @@ class GameService
     /** @var array<string, GameHandler> type => handler */
     private array $handlers;
 
-    public function __construct(AmongUsGame $amongUs, PetBattleGame $petBattle)
+    public function __construct(AmongUsGame $amongUs, PetBattleGame $petBattle, ArpgGame $arpg)
     {
         $this->handlers = [
             $amongUs->type() => $amongUs,
             $petBattle->type() => $petBattle,
+            $arpg->type() => $arpg,
         ];
+    }
+
+    /**
+     * Add a game to the catalogue after construction.
+     *
+     * The constructor lists the games the app ships with; this is for the ones it doesn't know
+     * about at wiring time — a game stood up by a test, or one that arrives from somewhere other
+     * than this file. Registering over an existing type replaces it.
+     */
+    public function register(GameHandler $handler): void
+    {
+        $this->handlers[$handler->type()] = $handler;
     }
 
     public function handlerFor(string $type): ?GameHandler
@@ -54,6 +67,7 @@ class GameService
             'label' => $h->label(),
             'blurb' => $h->blurb(),
             'mode' => $h->startMode(),
+            'joinable' => $h->joinable(),
             'min' => $h->minPlayers(),
             'max' => $h->maxPlayers(),
         ], $this->handlers));
@@ -180,6 +194,13 @@ class GameService
             return;
         }
 
+        // An open game was never up for debate — proposing it *is* starting it.
+        if ($handler->startMode() === 'open') {
+            $this->start($game, $handler);
+
+            return;
+        }
+
         // A challenge starts on the challenged person's yes; a room game on a majority.
         if ($handler->startMode() === 'challenge') {
             if (($game->votes[$game->opponent_id] ?? null) === true) {
@@ -203,14 +224,18 @@ class GameService
     /**
      * Turn a passed vote into a running game.
      *
-     * The players are the two duellists for a challenge, or everyone in the room for a vote —
-     * that difference is the whole of what `startMode` changes about starting.
+     * The players are the two duellists for a challenge, the proposer alone for an open game, or
+     * everyone in the room for a vote — that difference is the whole of what `startMode` changes
+     * about starting. An open game starts empty of everyone but its opener precisely so that
+     * joining is the *only* way in, one path whether you're playing alone or waiting for friends.
      */
     private function start(SpaceGame $game, GameHandler $handler): void
     {
-        $playerIds = $handler->startMode() === 'challenge'
-            ? [$game->created_by, $game->opponent_id]
-            : $this->participantIds($game->channel);
+        $playerIds = match ($handler->startMode()) {
+            'challenge' => [$game->created_by, $game->opponent_id],
+            'open' => [$game->created_by],
+            default => $this->participantIds($game->channel),
+        };
 
         if (count($playerIds) > $handler->maxPlayers()) {
             $playerIds = array_slice($playerIds, 0, $handler->maxPlayers());
@@ -247,6 +272,46 @@ class GameService
         if (($state['winner'] ?? null) !== null) {
             $game->update(['status' => SpaceGame::ENDED]);
         }
+
+        broadcast(new SpaceGameUpdated($game));
+
+        return $game;
+    }
+
+    /**
+     * Walk into a game already in progress.
+     *
+     * The framework asks everything that isn't the game's business — is it running, does it take
+     * newcomers, are you in the room, are you already in it, is there a seat left — and the
+     * handler only has to say what a new player *is*. That division is why drop-in co-op costs a
+     * game one method rather than its own endpoint.
+     */
+    public function join(SpaceGame $game, User $user): SpaceGame
+    {
+        $handler = $this->handlerFor($game->type);
+
+        if ($handler === null || ! $game->isRunning()) {
+            throw ValidationException::withMessages(['join' => 'This game is not running.']);
+        }
+
+        if (! $handler->joinable()) {
+            throw ValidationException::withMessages(['join' => 'You cannot join this one once it has started.']);
+        }
+
+        // The roster is the state's `players` map, keyed by user id — the same convention every
+        // handler already writes in start(), and the only part of a game's state the framework
+        // reads. That's the price of knowing whether a game is full without asking the game.
+        $players = $game->state['players'] ?? [];
+
+        if (array_key_exists($user->id, $players)) {
+            throw ValidationException::withMessages(['join' => 'You are already playing.']);
+        }
+
+        if (count($players) >= $handler->maxPlayers()) {
+            throw ValidationException::withMessages(['join' => 'This game is full.']);
+        }
+
+        $game->update(['state' => $handler->join($game, $user)]);
 
         broadcast(new SpaceGameUpdated($game));
 
@@ -299,6 +364,9 @@ class GameService
                 'opponent' => $game->opponent_id,
                 'start_mode' => $handler->startMode(),
                 'min_players' => $handler->minPlayers(),
+                // Whether *this* viewer could walk in right now — the whole of what the join
+                // button needs to know, worked out here so no client has to re-derive the rules.
+                'can_join' => $viewer !== null && $this->canJoin($game, $handler, $viewer),
                 // The start vote, only while it's open: who's said yes, and how many are in the
                 // room to be won over. Your own vote is whatever you last sent.
                 'vote' => $game->isVoting() ? [
@@ -306,11 +374,25 @@ class GameService
                     'present' => $this->roomSize($channel),
                     'mine' => $game->votes[$viewer?->id] ?? null,
                 ] : null,
-                // A game that actually ran (or is running) has state to redact; one cancelled
-                // while still being voted on never got any, so there's nothing to show.
-                'state' => ($game->state['players'] ?? null) ? $handler->view($game, $viewer) : null,
+                // A game that actually ran (or is running) has state to redact; one still being
+                // voted on never got any, so there's nothing to show. The test is emptiness
+                // rather than "has players", because a run everybody walked out of still has an
+                // ending to show and an empty roster.
+                'state' => ($game->state ?? []) !== [] ? $handler->view($game, $viewer) : null,
             ],
         ];
+    }
+
+    /** The same conditions {@see join} enforces, asked rather than thrown. */
+    private function canJoin(SpaceGame $game, GameHandler $handler, User $viewer): bool
+    {
+        $players = $game->state['players'] ?? [];
+
+        return $game->isRunning()
+            && $handler->joinable()
+            && ! array_key_exists($viewer->id, $players)
+            && count($players) < $handler->maxPlayers()
+            && $this->inRoom($game->channel, $viewer->id);
     }
 
     /** Is this particular person standing in the room? */

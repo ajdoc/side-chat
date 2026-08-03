@@ -155,7 +155,98 @@ it('records what the event contained, so a filter that never matches can be debu
     $line = BotAuditLog::where('automation_id', $automation->id)->first();
 
     expect($line->context['event']['user_name'])->toBe($owner->name);
-    expect($line->context['result']['channel_id'])->toBe($channel->id);
+    // Keyed by channel: one step can post in several, so the result is a map rather than
+    // a single id.
+    expect($line->context['result']['message_ids'])->toHaveKey((string) $channel->id);
+});
+
+it('supplies name, nickname and email on every trigger about a person', function () {
+    Queue::fake();
+    [$owner, $server] = ownerWithServer();
+    $joiner = User::factory()->create(['name' => 'Robert Smith', 'email' => 'rob@example.com']);
+    $request = ServerJoinRequest::create(['server_id' => $server->id, 'user_id' => $joiner->id]);
+    automationOn($server, TriggerRegistry::MEMBER_JOINED, [['post_message', ['body' => 'hi']]]);
+    Passport::actingAs($owner);
+
+    $this->postJson("/api/servers/{$server->id}/join-requests/approve", ['request_ids' => [$request->id]])
+        ->assertOk();
+
+    Queue::assertPushed(RunAutomation::class, function (RunAutomation $job) use ($joiner) {
+        $data = $job->context['data'];
+
+        // The whole set, every time. An id that arrives while a name doesn't is what made
+        // filtering on user_id work and user_name silently match nothing.
+        return $data['user_id'] === $joiner->id
+            && $data['user_name'] === 'Robert Smith'
+            && $data['user_email'] === 'rob@example.com'
+            // No server nickname set, so it falls back to the account name rather than empty.
+            && $data['user_nickname'] === 'Robert Smith';
+    });
+});
+
+it('offers exactly the fields the context supplies', function () {
+    [$owner, $server] = ownerWithServer();
+    Passport::actingAs($owner);
+
+    $triggers = collect($this->getJson("/api/servers/{$server->id}/bot/catalogue")->json('data.triggers'));
+
+    // A field the builder offers but nothing supplies is a filter that can never match —
+    // so the advertised list and the real one have to be the same list.
+    expect($triggers->firstWhere('name', TriggerRegistry::MEMBER_JOINED)['fields'])
+        ->toBe(['user_id', 'user_name', 'user_nickname', 'user_email']);
+});
+
+it('posts one step to several channels at once', function () {
+    [$owner, $server, $first] = ownerWithChannel();
+    $second = Channel::factory()->create(['server_id' => $server->id]);
+    serverWithAutomationBot($server);
+
+    // One step, three rooms — not three steps. Steps are ordered because some depend on the
+    // one before; posting the same words in parallel has no such ordering.
+    $automation = automationOn($server, TriggerRegistry::MEMBER_JOINED, [
+        ['post_message', [
+            'channel_id' => $first->id,
+            'extra_channel_ids' => [$second->id],
+            'body' => 'Welcome {user}!',
+        ]],
+    ]);
+
+    app(AutomationEngine::class)->run($automation, new AutomationContext(
+        $server->id,
+        TriggerRegistry::MEMBER_JOINED,
+        ['user_id' => $owner->id, 'user_name' => $owner->name],
+    ));
+
+    expect($first->messages()->latest('id')->first()->body)->toBe("Welcome {$owner->name}!");
+    expect($second->messages()->latest('id')->first()->body)->toBe("Welcome {$owner->name}!");
+
+    // One step, so one audit line — carrying both messages rather than pretending to be two.
+    $log = BotAuditLog::where('automation_id', $automation->id)->get();
+    expect($log)->toHaveCount(1);
+    expect($log->first()->context['result']['message_ids'])->toHaveCount(2);
+});
+
+it('keeps posting to the rest when the bot is shut out of one channel', function () {
+    [$owner, $server, $open] = ownerWithChannel();
+    $private = Channel::factory()->create(['server_id' => $server->id, 'is_private' => true]);
+    serverWithAutomationBot($server);
+
+    $automation = automationOn($server, TriggerRegistry::MEMBER_JOINED, [
+        ['post_message', ['channel_id' => $open->id, 'extra_channel_ids' => [$private->id], 'body' => 'hi']],
+    ]);
+
+    app(AutomationEngine::class)->run($automation, new AutomationContext(
+        $server->id, TriggerRegistry::MEMBER_JOINED, ['user_id' => $owner->id],
+    ));
+
+    expect($open->messages()->count())->toBe(1);
+    expect($private->messages()->count())->toBe(0);
+
+    // Recorded as done, but saying which room missed out — silence about it would be worse
+    // than either a plain success or a plain failure.
+    $line = BotAuditLog::where('automation_id', $automation->id)->first();
+    expect($line->outcome)->toBe(BotAuditLog::OK);
+    expect($line->message)->toContain($private->name);
 });
 
 it('carries on after an action fails, and says which one', function () {

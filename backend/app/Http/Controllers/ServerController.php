@@ -22,6 +22,7 @@ use App\Services\Automation\AutomationEngine;
 use App\Services\Automation\TriggerRegistry;
 use App\Services\ServerService;
 use App\Support\Automation\AutomationContext;
+use App\Support\Automation\Subject;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Http\Resources\Json\AnonymousResourceCollection;
@@ -94,8 +95,7 @@ class ServerController extends Controller
                 $server->getKey(),
                 TriggerRegistry::ROLE_ASSIGNED,
                 [
-                    'user_id' => $member->getKey(),
-                    'user_name' => $member->name,
+                    ...Subject::fields($member, $server),
                     'role' => $role,
                     'previous_role' => $previous,
                 ],

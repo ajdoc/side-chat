@@ -68,6 +68,21 @@ class SpaceGameController extends Controller
         return $this->presented($request, $channel);
     }
 
+    /**
+     * Walk into a game already running — drop-in co-op, for the games that allow it.
+     *
+     * Reads like `cancel`: nothing to send, everything to check, and the service does all the
+     * checking.
+     */
+    public function join(ShowSideSpaceMapRequest $request, Channel $channel): JsonResponse
+    {
+        $this->requireInRoom($request, $channel);
+
+        $this->games->join($this->gameFor($channel), $request->user());
+
+        return $this->presented($request, $channel);
+    }
+
     public function act(SpaceGameActionRequest $request, Channel $channel): JsonResponse
     {
         $this->requireInRoom($request, $channel);

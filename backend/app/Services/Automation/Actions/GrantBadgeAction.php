@@ -8,6 +8,7 @@ use App\Services\Automation\AutomationEngine;
 use App\Services\Automation\TriggerRegistry;
 use App\Support\Automation\ActionResult;
 use App\Support\Automation\AutomationContext;
+use App\Support\Automation\Subject;
 
 /**
  * Give the member this event is about a badge.
@@ -74,8 +75,7 @@ final class GrantBadgeAction implements AutomationActionHandler
             $context->serverId,
             TriggerRegistry::BADGE_GRANTED,
             [
-                'user_id' => $user->getKey(),
-                'user_name' => $user->name,
+                ...Subject::fields($user, $server),
                 'badge_id' => $badge->getKey(),
                 'badge_name' => $badge->name,
             ],

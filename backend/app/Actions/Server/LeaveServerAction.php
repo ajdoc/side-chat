@@ -12,6 +12,7 @@ use App\Models\VoiceParticipant;
 use App\Services\Automation\AutomationEngine;
 use App\Services\Automation\TriggerRegistry;
 use App\Support\Automation\AutomationContext;
+use App\Support\Automation\Subject;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\ValidationException;
 
@@ -78,7 +79,7 @@ final class LeaveServerAction
         $this->automations->fire(new AutomationContext(
             $server->getKey(),
             TriggerRegistry::MEMBER_LEFT,
-            ['user_id' => $user->getKey(), 'user_name' => $user->name],
+            Subject::fields($user, $server),
         ));
     }
 }

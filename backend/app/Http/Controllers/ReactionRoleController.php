@@ -56,34 +56,51 @@ class ReactionRoleController extends Controller
             ], 422);
         }
 
-        $channel = Channel::where('server_id', $server->getKey())->findOrFail($data['channel_id']);
+        /*
+         * One post per channel, each with its own rules.
+         *
+         * A role people pick in #welcome often needs to be pickable in #roles too, and
+         * asking somebody to build the same pairs twice is how the two drift apart. Each
+         * message gets its own pair of rules because a rule matches on message id — that's
+         * what makes reacting in either place grant the same badge.
+         */
+        $channelIds = array_values(array_unique([$data['channel_id'], ...($data['extra_channel_ids'] ?? [])]));
+        $channels = Channel::where('server_id', $server->getKey())->findMany($channelIds);
 
-        if (! $channel->hasMember($bot->user)) {
-            return response()->json(['message' => "The bot isn't in #{$channel->name}."], 422);
+        $unreachable = $channels->reject(fn (Channel $channel) => $channel->hasMember($bot->user));
+
+        // All or nothing: a half-posted set would leave the same badge reachable from some
+        // rooms and not others, with nothing on screen to say which.
+        if ($unreachable->isNotEmpty()) {
+            return response()->json([
+                'message' => 'The bot isn’t in #'.$unreachable->first()->name.'.',
+            ], 422);
         }
 
-        $message = $send->handle($channel, $bot->user, SendMessageData::fromArray([
-            'body' => $data['body'],
-        ]));
+        DB::transaction(function () use ($server, $channels, $data, $bot, $send) {
+            foreach ($channels as $channel) {
+                $message = $send->handle($channel, $bot->user, SendMessageData::fromArray([
+                    'body' => $data['body'],
+                ]));
 
-        DB::transaction(function () use ($server, $message, $data, $bot) {
-            foreach ($data['pairs'] as $pair) {
-                $badge = Badge::where('server_id', $server->getKey())->find($pair['badge_id']);
+                foreach ($data['pairs'] as $pair) {
+                    $badge = Badge::where('server_id', $server->getKey())->find($pair['badge_id']);
 
-                if ($badge === null) {
-                    continue;
+                    if ($badge === null) {
+                        continue;
+                    }
+
+                    // Placed by the bot so the emoji is already there to click. Written
+                    // directly rather than through ToggleReactionAction: that fires the
+                    // triggers, and a bot seeding the message must not enter itself.
+                    $message->reactions()->firstOrCreate([
+                        'user_id' => $bot->user->getKey(),
+                        'emoji' => $pair['emoji'],
+                    ]);
+
+                    $this->rule($server, $message, $pair['emoji'], $badge, grant: true);
+                    $this->rule($server, $message, $pair['emoji'], $badge, grant: false);
                 }
-
-                // Placed by the bot so the emoji is already there to click. Written directly
-                // rather than through ToggleReactionAction: that fires the triggers, and a
-                // bot seeding the message must not enter itself into its own rules.
-                $message->reactions()->firstOrCreate([
-                    'user_id' => $bot->user->getKey(),
-                    'emoji' => $pair['emoji'],
-                ]);
-
-                $this->rule($server, $message, $pair['emoji'], $badge, grant: true);
-                $this->rule($server, $message, $pair['emoji'], $badge, grant: false);
             }
         });
 
@@ -107,6 +124,73 @@ class ReactionRoleController extends Controller
             ->each->delete();
 
         return response()->noContent();
+    }
+
+    /**
+     * Post the announcement again, and move the rules onto the new message.
+     *
+     * The old post gets buried, or somebody deletes it, and then the emoji nobody can see is
+     * the only way in. Reposting rather than editing, because a message that arrived a month
+     * ago stays a month ago however you rewrite it — what's wanted is a *new* one at the
+     * bottom of the channel.
+     *
+     * The rules are re-pointed rather than recreated, so anybody who already holds the badge
+     * keeps it and the old post simply stops meaning anything.
+     */
+    public function resend(
+        ManageAutomationsRequest $request,
+        Server $server,
+        Message $message,
+        SendMessageAction $send,
+    ): JsonResponse {
+        $bot = $server->automationBot();
+
+        if ($bot?->user === null) {
+            return response()->json(['message' => 'Pick a bot to run automations first.'], 422);
+        }
+
+        $rules = $server->automations()
+            ->with('actions')
+            ->where('builtin', Automation::BUILTIN_REACTION_ROLE)
+            ->get()
+            ->filter(fn (Automation $rule) => (int) $rule->triggerOption('message_id') === $message->getKey());
+
+        if ($rules->isEmpty()) {
+            return response()->json(['message' => 'That message has no reaction roles on it.'], 404);
+        }
+
+        $channel = Channel::where('server_id', $server->getKey())->find($message->channel_id);
+
+        if ($channel === null || ! $channel->hasMember($bot->user)) {
+            return response()->json(['message' => 'The bot can’t post in that channel.'], 422);
+        }
+
+        // The same words as before. Re-reading the original rather than asking for them again
+        // keeps a resend a resend — if the wording is wrong, that's an edit, not this.
+        $posted = $send->handle($channel, $bot->user, SendMessageData::fromArray([
+            'body' => $message->body,
+        ]));
+
+        DB::transaction(function () use ($rules, $posted, $bot) {
+            foreach ($rules as $rule) {
+                $emoji = (string) $rule->triggerOption('emoji');
+
+                $posted->reactions()->firstOrCreate([
+                    'user_id' => $bot->user->getKey(),
+                    'emoji' => $emoji,
+                ]);
+
+                $rule->update([
+                    'trigger_config' => ['message_id' => $posted->getKey(), 'channel_id' => $posted->channel_id, 'emoji' => $emoji],
+                    'conditions' => [
+                        ['field' => 'message_id', 'operator' => 'equals', 'value' => $posted->getKey()],
+                        ['field' => 'emoji', 'operator' => 'equals', 'value' => $emoji],
+                    ],
+                ]);
+            }
+        });
+
+        return response()->json(['data' => $this->groups($server)]);
     }
 
     /**

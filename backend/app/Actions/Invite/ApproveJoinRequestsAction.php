@@ -8,6 +8,7 @@ use App\Models\Server;
 use App\Services\Automation\AutomationEngine;
 use App\Services\Automation\TriggerRegistry;
 use App\Support\Automation\AutomationContext;
+use App\Support\Automation\Subject;
 use Illuminate\Support\Facades\DB;
 
 final class ApproveJoinRequestsAction
@@ -67,7 +68,7 @@ final class ApproveJoinRequestsAction
             $this->automations->fire(new AutomationContext(
                 $server->getKey(),
                 TriggerRegistry::MEMBER_JOINED,
-                ['user_id' => $request->user_id, 'user_name' => $request->user?->name],
+                Subject::forId($request->user_id, $request->user, $server),
             ));
         }
 

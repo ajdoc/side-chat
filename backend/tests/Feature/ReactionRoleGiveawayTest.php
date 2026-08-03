@@ -2,6 +2,7 @@
 
 use App\Models\Automation;
 use App\Models\Badge;
+use App\Models\Channel;
 use App\Models\BotAuditLog;
 use App\Models\Giveaway;
 use App\Models\Message;
@@ -166,6 +167,103 @@ it('survives the badge a reaction role names being deleted', function () {
         ->assertJsonPath('data.0.pairs.0.badge_name', null);
 });
 
+it('posts a reaction role to every channel asked for', function () {
+    [$owner, $server, $first] = ownerWithChannel();
+    $second = Channel::factory()->create(['server_id' => $server->id]);
+    serverWithAutomationBot($server);
+    $badge = Badge::create(['server_id' => $server->id, 'name' => 'Griefer']);
+    Passport::actingAs($owner);
+
+    $this->postJson("/api/servers/{$server->id}/reaction-roles", [
+        'channel_id' => $first->id,
+        'extra_channel_ids' => [$second->id],
+        'body' => 'Pick a role',
+        'pairs' => [['emoji' => '🎮', 'badge_id' => $badge->id]],
+    ])->assertCreated();
+
+    expect($first->messages()->count())->toBe(1);
+    expect($second->messages()->count())->toBe(1);
+
+    // Reacting in *either* room grants the same badge — that's the point of the feature.
+    Passport::actingAs($member = memberOf($server));
+    $this->postJson("/api/messages/{$second->messages()->first()->id}/reactions", ['emoji' => '🎮'])->assertOk();
+
+    expect($badge->holders()->whereKey($member->id)->exists())->toBeTrue();
+});
+
+it('posts a giveaway to several channels but counts one entry per person', function () {
+    [$owner, $server, $first] = ownerWithChannel();
+    $second = Channel::factory()->create(['server_id' => $server->id]);
+    serverWithAutomationBot($server);
+
+    Passport::actingAs($owner);
+    $id = $this->postJson("/api/servers/{$server->id}/giveaways", [
+        'channel_id' => $first->id,
+        'extra_channel_ids' => [$second->id],
+        'prize' => 'A Steam key',
+        'ends_at' => now()->addDay()->toIso8601String(),
+    ])->assertCreated()->json('data.id');
+
+    $giveaway = Giveaway::find($id);
+    expect($first->messages()->count())->toBe(1);
+    expect($second->messages()->count())->toBe(1);
+
+    // Finding it twice is not two chances.
+    Passport::actingAs(memberOf($server));
+    $this->postJson("/api/messages/{$first->messages()->first()->id}/reactions", ['emoji' => '🎉'])->assertOk();
+    $this->postJson("/api/messages/{$second->messages()->first()->id}/reactions", ['emoji' => '🎉'])->assertOk();
+
+    expect($giveaway->entries()->count())->toBe(1);
+});
+
+it('refuses the whole set rather than posting to only some channels', function () {
+    [$owner, $server, $first] = ownerWithChannel();
+    $private = Channel::factory()->create(['server_id' => $server->id, 'is_private' => true]);
+    serverWithAutomationBot($server);
+    $badge = Badge::create(['server_id' => $server->id, 'name' => 'Griefer']);
+    Passport::actingAs($owner);
+
+    // Half a set would leave the badge reachable from some rooms and not others, with
+    // nothing on screen to say which.
+    $this->postJson("/api/servers/{$server->id}/reaction-roles", [
+        'channel_id' => $first->id,
+        'extra_channel_ids' => [$private->id],
+        'body' => 'Pick', 'pairs' => [['emoji' => '🎮', 'badge_id' => $badge->id]],
+    ])->assertStatus(422);
+
+    expect($first->messages()->count())->toBe(0);
+});
+
+it('reposts a reaction role and moves the rules onto the new message', function () {
+    [$owner, $server, $channel] = ownerWithChannel();
+    $bot = serverWithAutomationBot($server);
+    $badge = Badge::create(['server_id' => $server->id, 'name' => 'Griefer']);
+    Passport::actingAs($owner);
+
+    $this->postJson("/api/servers/{$server->id}/reaction-roles", [
+        'channel_id' => $channel->id, 'body' => 'Pick a role',
+        'pairs' => [['emoji' => '🎮', 'badge_id' => $badge->id]],
+    ])->assertCreated();
+
+    $original = $channel->messages()->latest('id')->first();
+
+    $this->postJson("/api/servers/{$server->id}/reaction-roles/{$original->id}/resend")->assertOk();
+
+    $reposted = $channel->messages()->latest('id')->first();
+    expect($reposted->id)->not->toBe($original->id);
+    expect($reposted->body)->toBe('Pick a role');
+    expect($reposted->reactions()->where('emoji', '🎮')->exists())->toBeTrue();
+
+    // Reacting to the *new* post grants the badge; the old one no longer means anything.
+    Passport::actingAs($member = memberOf($server));
+    $this->postJson("/api/messages/{$reposted->id}/reactions", ['emoji' => '🎮'])->assertOk();
+    expect($badge->holders()->whereKey($member->id)->exists())->toBeTrue();
+
+    $badge->revokeFrom($member);
+    $this->postJson("/api/messages/{$original->id}/reactions", ['emoji' => '🎮'])->assertOk();
+    expect($badge->holders()->whereKey($member->id)->exists())->toBeFalse();
+});
+
 /*
  * Giveaways.
  */
@@ -305,6 +403,38 @@ it('cancels rather than deletes, and stops reacting from meaning anything', func
     expect($giveaway->fresh()->cancelled_at)->not->toBeNull();
     expect($giveaway->fresh()->status())->toBe('cancelled');
     expect($server->automations()->where('builtin', Automation::BUILTIN_GIVEAWAY)->count())->toBe(0);
+});
+
+it('reposts a giveaway and keeps the entries it already has', function () {
+    [$owner, $server, $channel] = ownerWithChannel();
+    serverWithAutomationBot($server);
+    [$giveaway] = giveawayOn($server, $owner, $channel->id);
+
+    Passport::actingAs($early = memberOf($server));
+    $this->postJson("/api/messages/{$giveaway->message_id}/reactions", ['emoji' => '🎉'])->assertOk();
+    $original = $giveaway->fresh()->message_id;
+
+    Passport::actingAs($owner);
+    $this->postJson("/api/servers/{$server->id}/giveaways/{$giveaway->id}/resend")->assertOk();
+
+    $reposted = $giveaway->fresh()->message_id;
+    expect($reposted)->not->toBe($original);
+    // A repost moves where new entries come from; it doesn't restart the draw.
+    expect($giveaway->entries()->count())->toBe(1);
+
+    Passport::actingAs($late = memberOf($server));
+    $this->postJson("/api/messages/{$reposted}/reactions", ['emoji' => '🎉'])->assertOk();
+    expect($giveaway->entries()->count())->toBe(2);
+});
+
+it('will not repost a giveaway that has closed', function () {
+    [$owner, $server, $channel] = ownerWithChannel();
+    serverWithAutomationBot($server);
+    [$giveaway] = giveawayOn($server, $owner, $channel->id);
+    $giveaway->forceFill(['ends_at' => now()->subMinute()])->save();
+
+    Passport::actingAs($owner);
+    $this->postJson("/api/servers/{$server->id}/giveaways/{$giveaway->id}/resend")->assertStatus(422);
 });
 
 it('refuses to draw the same giveaway twice', function () {

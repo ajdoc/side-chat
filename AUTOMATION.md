@@ -187,9 +187,19 @@ write.
 `Change a member's role` · `React to the message` · `Post a custom command's response` ·
 `Send a schedule now` · `Enter the giveaway`
 
-Ordering matters and is adjustable. A failing step doesn't abort the ones after it — a rule is
-a list of things to do, not a transaction, and losing the welcome because the log channel was
-deleted would be a strange reading of that.
+**Steps run in order, one after another.** That matters when one depends on the one before —
+"give the badge, *then* announce it" reads wrong reversed. When they don't depend on each
+other, the order is simply irrelevant and costs you nothing.
+
+What order is *not* for is doing the same thing in several places. **Post a message** takes an
+"Also post in" list, so announcing in three channels is one step with three channels, not
+three steps — one message to edit, and the audit log records it as the single thing it is. If
+the bot can't reach one of those channels the rest still go out, and the log line says which
+one missed.
+
+A failing step doesn't abort the ones after it — a rule is a list of things to do, not a
+transaction, and losing the welcome because the log channel was deleted would be a strange
+reading of that.
 
 Two things worth knowing:
 

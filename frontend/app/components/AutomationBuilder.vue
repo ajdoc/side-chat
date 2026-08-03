@@ -128,6 +128,16 @@ function braced(token: string) {
   return `{${token}}`
 }
 
+/** Append a channel to a `channels` field, and reset the picker to its placeholder. */
+function addChannel(index: number, key: string, event: Event) {
+  const select = event.target as HTMLSelectElement
+  const id = Number(select.value)
+  const current = (draft.value.actions?.[index]?.config?.[key] as number[]) ?? []
+
+  if (id) setActionConfig(index, key, [...current, id])
+  select.value = ''
+}
+
 /** Drop a `{placeholder}` into a textarea at the cursor. */
 function insertPlaceholder(index: number, key: string, token: string, el: HTMLTextAreaElement | null) {
   const current = String((draft.value.actions?.[index]?.config?.[key] as string) ?? '')
@@ -269,6 +279,40 @@ function insertPlaceholder(index: number, key: string, token: string, el: HTMLTe
 
           <!-- The two pickers that make the built-ins composable: a rule can post a custom
                command's answer or send a schedule early, rather than duplicating the text. -->
+          <!-- A list of channels, for a step that happens in several places at once. Chips
+               plus an "add" dropdown rather than a multi-select box: the value is small,
+               and removing one shouldn't need a ctrl-click nobody discovers. -->
+          <template v-else-if="field.type === 'channels'">
+            <div v-if="(action.config[field.key] as number[])?.length" class="mb-1 flex flex-wrap gap-1">
+              <span
+                v-for="id in (action.config[field.key] as number[])"
+                :key="id"
+                class="inline-flex items-center gap-1 rounded bg-muted px-1.5 py-0.5 text-[11px]"
+              >
+                # {{ channels.find(c => c.id === id)?.name ?? 'deleted channel' }}
+                <button
+                  class="text-muted-foreground hover:text-destructive"
+                  aria-label="Remove channel"
+                  @click="setActionConfig(index, field.key, (action.config[field.key] as number[]).filter(x => x !== id))"
+                >
+                  <X class="h-3 w-3" />
+                </button>
+              </span>
+            </div>
+            <select
+              class="w-full rounded border border-dashed bg-background px-2 py-1 text-[11px] text-muted-foreground"
+              value=""
+              @change="addChannel(index, field.key, $event)"
+            >
+              <option value="">+ also post in…</option>
+              <option
+                v-for="channel in channels.filter(c => !((action.config[field.key] as number[]) ?? []).includes(c.id))"
+                :key="channel.id"
+                :value="channel.id"
+              ># {{ channel.name }}</option>
+            </select>
+          </template>
+
           <select
             v-else-if="field.type === 'command' || field.type === 'schedule' || field.type === 'giveaway'"
             class="w-full rounded border bg-background px-2 py-1 text-xs"

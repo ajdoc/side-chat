@@ -33,11 +33,41 @@ interface GameHandler
      *
      *   - `vote`      — put to the whole room; a majority starts it. Among Us.
      *   - `challenge` — aimed at one person; it starts when *they* accept. A duel.
+     *   - `open`      — nobody's asked; it starts the moment it's proposed, with the proposer
+     *                   alone in it, and fills up through {@see join}. A dungeon run.
      *
      * This is the one place the framework needs a game to declare its social shape, and it's why
      * a pet battle and a room-wide game can share every other piece of the machinery.
+     *
+     * `open` is the mode for a game that can be played alone: there is nothing to agree to, so
+     * there's no vote to lose, and a room of one can start it. It pairs naturally with
+     * {@see joinable} but doesn't imply it.
      */
     public function startMode(): string;
+
+    /**
+     * May someone walk into this game while it's already running?
+     *
+     * False for anything whose roster is fixed at the start — a duel has two duellists, and an
+     * impostor dealt in halfway through is not the game anyone voted for. True for a game the
+     * framework should let people drop into, which then gets asked to seat them in {@see join}.
+     */
+    public function joinable(): bool;
+
+    /**
+     * Seat a newcomer in a running game, returning the new state.
+     *
+     * Called only for a {@see joinable} game, and only once the service has checked that this
+     * person is in the room, isn't already playing, and that there's space under
+     * {@see maxPlayers}. What being seated *means* — the level they start at, where they land,
+     * what they're carrying — is the game's, exactly as {@see start} is.
+     *
+     * Throw {@see ValidationException} to refuse them anyway; a game that never accepts anyone
+     * should say so with {@see joinable} instead.
+     *
+     * @return array<string, mixed> the new `state`
+     */
+    public function join(SpaceGame $game, User $user): array;
 
     /** A sentence for the propose menu — what the room is agreeing to play. */
     public function blurb(): string;

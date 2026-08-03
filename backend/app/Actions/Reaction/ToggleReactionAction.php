@@ -9,6 +9,7 @@ use App\Models\User;
 use App\Services\Automation\AutomationEngine;
 use App\Services\Automation\TriggerRegistry;
 use App\Support\Automation\AutomationContext;
+use App\Support\Automation\Subject;
 
 final class ToggleReactionAction
 {
@@ -62,7 +63,7 @@ final class ToggleReactionAction
      */
     private function fireAutomations(Message $message, User $user, string $emoji, string $trigger): void
     {
-        $message->loadMissing('channel');
+        $message->loadMissing('channel.server');
         $channel = $message->channel;
 
         if ($channel === null || $channel->server_id === null) {
@@ -80,8 +81,7 @@ final class ToggleReactionAction
             $channel->server_id,
             $trigger,
             [
-                'user_id' => $user->getKey(),
-                'user_name' => $user->name,
+                ...Subject::fields($user, $channel->server),
                 'channel_id' => $channel->getKey(),
                 'channel_name' => $channel->name,
                 'message_id' => $message->getKey(),
