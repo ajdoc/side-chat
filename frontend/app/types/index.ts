@@ -1232,6 +1232,11 @@ export interface BotAuditLine {
   /** 'ok' | 'failed' | 'skipped'. A skip is not a failure — it's "there was nothing to do". */
   outcome: 'ok' | 'failed' | 'skipped'
   message: string | null
+  /**
+   * `event` is what the trigger supplied — the values a filter would be compared against —
+   * and `result` is whatever the action chose to report.
+   */
+  context: { event?: Record<string, unknown>, result?: Record<string, unknown> } | null
   automation: string | null
   subject: string | null
   created_at: string

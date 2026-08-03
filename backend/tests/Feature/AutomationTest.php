@@ -135,6 +135,29 @@ it('runs actions in order and records a line for each', function () {
     expect($automation->fresh()->run_count)->toBe(1);
 });
 
+it('records what the event contained, so a filter that never matches can be debugged', function () {
+    [$owner, $server, $channel] = ownerWithChannel();
+    serverWithAutomationBot($server);
+
+    $automation = automationOn($server, TriggerRegistry::MEMBER_JOINED, [
+        ['post_message', ['channel_id' => $channel->id, 'body' => 'hi']],
+    ]);
+
+    app(AutomationEngine::class)->run($automation, new AutomationContext(
+        $server->id,
+        TriggerRegistry::MEMBER_JOINED,
+        ['user_id' => $owner->id, 'user_name' => $owner->name],
+    ));
+
+    // A rule rejected by its filter writes nothing at all — it's skipped before it runs — so
+    // the only way to find out what a filter was compared against is to see the values from
+    // a run that did happen.
+    $line = BotAuditLog::where('automation_id', $automation->id)->first();
+
+    expect($line->context['event']['user_name'])->toBe($owner->name);
+    expect($line->context['result']['channel_id'])->toBe($channel->id);
+});
+
 it('carries on after an action fails, and says which one', function () {
     [$owner, $server, $channel] = ownerWithChannel();
     serverWithAutomationBot($server);

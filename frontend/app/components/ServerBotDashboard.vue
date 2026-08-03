@@ -19,7 +19,7 @@ import {
   X,
   Zap,
 } from 'lucide-vue-next'
-import type { Automation, Badge, BotSchedule, Channel, CustomCommand, Giveaway, ReactionRoleGroup, Server, ServerRole } from '~/types'
+import type { Automation, Badge, BotAuditLine, BotSchedule, Channel, CustomCommand, Giveaway, ReactionRoleGroup, Server, ServerRole } from '~/types'
 import { Button } from '~/components/ui/button'
 import {
   AlertDialog,
@@ -467,6 +467,21 @@ const sectionLabel = computed(() => sections.find(s => s.id === section.value)?.
 
 const triggerLabel = (name: string) =>
   catalogue.value?.triggers.find(t => t.name === name)?.label ?? name
+
+/**
+ * The event's own values, for the Logging page.
+ *
+ * Ids are dropped — they're in the line already and say nothing about why a filter missed.
+ * What's left is the strings somebody would actually have written a filter against.
+ */
+function eventFields(line: BotAuditLine): [string, string][] {
+  const event = (line.context?.event ?? {}) as Record<string, unknown>
+
+  return Object.entries(event)
+    .filter(([key, value]) => !key.endsWith('_id') && value !== null && value !== '')
+    .map(([key, value]) => [key, String(value)] as [string, string])
+    .slice(0, 6)
+}
 
 const outcomeIcon = { ok: CircleCheck, skipped: CircleMinus, failed: TriangleAlert }
 const outcomeClass = {
@@ -987,6 +1002,14 @@ const outcomeClass = {
                   <span v-if="line.subject" class="text-muted-foreground"> · {{ line.subject }}</span>
                 </p>
                 <p v-if="line.message" class="text-muted-foreground">{{ line.message }}</p>
+                <!-- What the event actually contained. This is what a filter compares
+                     against, and a filter that rejects logs nothing at all — so seeing the
+                     real values here is the only way to work out why one never matches. -->
+                <p v-if="eventFields(line).length" class="mt-0.5 flex flex-wrap gap-x-2 gap-y-0.5">
+                  <span v-for="[key, value] in eventFields(line)" :key="key" class="text-[11px] text-muted-foreground">
+                    <code class="rounded bg-muted px-1">{{ key }}</code> {{ value }}
+                  </span>
+                </p>
               </div>
               <span class="shrink-0 text-muted-foreground">{{ new Date(line.created_at).toLocaleString() }}</span>
             </div>

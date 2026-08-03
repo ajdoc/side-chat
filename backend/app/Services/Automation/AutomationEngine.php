@@ -130,7 +130,18 @@ final class AutomationEngine
             'action' => $action,
             'outcome' => $result->outcome,
             'subject_id' => $context->get('user_id'),
-            'context' => $result->context === [] ? null : $result->context,
+            /*
+             * The event that caused this, alongside whatever the action wants to report.
+             *
+             * `event` is the whole point of recording anything here: a filter that doesn't
+             * match writes nothing at all — the rule is skipped before it ever runs — so
+             * without a record of what the *values* actually were, "my filter never matches"
+             * is unfalsifiable. Remove the filter, let it fire once, and this line shows the
+             * exact strings the filter would have been compared against.
+             *
+             * Namespaced under `event` so an action's own context can never collide with it.
+             */
+            'context' => ['event' => $context->data] + ($result->context === [] ? [] : ['result' => $result->context]),
             'message' => $result->message,
         ]);
     }

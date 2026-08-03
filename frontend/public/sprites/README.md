@@ -32,6 +32,22 @@ shadow under every sprite already.
 Used by both the Espurr pet (`app/lib/spacePets.ts`) and the Espurr Suit costume
 (`app/lib/spaceAvatar.ts`) — one creature, one set of artwork.
 
+## Espurr Vessel
+
+    sprites/espurr-vessel/Idle-Anim.png
+    sprites/espurr-vessel/Walk-Anim.png
+
+The robed and masked version, shared the same way by the `espurr_vessel` pet and costume. Same
+layout as above: 4 frames per direction, eight directions top to bottom.
+
+## Backgrounds must be transparent
+
+A sheet is drawn straight onto the room, so whatever is behind the sprite is drawn too: a frame
+saved on white paper puts a white card under the character and over the floor. RGBA alone isn't
+enough — the alpha has to actually be zero. If a sheet arrives opaque, key the background out
+before dropping it in here rather than trying to fix it at draw time; the renderer has no way to
+tell the paper from a pale part of the sprite.
+
 **Missing files are not an error.** Each falls back to the hand-drawn 16×16 grid it shipped with,
 so the room looks finished either way and adding artwork is dropping in a file rather than a
 deploy that can half-succeed. A sheet that 404s is remembered as absent and not re-requested.

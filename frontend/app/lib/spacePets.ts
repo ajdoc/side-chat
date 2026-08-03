@@ -21,7 +21,7 @@ import type { SheetSpec } from './spriteSheet'
 import { blit, sprite } from './pixelSprite'
 import { drawSheetFrame, sheetReady, sheetRow } from './spriteSheet'
 
-export type PetKind = 'leafling' | 'emberpup' | 'shellow' | 'sprigling' | 'cinderkit' | 'snapling' | 'espurr'
+export type PetKind = 'leafling' | 'emberpup' | 'shellow' | 'sprigling' | 'cinderkit' | 'snapling' | 'espurr' | 'espurr_vessel'
 
 export interface PetInfo {
   label: string
@@ -61,6 +61,18 @@ export const PETS: Record<PetKind, PetInfo> = {
     sheets: {
       idle: { name: 'espurr/Idle', columns: 4, scale: 1.35 },
       walk: { name: 'espurr/Walk', columns: 4, scale: 1.35 },
+    },
+  },
+  // The same creature under a hooded robe and a painted mask, which is enough of a different
+  // silhouette to be its own pet rather than a recolour of the one above.
+  espurr_vessel: {
+    label: 'Espurr Vessel',
+    element: 'psychic',
+    region: 'guest',
+    blurb: 'Robed, masked, and staring through it anyway.',
+    sheets: {
+      idle: { name: 'espurr-vessel/Idle', columns: 4, scale: 1.35 },
+      walk: { name: 'espurr-vessel/Walk', columns: 4, scale: 1.35 },
     },
   },
 }
@@ -487,6 +499,69 @@ const ESPURR: Record<PetDir, string[]> = {
   ],
 }
 
+/**
+ * Espurr Vessel: the same grey creature in a black hooded robe, wearing a pale mask painted
+ * with a sigil. Extra slots on top of the shared six: `K` the robe, `g` its gold trim, `M` the
+ * mask and `k` the marks on it. Facing away there's no mask at all — just the hood and the tail,
+ * which is the whole point of the back view.
+ */
+const ESPURR_VESSEL: Record<PetDir, string[]> = {
+  down: [
+    '................',
+    '..o..........o..',
+    '..oA........Ao..',
+    '..oAAo....oAAo..',
+    '..oAAAo..oAAAo..',
+    '..oBBBBBBBBBBo..',
+    '.oBBoMMMMMMoBBo.',
+    '.oBoMkMkkMkMoBo.',
+    '.oBoMkMMMMkMoBo.',
+    '.oBoMMkMMkMMoBo.',
+    '.oKKoMMkkMMoKKo.',
+    '.oKgKKKKKKKKgKo.',
+    '..oKKKgKKgKKKo..',
+    '..oKKKKKKKKKKo..',
+    '...oKKo..oKKo...',
+    '...ooo....ooo...',
+  ],
+  up: [
+    '................',
+    '..o..........o..',
+    '..oA........Ao..',
+    '..oAAo....oAAo..',
+    '..oAAAo..oAAAo..',
+    '..oBBBBBBBBBBo..',
+    '.oBBBBBBBBBBBBo.',
+    '.oKKKKKKKKKKKKo.',
+    '.oKKKKKgKKKKKKo.',
+    '.oKKKKgggKKKKKo.',
+    '.oKKKKKgKKKKKKo.',
+    '.oKgKKKgKKKKgKo.',
+    '..oKKKKKKKKKKo..',
+    '..oKKKKKKKKDDo..',
+    '...oKKo..oKKo...',
+    '...ooo....ooo...',
+  ],
+  right: [
+    '................',
+    '....o......o....',
+    '....oAo...oAo...',
+    '....oAAo.oAAo...',
+    '...oAAAoAAAo....',
+    '...oBBBBBBBo....',
+    '..oBoMMMMMBo....',
+    '..oBoMkkMMBo....',
+    '..oBoMkMMMBo....',
+    '..oKoMMkMMKo....',
+    '..oKKKKKKKKo..D.',
+    '..oKgKKKKgKoDDD.',
+    '...oKKKKKKKo....',
+    '...oKKKKKKKo....',
+    '...oKKo.oKKo....',
+    '...ooo..ooo.....',
+  ],
+}
+
 const ART: Record<PetKind, Record<PetDir, string[]>> = {
   leafling: LEAFLING,
   emberpup: EMBERPUP,
@@ -495,6 +570,7 @@ const ART: Record<PetKind, Record<PetDir, string[]>> = {
   cinderkit: CINDERKIT,
   snapling: SNAPLING,
   espurr: ESPURR,
+  espurr_vessel: ESPURR_VESSEL,
 }
 
 /** Body, lit, shaded, belly, accent, accent-lit — six colours is the whole look of a creature. */
@@ -508,6 +584,15 @@ const PALETTE: Record<PetKind, Record<string, string>> = {
   // The odd one out in the palette too: its accent is the cream of its ear-linings rather
   // than an element, and it needs the two eye slots the elemental six have no use for.
   espurr: { ...paint('#b9b6c4', '#d3d1dc', '#8f8b9e', '#e8e6ee', '#e6dfc9', '#f5efdd'), I: '#a982c9', P: '#f3e6ff' },
+  // Same fur, but the robe is the sprite: near-black with a thin gold trim, and a bone mask
+  // that has to stay the brightest thing on it or the face disappears at this size.
+  espurr_vessel: {
+    ...paint('#8f8ba0', '#a9a5ba', '#6a6678', '#e8e6ee', '#ded6bd', '#f2ecd9'),
+    K: '#221d28',
+    g: '#b98f4c',
+    M: '#efe7d2',
+    k: '#1a1620',
+  },
 }
 
 function paint(body: string, lit: string, shade: string, belly: string, accent: string, accentLit: string) {

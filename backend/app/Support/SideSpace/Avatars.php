@@ -50,7 +50,7 @@ final class Avatars
     public const COSTUMES = [
         'none', 'cantor', 'sentinel', 'merc', 'cactus', 'guard', 'colossus',
         'plush', 'bunny', 'faceless', 'mummy', 'jackoghost', 'pirate', 'robot',
-        'witch', 'devil', 'espurr',
+        'witch', 'devil', 'espurr', 'espurr_vessel',
     ];
 
     /**
@@ -71,6 +71,8 @@ final class Avatars
             'snapling' => ['label' => 'Snapling', 'element' => 'water', 'region' => 'second'],
             // Neither trio, and not an element the others use — a visitor rather than a starter.
             'espurr' => ['label' => 'Espurr', 'element' => 'psychic', 'region' => 'guest'],
+            // The same visitor, robed and masked — a separate key so a room can have both.
+            'espurr_vessel' => ['label' => 'Espurr Vessel', 'element' => 'psychic', 'region' => 'guest'],
         ];
     }
 
