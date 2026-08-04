@@ -1,6 +1,7 @@
 import type { Attribute, HeroClass, HeroJob, Item } from '~/lib/arpgEngine'
 import type { AvatarLook } from '~/lib/spaceAvatar'
 import type { PetKind } from '~/lib/spacePets'
+import type { SpatialPlacement } from '~/lib/spatialAudio'
 
 export type ThemeMode = 'light' | 'dark' | 'system'
 // Each one drives the whole palette (surfaces, borders, hovers), not just the
@@ -1015,6 +1016,20 @@ export interface Peer {
    * proximity into `volume` would have the room quietly overwriting your preferences.
    */
   proximity: number
+  /**
+   * Where their voice comes from, when spatial audio is on: a bearing and a distance,
+   * relative to you. Yours in an ordinary call — you arrange the room and it's remembered —
+   * and the room's in a Side Space, where it follows where the two of you are actually stood.
+   * Carried even while spatial audio is off, so turning it on doesn't drop everyone in the
+   * centre first. See ~/lib/spatialAudio.
+   */
+  placement: SpatialPlacement
+  /**
+   * Have you placed them *deliberately*? False means they're sitting where the automatic
+   * arrangement put them, and so may be moved again when somebody else joins; true means you
+   * dragged them there and nothing gets to shuffle them.
+   */
+  placed: boolean
 }
 
 /**

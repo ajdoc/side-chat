@@ -22,7 +22,7 @@ interface Ctx {
   others: () => Record<number, Occupant & { tx: number, ty: number }>
   /** Everyone on the presence channel, dialled or not — including people we've yet to place. */
   knownMembers: () => Array<{ id: number }>
-  setPeerProximity: (id: number, gain: number) => void
+  setPeerProximity: (id: number, gain: number, offset?: { x: number, y: number }) => void
   setPeerInRange: (id: number, inRange: boolean) => void
   fireEffect: (kind: 'join' | 'leave', id: number, name: string) => void
   /** A game meeting: the whole room hears the whole room, whatever the distance. */
@@ -75,7 +75,10 @@ function evaluate() {
     const at = { x: them.tx, y: them.ty }
 
     const gain = meeting ? 1 : audibility(m, self, at)
-    ctx.setPeerProximity(member.id, gain)
+    // Direction as well as loudness, so spatial audio can put a voice where its owner is
+    // standing. Measured from the whispered positions for the same reason the gain is: both
+    // ends computing from the truth is what keeps the two sides' answers in step.
+    ctx.setPeerProximity(member.id, gain, { x: at.x - self.x, y: at.y - self.y })
     ctx.setPeerInRange(member.id, meeting ? true : inConnectRange(m, self, at))
 
     if (gain > 0) {

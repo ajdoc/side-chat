@@ -26,6 +26,13 @@ const {
   noiseSuppression,
   noiseSuppressionOptions,
   setNoiseSuppression,
+  peers,
+  spatialAudio,
+  canSpatialise,
+  roomPlacesPeople,
+  setSpatialAudio,
+  setPeerPlacement,
+  resetPlacements,
   screenResolution,
   screenMode,
   canPickSpeaker,
@@ -174,6 +181,42 @@ const modeOptions = [
             this is tuned for speech and will chew on a held note.
           </span>
         </label>
+
+        <!-- Spatial audio -->
+        <div v-if="canSpatialise" class="space-y-3">
+          <label class="flex cursor-pointer items-start gap-2.5">
+            <input
+              type="checkbox"
+              class="mt-0.5 h-4 w-4 shrink-0 cursor-pointer accent-primary"
+              :checked="spatialAudio"
+              @change="setSpatialAudio(($event.target as HTMLInputElement).checked)"
+            >
+            <span class="space-y-0.5">
+              <span class="block text-sm font-medium">Spatial audio</span>
+              <span class="block text-xs text-muted-foreground">
+                Give each person a place in the room instead of stacking every voice in the
+                centre. Two people talking at once stop fighting for the same spot — which is
+                how you follow one of them. Best with headphones.
+              </span>
+            </span>
+          </label>
+
+          <p v-if="spatialAudio && roomPlacesPeople" class="text-xs text-muted-foreground">
+            You're in a Side Space, so the room does the placing: people sound like they're
+            standing where they're standing. Walk up to someone and they'll move to meet you.
+          </p>
+
+          <SpatialAudioMap
+            v-else-if="spatialAudio && peers.length"
+            :peers="peers"
+            @place="(id, placement) => setPeerPlacement(id, placement)"
+            @reset="resetPlacements"
+          />
+
+          <p v-else-if="spatialAudio" class="text-xs text-muted-foreground">
+            Nobody else is here yet. Once somebody joins you can drag them around the room.
+          </p>
+        </div>
 
         <!-- Push to talk -->
         <label class="flex cursor-pointer items-start gap-2.5">

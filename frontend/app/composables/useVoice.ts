@@ -1,4 +1,5 @@
 import type { MicChain, NoiseSuppression } from '~/lib/micProcessing'
+import type { SpatialPlacement, SpatialVoice } from '~/lib/spatialAudio'
 import type { IceServer, Peer, PeerConnectionState, VoiceEffectPair, VoiceEffects, VoiceParticipant } from '~/types'
 import {
   buildMicChain,
@@ -8,6 +9,15 @@ import {
   NOISE_SUPPRESSION_OPTIONS,
   resetMicProcessing,
 } from '~/lib/micProcessing'
+import {
+  arrangeInArc,
+  centreListener,
+  createSpatialVoice,
+  DEFAULT_PLACEMENT,
+  distanceGain,
+  placementFromOffset,
+  spatialSupported,
+} from '~/lib/spatialAudio'
 
 /**
  * A voice call: a full mesh of WebRTC peer connections, signalled over Reverb.
@@ -177,6 +187,13 @@ interface PeerHandle {
   cameraTransceiver: RTCRtpTransceiver | null
   screenTransceiver: RTCRtpTransceiver | null
   analyser: AnalyserNode | null
+  /**
+   * Their voice, positioned in the room — or null when spatial audio is off, unsupported, or
+   * their audio track hasn't arrived yet. While this exists it, and not `audio.volume`, is
+   * what you hear: the element stays in the document muted, as the pump Chromium needs to
+   * keep a remote stream flowing into WebAudio. See createSpatialVoice.
+   */
+  spatial: SpatialVoice | null
   speakingUntil: number
   // --- perfect negotiation bookkeeping (see negotiate/onSignal) ---
   polite: boolean
@@ -269,6 +286,16 @@ interface LocalPrefs {
    * and coming back needs you to guess. This remembers.
    */
   screenMuted?: boolean
+  /**
+   * Where you've put them in the room, in radians clockwise from straight ahead, and how far
+   * off. Remembered with the rest of your decisions about a person, because that's what it is
+   * — someone you always want on your left stays on your left, call after call.
+   *
+   * Absent for anyone you've never placed; they're arranged automatically instead (see
+   * {@link arrangeInArc}), and the arrangement is only written down once you move somebody.
+   */
+  angle?: number
+  distance?: number
 }
 
 // Module scope, not component scope: one call, however many components are looking at it.
@@ -356,6 +383,12 @@ function syncMemberIds() {
   if (ids.length !== before.length || ids.some(id => !before.includes(id))) memberIds.value = ids
 }
 const proximityGains = new Map<number, number>()
+/**
+ * The last *direction* each person was in, alongside the gain above and for the same reason:
+ * it outlives a peer being dropped and re-dialled as they pace in and out of range, so someone
+ * walking back into earshot arrives from the side they actually walked in from.
+ */
+const proximityPlacements = new Map<number, SpatialPlacement>()
 /** Pending teardowns, so a peer who steps briefly out of range isn't dropped on the spot. */
 const dropTimers = new Map<number, ReturnType<typeof setTimeout>>()
 /**
@@ -692,6 +725,17 @@ export function useVoice() {
   /** Chosen device ids — null means "let the browser pick its default". */
   const micId = useState<string | null>('voice:micId', () => loadSettings().micId)
   const speakerId = useState<string | null>('voice:speakerId', () => loadSettings().speakerId)
+  /**
+   * Whether voices are placed around you rather than stacked in the centre — see
+   * ~/lib/spatialAudio. Off by default: it changes how every call sounds, and a change like
+   * that should be one you went and asked for.
+   */
+  const spatialAudio = useState<boolean>('voice:spatialAudio', () => loadSettings().spatialAudio)
+  /** Whether this browser can do it at all. The setting is hidden rather than lying when not. */
+  const canSpatialise = computed(() => spatialSupported())
+  /** True in a Side Space, where positions come from where everyone is stood. */
+  const roomPlacesPeople = useState<boolean>('voice:roomPlacesPeople', () => false)
+
   /** How hard your microphone is cleaned up on the way out — see ~/lib/micProcessing. */
   const noiseSuppression = useState<NoiseSuppression>(
     'voice:noiseSuppression',
@@ -831,6 +875,7 @@ export function useVoice() {
     micId: string | null
     speakerId: string | null
     noiseSuppression: NoiseSuppression
+    spatialAudio: boolean
     resolution: ScreenResolution
     mode: ScreenMode
     pushToTalk: boolean
@@ -839,6 +884,7 @@ export function useVoice() {
       micId: null,
       speakerId: null,
       noiseSuppression: DEFAULT_NOISE_SUPPRESSION,
+      spatialAudio: false,
       resolution: DEFAULT_SCREEN_RESOLUTION,
       mode: DEFAULT_SCREEN_MODE,
       pushToTalk: false,
@@ -852,6 +898,7 @@ export function useVoice() {
         noiseSuppression: NOISE_SUPPRESSION_LEVELS.includes(saved.noiseSuppression)
           ? saved.noiseSuppression
           : DEFAULT_NOISE_SUPPRESSION,
+        spatialAudio: saved.spatialAudio === true,
         resolution: SCREEN_RESOLUTIONS.includes(saved.resolution) ? saved.resolution : DEFAULT_SCREEN_RESOLUTION,
         mode: (['auto', 'detail', 'motion'] as const).includes(saved.mode) ? saved.mode : DEFAULT_SCREEN_MODE,
         pushToTalk: saved.pushToTalk === true,
@@ -867,6 +914,7 @@ export function useVoice() {
       micId: micId.value,
       speakerId: speakerId.value,
       noiseSuppression: noiseSuppression.value,
+      spatialAudio: spatialAudio.value,
       resolution: screenResolution.value,
       mode: screenMode.value,
       pushToTalk: pushToTalk.value,
@@ -900,8 +948,23 @@ export function useVoice() {
     if (!handle || !peer) return
 
     const muted = peer.localMuted || selfDeafened.value
-    handle.audio.volume = peer.volume * peer.proximity
-    handle.audio.muted = muted
+    const level = peer.volume * peer.proximity
+
+    if (handle.spatial) {
+      // The element is kept muted rather than removed, and everything audible moves to the
+      // WebAudio graph — including mute, which becomes a gain of zero. Two places that can
+      // silence someone is one too many, and the element is the one that can't also pan.
+      handle.audio.muted = true
+      handle.audio.volume = 1
+      handle.spatial.setPlacement(peer.placement)
+      // Distance costs loudness only for placements *you* made. In a Side Space `proximity`
+      // is already a distance curve — one that knows about walls, which this doesn't — and
+      // charging for the same distance twice would make far-off people vanish early.
+      handle.spatial.setGain(muted ? 0 : level * (proximityMode ? 1 : distanceGain(peer.placement.distance)))
+    } else {
+      handle.audio.volume = level
+      handle.audio.muted = muted
+    }
     // The shared audio still answers to *mute* and *deafen* — silencing someone silences
     // their screen too — but rides its own volume so a loud shared clip can be turned down
     // without quietening the person talking over it. See setPeerScreenVolume.
@@ -931,6 +994,135 @@ export function useVoice() {
       || peer.screenMuted
       || outOfEarshot(peer)
       || (peer.screenSharing && watchedScreen.value !== id)
+  }
+
+  // --- spatial audio: where each voice comes from (see ~/lib/spatialAudio) ---
+
+  /**
+   * Give this peer a positioned voice, if they should have one and don't yet.
+   *
+   * Called from three places, and it has to be all three: when their audio track arrives (the
+   * usual one — a MediaStreamAudioSourceNode can't be built from a stream with no track in
+   * it), when the setting is switched on mid-call, and when a peer is created while it's
+   * already on. Idempotent, so none of them has to know about the others.
+   */
+  function ensureSpatial(id: number) {
+    const handle = handles.get(id)
+    const peer = peers.value.find(p => p.id === id)
+    if (!handle || !peer || handle.spatial || !audioCtx) return
+    if (!spatialAudio.value || !canSpatialise.value) return
+
+    handle.spatial = createSpatialVoice(audioCtx, handle.audioStream, peer.placement)
+    // Null means the browser wouldn't build it (or the track isn't there yet). The <audio>
+    // element is still playing them the ordinary way, so this is a missing feature and not a
+    // missing person — applyAudio takes the non-spatial branch and everything works.
+    if (handle.spatial) applyAudio(id)
+  }
+
+  /** Take the positioned path back down and hand playback to the element again. */
+  function dropSpatial(id: number) {
+    const handle = handles.get(id)
+    if (!handle?.spatial) return
+
+    handle.spatial.destroy()
+    handle.spatial = null
+    applyAudio(id)
+  }
+
+  /**
+   * Where somebody sits when they're created — theirs if you've ever placed them, the
+   * automatic arrangement's otherwise.
+   *
+   * In a Side Space neither applies: the room decides, and until their first position whisper
+   * lands they sit dead ahead rather than somewhere arbitrary.
+   */
+  function initialPlacement(id: number): { placement: SpatialPlacement, placed: boolean } {
+    if (proximityMode) {
+      return { placement: proximityPlacements.get(id) ?? { ...DEFAULT_PLACEMENT, distance: 0 }, placed: false }
+    }
+
+    const pref = loadPrefs()[id]
+    if (typeof pref?.angle === 'number') {
+      return {
+        placement: { angle: pref.angle, distance: pref.distance ?? DEFAULT_PLACEMENT.distance },
+        placed: true,
+      }
+    }
+
+    return { placement: { ...DEFAULT_PLACEMENT }, placed: false }
+  }
+
+  /**
+   * Re-spread everyone you *haven't* placed yourself across the arc in front of you.
+   *
+   * Run whenever the roster changes, because an arrangement is a division of the space and
+   * the space has to be re-divided when the number of people sharing it changes — two voices
+   * hard left and hard right shouldn't stay that way when a third arrives.
+   *
+   * Anyone you dragged is left exactly where you put them, and is not counted in the spread:
+   * your decision is the fixed point the automatic layout works around, not something it
+   * averages over.
+   */
+  function restackUnplaced() {
+    if (proximityMode) return
+
+    const loose = peers.value.filter(p => !p.placed)
+    if (!loose.length) return
+
+    const arranged = arrangeInArc(loose.map(p => p.id))
+    for (const [id, placement] of arranged) {
+      patchPeer(id, { placement })
+      applyAudio(id)
+    }
+  }
+
+  /**
+   * Move somebody. Yours alone, never sent, and remembered — this is the same kind of
+   * decision as turning a person down, and it's stored next to it.
+   */
+  function setPeerPlacement(id: number, placement: SpatialPlacement) {
+    const peer = peers.value.find(p => p.id === id)
+    if (!peer || proximityMode) return
+
+    const clamped: SpatialPlacement = {
+      angle: placement.angle,
+      distance: Math.min(1, Math.max(0, placement.distance)),
+    }
+
+    patchPeer(id, { placement: clamped, placed: true })
+    applyAudio(id)
+    savePref(id, { angle: clamped.angle, distance: clamped.distance })
+  }
+
+  /**
+   * Throw the room away and lay it out again from scratch — including the people you placed.
+   *
+   * The escape hatch for an arrangement that has drifted somewhere unhelpful over a few
+   * calls. It forgets the stored placements too; anything less would leave the automatic
+   * layout fighting a preference you can no longer see.
+   */
+  function resetPlacements() {
+    if (proximityMode) return
+
+    for (const peer of peers.value) {
+      patchPeer(peer.id, { placed: false })
+      savePref(peer.id, { angle: undefined, distance: undefined })
+    }
+
+    restackUnplaced()
+  }
+
+  /** Turn spatial audio on or off. Remembered, and applied to a live call on the spot. */
+  function setSpatialAudio(on: boolean) {
+    spatialAudio.value = on
+    saveSettings()
+
+    if (on) {
+      restackUnplaced()
+      for (const id of handles.keys()) ensureSpatial(id)
+    } else {
+      for (const id of handles.keys()) dropSpatial(id)
+    }
   }
 
   // --- signalling ---
@@ -1132,6 +1324,7 @@ export function useVoice() {
       settingRemoteAnswer: false,
       negotiated: false,
       analyser: null,
+      spatial: null,
       speakingUntil: 0,
       // The impolite peer fills these in just below; the polite peer adopts them in ontrack.
       screenAudioTransceiver: null,
@@ -1322,6 +1515,9 @@ export function useVoice() {
           // and if it somehow does, the next click anywhere in the page will unblock it.
         })
         listenForSpeech(handle)
+        // Their audio exists now, which is the earliest moment a positioned voice can be
+        // built from it — see ensureSpatial.
+        ensureSpatial(id)
         applyAudio(id)
 
         return
@@ -1368,6 +1564,7 @@ export function useVoice() {
       // Full volume until the room says otherwise. In a voice channel or a DM nothing ever
       // does, which is how those two keep behaving exactly as they always have.
       proximity: proximityGains.get(id) ?? 1,
+      ...initialPlacement(id),
     }]
 
     // Whatever they last said they were doing, if we heard it before we had a peer to hang it
@@ -1389,6 +1586,12 @@ export function useVoice() {
     // the case for somebody dialled at the gain we already computed for them. Without this a
     // peer created mid-room plays at full volume until they next move.
     applyAudio(id)
+
+    // A new arrival changes how the room divides up, and may already have audio (a peer
+    // re-created in a Side Space adopts a stream that's still running). Both are cheap no-ops
+    // when there's nothing to do.
+    restackUnplaced()
+    ensureSpatial(id)
   }
 
   function destroyPeer(id: number) {
@@ -1410,9 +1613,14 @@ export function useVoice() {
     handle.screenAudio.srcObject = null
     handle.screenAudio.remove()
     handle.analyser?.disconnect()
+    handle.spatial?.destroy()
 
     handles.delete(id)
     peers.value = peers.value.filter(p => p.id !== id)
+
+    // One fewer voice to share the arc between. Skipped during teardown, where every peer is
+    // going and re-spreading the survivors is work nobody will hear.
+    if (status.value === 'connected') restackUnplaced()
   }
 
   /**
@@ -1636,6 +1844,10 @@ export function useVoice() {
       resetMicProcessing() // the worklet module belongs to the context, and this one is new
       audioCtx = new AudioContext()
       await audioCtx.resume()
+      centreListener(audioCtx)
+      // The context has its own output device, and a spatialised call plays out of it rather
+      // than out of the <audio> elements — so the remembered speaker has to be set here too.
+      if (speakerId.value) void applyContextSink(speakerId.value)
       micChain = await buildMicChain(audioCtx, rawStream, noiseSuppression.value)
       localStream = micChain.stream
     } catch {
@@ -1883,6 +2095,7 @@ export function useVoice() {
     // starts with nobody dialled and everybody silent.
     setProximityMode(false)
     lastStates.clear()
+    proximityPlacements.clear()
 
     if (id) {
       try {
@@ -2001,11 +2214,16 @@ export function useVoice() {
    */
   function setProximityMode(on: boolean) {
     proximityMode = on
+    // Mirrored into reactive state purely so the UI can tell the two spatial worlds apart:
+    // in a Side Space you don't arrange the room, you walk around it, and offering a
+    // drag-people-about panel there would be offering a control that does nothing.
+    roomPlacesPeople.value = on
 
     if (!on) {
       roomMembers.clear()
       syncMemberIds()
       proximityGains.clear()
+      proximityPlacements.clear()
       for (const timer of dropTimers.values()) clearTimeout(timer)
       dropTimers.clear()
     }
@@ -2017,20 +2235,44 @@ export function useVoice() {
   }
 
   /**
-   * How loudly to hear one person, 0–1. Called for every occupant on every animation frame, so
-   * it does nothing at all unless the number actually changed — otherwise this would rewrite
-   * reactive state sixty times a second per person and re-render the room for no reason.
+   * How loudly to hear one person, 0–1, and — when spatial audio is on — which direction from.
+   *
+   * Called for every occupant on every evaluation, so it does as little as it can get away
+   * with: the gain is compared before anything reactive is written, because otherwise this
+   * would rewrite state many times a second per person and re-render the room for no reason.
+   *
+   * `offset` is where they are relative to you in tiles (screen space, so +y is down the
+   * map). It's optional so a caller that only cares about volume needn't supply it, and it's
+   * *not* part of the early-return check: someone circling you at a constant distance has an
+   * unchanged gain and a changing direction, which is precisely the case worth hearing.
+   * Writing it costs nothing when spatial audio is off, so it isn't conditional on that
+   * either — the placement is kept up to date so switching the setting on mid-walk is right
+   * immediately rather than at their next step.
    */
-  function setPeerProximity(id: number, gain: number) {
+  function setPeerProximity(id: number, gain: number, offset?: { x: number, y: number }) {
     const clamped = Math.min(1, Math.max(0, gain))
-    if (proximityGains.get(id) === clamped) return
+    const placement = offset ? placementFromOffset(offset.x, offset.y) : null
+    const previous = proximityPlacements.get(id)
+    // A hundredth of a radian is well under what anyone can localise, and this is the guard
+    // that keeps a walking room from patching reactive state on every frame.
+    const turned = placement !== null && (
+      !previous
+      || Math.abs(previous.angle - placement.angle) > 0.01
+      || Math.abs(previous.distance - placement.distance) > 0.01
+    )
+
+    if (proximityGains.get(id) === clamped && !turned) return
 
     proximityGains.set(id, clamped)
+    if (placement && turned) proximityPlacements.set(id, placement)
 
     // Held even with no peer to apply it to: they may be out of connect range right now, and
-    // this is the value createPeer will start them at when they walk back.
+    // these are the values createPeer will start them at when they walk back.
     if (peers.value.some(p => p.id === id)) {
-      patchPeer(id, { proximity: clamped })
+      patchPeer(id, {
+        proximity: clamped,
+        ...(placement && turned ? { placement } : {}),
+      })
       applyAudio(id)
     }
   }
@@ -2228,10 +2470,30 @@ export function useVoice() {
     await swapMicCapture(micId.value, level)
   }
 
+  /**
+   * Point the *WebAudio* output at a chosen speaker.
+   *
+   * Needed because a positioned voice doesn't come out of its <audio> element any more — it
+   * comes out of the AudioContext, which has its own sink and ignores every setSinkId we do
+   * below. Chromium has `AudioContext.setSinkId`; where it doesn't exist, spatial audio plays
+   * out of the system default however the picker is set, which is worth knowing and not worth
+   * refusing to spatialise over.
+   */
+  async function applyContextSink(deviceId: string) {
+    const ctx = audioCtx as (AudioContext & { setSinkId?: (id: string) => Promise<void> }) | null
+    if (!ctx?.setSinkId) return
+    try {
+      await ctx.setSinkId(deviceId)
+    } catch {
+      // Stale or unplugged id — the context keeps the sink it has.
+    }
+  }
+
   /** Switch which speaker the call plays out of — every peer's voice and every shared screen. */
   async function setSpeaker(deviceId: string) {
     speakerId.value = deviceId
     saveSettings()
+    await applyContextSink(deviceId)
     await Promise.all([...handles.values()].flatMap(h => [
       applySinkId(h.audio, deviceId),
       applySinkId(h.screenAudio, deviceId),
@@ -2849,6 +3111,13 @@ export function useVoice() {
     micId,
     speakerId,
     noiseSuppression,
+    // Spatial audio: the setting, whether it's possible, and the room you arrange.
+    spatialAudio,
+    canSpatialise,
+    roomPlacesPeople,
+    setSpatialAudio,
+    setPeerPlacement,
+    resetPlacements,
     noiseSuppressionOptions: NOISE_SUPPRESSION_OPTIONS,
     setNoiseSuppression,
     screenResolution,
