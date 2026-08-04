@@ -314,6 +314,24 @@ async function run(automation: Automation) {
   }
 }
 
+/**
+ * Post an announcement again — a reaction-role message, or a giveaway.
+ *
+ * The two are different resources with different endpoints, so the caller hands over the call
+ * itself and this only does what's the same either way: spin the right row while it's in flight
+ * (`running` is keyed by the id the row's own buttons check), and don't leave a button spinning
+ * for ever if the server refuses.
+ */
+async function resend(key: number, action: () => Promise<unknown>) {
+  running.value = key
+  try {
+    await action()
+  }
+  finally {
+    running.value = null
+  }
+}
+
 function remove(automation: Automation) {
   askToConfirm({
     title: 'Delete this rule?',
@@ -875,7 +893,7 @@ const outcomeClass = {
                   aria-label="Post again"
                   title="Post the message again — the rules follow it"
                   :disabled="running === group.message_id"
-                  @click="resend(() => dashboard.resendReactionRole(group))"
+                  @click="resend(group.message_id, () => dashboard.resendReactionRole(group))"
                 >
                   <Loader2 v-if="running === group.message_id" class="h-3.5 w-3.5 animate-spin" />
                   <RefreshCw v-else class="h-3.5 w-3.5" />
@@ -959,9 +977,10 @@ const outcomeClass = {
                     aria-label="Post again"
                     title="Post the announcement again — entry follows it"
                     :disabled="running === giveaway.id"
-                    @click="resend(() => dashboard.resendGiveaway(giveaway))"
+                    @click="resend(giveaway.id, () => dashboard.resendGiveaway(giveaway))"
                   >
-                    <RefreshCw class="h-3.5 w-3.5" />
+                    <Loader2 v-if="running === giveaway.id" class="h-3.5 w-3.5 animate-spin" />
+                    <RefreshCw v-else class="h-3.5 w-3.5" />
                   </button>
                   <button class="text-muted-foreground hover:text-foreground" aria-label="Draw now" :disabled="running === giveaway.id" @click="drawNow(giveaway)">
                     <Loader2 v-if="running === giveaway.id" class="h-3.5 w-3.5 animate-spin" />

@@ -71,9 +71,27 @@ function evaluate() {
 
   for (const member of ctx.knownMembers()) {
     const them = others[member.id]
-    // On the channel but never yet heard from — no position, so nothing to measure. They'll
-    // be picked up on their first whisper, which is at most a twelfth of a second away.
-    if (!them) continue
+
+    /*
+     * On the channel, but we have no position for them — either they've yet to whisper, or the
+     * room took their avatar away (presence dropped them, or the sweep decided their whispers
+     * had stopped) while their peer connection carried on.
+     *
+     * Either way there is nothing to measure, but skipping them is not the same as saying so:
+     * the gain we last set is still on their audio, so a person whose sprite vanishes while
+     * they're standing next to you stays at full volume — audible, invisible, and absent from
+     * the earshot list, since only the loop below fills that. Silence is the honest answer for
+     * somebody we can't place, and it costs the never-yet-whispered case nothing: they were
+     * inaudible anyway, and their first whisper is at most a twelfth of a second off.
+     *
+     * Their connection is left alone deliberately. `inConnectRange` is a claim about distance
+     * and we haven't got one to make; dropping the peer would tear down the very call that
+     * someone reappearing a moment later needs — and would hang up on a person mid-handshake.
+     */
+    if (!them) {
+      ctx.setPeerProximity(member.id, 0)
+      continue
+    }
 
     // The whispered position, not the eased one. See the note above.
     const at = { x: them.tx, y: them.ty }
