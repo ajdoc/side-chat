@@ -6,10 +6,13 @@ import {
   buildMicChain,
   DEFAULT_NOISE_SUPPRESSION,
   DEFAULT_NORMALIZE_VOLUME,
+  DEFAULT_SUPPRESSION_STRENGTH,
+  clampStrength,
   micConstraints,
   NOISE_SUPPRESSION_LEVELS,
   NOISE_SUPPRESSION_OPTIONS,
   resetMicProcessing,
+  SUPPRESSION_STRENGTH_RANGE,
 } from '~/lib/micProcessing'
 import {
   arrangeInArc,
@@ -833,6 +836,14 @@ export function useVoice() {
     'voice:noiseSuppression',
     () => loadSettings().noiseSuppression,
   )
+  /**
+   * How hard the "Aggressive" chain works, 0…1. Only meaningful on that level; kept whatever
+   * the level is, so switching away and back doesn't lose where you'd set it.
+   */
+  const suppressionStrength = useState<number>(
+    'voice:suppressionStrength',
+    () => loadSettings().suppressionStrength,
+  )
   /** Whether the chain rides your level toward everyone else's — see ~/lib/micProcessing. */
   const normalizeVolume = useState<boolean>(
     'voice:normalizeVolume',
@@ -972,6 +983,7 @@ export function useVoice() {
     micId: string | null
     speakerId: string | null
     noiseSuppression: NoiseSuppression
+    suppressionStrength: number
     normalizeVolume: boolean
     spatialAudio: boolean
     spatialWidth: number
@@ -984,6 +996,7 @@ export function useVoice() {
       micId: null,
       speakerId: null,
       noiseSuppression: DEFAULT_NOISE_SUPPRESSION,
+      suppressionStrength: DEFAULT_SUPPRESSION_STRENGTH,
       normalizeVolume: DEFAULT_NORMALIZE_VOLUME,
       spatialAudio: false,
       spatialWidth: DEFAULT_WIDTH,
@@ -1001,6 +1014,9 @@ export function useVoice() {
         noiseSuppression: NOISE_SUPPRESSION_LEVELS.includes(saved.noiseSuppression)
           ? saved.noiseSuppression
           : DEFAULT_NOISE_SUPPRESSION,
+        suppressionStrength: typeof saved.suppressionStrength === 'number'
+          ? clampStrength(saved.suppressionStrength)
+          : DEFAULT_SUPPRESSION_STRENGTH,
         normalizeVolume: typeof saved.normalizeVolume === 'boolean'
           ? saved.normalizeVolume
           : DEFAULT_NORMALIZE_VOLUME,
@@ -1024,6 +1040,7 @@ export function useVoice() {
       micId: micId.value,
       speakerId: speakerId.value,
       noiseSuppression: noiseSuppression.value,
+      suppressionStrength: suppressionStrength.value,
       normalizeVolume: normalizeVolume.value,
       spatialAudio: spatialAudio.value,
       spatialWidth: spatialWidth.value,
@@ -2047,7 +2064,13 @@ export function useVoice() {
       // The context has its own output device, and a spatialised call plays out of it rather
       // than out of the <audio> elements — so the remembered speaker has to be set here too.
       if (speakerId.value) void applyContextSink(speakerId.value)
-      micChain = await buildMicChain(audioCtx, rawStream, noiseSuppression.value, normalizeVolume.value)
+      micChain = await buildMicChain(
+        audioCtx,
+        rawStream,
+        noiseSuppression.value,
+        normalizeVolume.value,
+        suppressionStrength.value,
+      )
       localStream = micChain.stream
     } catch {
       // Anything half-built (a capture we got before the context failed, say) goes back —
@@ -2627,7 +2650,9 @@ export function useVoice() {
       return // device vanished or was denied; the current mic keeps working
     }
 
-    const chain = audioCtx ? await buildMicChain(audioCtx, capture, level, normalizeVolume.value) : null
+    const chain = audioCtx
+      ? await buildMicChain(audioCtx, capture, level, normalizeVolume.value, suppressionStrength.value)
+      : null
     const stream = chain?.stream ?? capture
     const track = stream.getAudioTracks()[0]
     if (!track) {
@@ -2680,6 +2705,23 @@ export function useVoice() {
     if (!inCall.value) return
 
     await swapMicCapture(micId.value, level)
+  }
+
+  /**
+   * Choose how hard the "Aggressive" chain works.
+   *
+   * The one audio setting that needs neither a new capture nor a rebuilt graph: it's a value on
+   * a live AudioParam, so a call in progress hears the change as it's dragged. That's the point
+   * — this is a setting nobody can pick correctly in the abstract, and the only way to find
+   * your number is to talk while you move it.
+   */
+  function setSuppressionStrength(value: number) {
+    const strength = clampStrength(value)
+    if (strength === suppressionStrength.value) return
+
+    suppressionStrength.value = strength
+    saveSettings()
+    micChain?.setStrength(strength)
   }
 
   /**
@@ -3361,6 +3403,9 @@ export function useVoice() {
     resetPlacements,
     noiseSuppressionOptions: NOISE_SUPPRESSION_OPTIONS,
     setNoiseSuppression,
+    suppressionStrength,
+    setSuppressionStrength,
+    suppressionStrengthRange: SUPPRESSION_STRENGTH_RANGE,
     normalizeVolume,
     setNormalizeVolume,
     screenResolution,

@@ -9,6 +9,8 @@ import {
 } from 'lucide-vue-next'
 import { useLocalStorage } from '@vueuse/core'
 import type { Channel, Conversation, Server, ThemeColor, ThemeMode } from '~/types'
+import type { SplitPane } from '~/composables/useSplitView'
+import { useLongPress } from '~/composables/useTouch'
 import { useDesktopNotifications } from '~/composables/useDesktopNotifications'
 import { Button } from '~/components/ui/button'
 import {
@@ -72,6 +74,8 @@ const { pane, ratio, openSplit, closeSplit, setRatioFromX, writeDragPayload, rea
 const splitArea = ref<HTMLElement | null>(null)
 const dropActive = ref(false)
 const draggingDivider = ref(false)
+/** A split on a screen too narrow for two columns: two full-width pages you swipe between. */
+const pagerSplit = computed(() => !!pane.value && narrow.value)
 
 function onSplitDragOver(e: DragEvent) {
   if (!isChannelDrag(e)) return
@@ -98,6 +102,46 @@ function onSplitDrop(e: DragEvent) {
   // itself; navigating there is what the click on that row does anyway.
   if (payload.channelId === activeChannelId.value) return
   openSplit(payload)
+}
+
+/**
+ * "Open beside", by finger.
+ *
+ * The split is set up by dragging a channel row onto the main area, which is a gesture a touch
+ * screen doesn't have — HTML5 drag-and-drop is a mouse feature, so on a phone the feature had
+ * no door at all. A long press on the same row is that door, and deliberately does the same one
+ * thing the drag does rather than raising a menu: the row already navigates on a tap, so the
+ * only other thing anyone wants from it is the second column.
+ *
+ * The handler bags are memoised per row. `useLongPress` keeps its own timer and "did it fire?"
+ * flag inside the bag it returns, and that flag is what swallows the click the browser
+ * synthesises afterwards — so a bag rebuilt between the press and its timer (an unread count
+ * ticking over mid-press is enough) would let the row navigate out from under the split it just
+ * opened. The payload is refreshed on every render instead, so a channel renamed while the app
+ * is open still docks under its new name.
+ */
+const splitPress = new Map<number, { bag: ReturnType<typeof useLongPress>, payload: SplitPane }>()
+function openBeside(payload: SplitPane) {
+  const existing = splitPress.get(payload.channelId)
+  if (existing) {
+    existing.payload = payload
+    return existing.bag
+  }
+  const entry = {
+    payload,
+    bag: useLongPress(() => {
+      const p = splitPress.get(payload.channelId)?.payload
+      // Splitting the channel you're already in would split the window between a thing and
+      // itself — the same rule the drop zone applies.
+      if (!p || p.channelId === activeChannelId.value) return
+      openSplit(p)
+      // No navigation happened, so the drawer's own route watcher won't close it — and the
+      // split it just opened is behind it.
+      closeDrawer()
+    }),
+  }
+  splitPress.set(payload.channelId, entry)
+  return entry.bag
 }
 
 /**
@@ -166,8 +210,9 @@ function startDividerDrag(e: PointerEvent) {
   target.addEventListener('pointercancel', up)
 }
 
-// A split needs two columns' worth of room. Below `md` there is one, so the dock is simply
-// not drawn — it isn't closed, so widening the window brings it back where you left it.
+// A split needs two columns' worth of room. Below `md` there is one, so the pane is drawn as a
+// second full-width page instead (see `pagerSplit`) — it's the same split either way, so
+// widening the window lays it back out as columns exactly where you left it.
 
 /**
  * The channel-type sections, in the order a server's tree draws them.
@@ -255,9 +300,9 @@ watch([expandedIds, servers, activeServerId], () => {
 // Running a server — creating one, adding channels, inviting people, approving the requests
 // that come back — now works on the phone too, so the sidebar no longer hides those doors from
 // the native builds. What is still withheld there (Side Spaces, the Side Desk) is withheld by
-// middleware/native-scope.global.ts. `isMobile` remains only for the floating-window shelf,
-// which wants a pointer and room to put things.
-const { isMobile } = usePlatform()
+// middleware/native-scope.global.ts. Nothing in this layout asks `usePlatform` any more: the
+// last holdout was the floating-window shelf, and the question it was really asking — "is there
+// room to arrange panels?" — is about the viewport, not the shell, so it's `narrow`'s business.
 const { narrow, open: drawerOpen, close: closeDrawer } = useNavDrawer()
 // ⌘K. Held by ref rather than a shared flag because the palette owns its own open state and
 // its own shortcut — the sidebar button is one more way in, not the way in.
@@ -617,10 +662,15 @@ onBeforeUnmount(() => { userStream.unsubscribe(); stopPresence() })
   <div class="safe-inset flex h-screen text-foreground">
     <!-- Narrow screens (phones, and a very small desktop window) can't hold the sidebar
          beside a conversation, so it lifts out into a drawer over the top of one. Same
-         markup either way — only its position, width and visibility differ. -->
+         markup either way — only its position, width and visibility differ.
+
+         Scrim and drawer sit at 45: above the floating shelf (40), whose docked music bar
+         would otherwise cover the account menu at the foot of the drawer, and below the
+         dialogs and menus at 50, which can be opened *from* the drawer. -->
+
     <div
       v-if="narrow && drawerOpen"
-      class="fixed inset-0 z-30 bg-black/40"
+      class="fixed inset-0 z-[45] bg-black/40"
       @click="closeDrawer"
     />
     <!-- `relative` belongs to the wide branch only. Tailwind emits `.relative` after `.fixed`
@@ -629,7 +679,7 @@ onBeforeUnmount(() => { userStream.unsubscribe(); stopPresence() })
     <aside
       class="flex flex-col border-r bg-sidebar transition-transform"
       :class="narrow
-        ? ['safe-inset fixed inset-y-0 left-0 z-40 w-[min(20rem,85vw)]', drawerOpen ? 'translate-x-0' : '-translate-x-full']
+        ? ['safe-inset fixed inset-y-0 left-0 z-[45] w-[min(20rem,85vw)]', drawerOpen ? 'translate-x-0' : '-translate-x-full']
         : 'relative shrink-0'"
       :style="narrow ? undefined : { width: `${sidebarWidth}px` }"
     >
@@ -693,6 +743,12 @@ onBeforeUnmount(() => { userStream.unsubscribe(); stopPresence() })
                   draggable="true"
                   class="mx-2 flex items-center gap-2 rounded px-2 py-1.5 text-sm hover:bg-muted"
                   @dragstart="writeDragPayload($event, {
+                    channelId: item.conversation.channel_id,
+                    title: chatTitle(item.conversation),
+                    type: 'text',
+                    path: `/chats/${item.conversation.id}`,
+                  })"
+                  v-on="openBeside({
                     channelId: item.conversation.channel_id,
                     title: chatTitle(item.conversation),
                     type: 'text',
@@ -894,14 +950,21 @@ onBeforeUnmount(() => { userStream.unsubscribe(); stopPresence() })
                 <!-- A channel inside the open server. -->
                 <div v-else-if="item.kind === 'channel'">
                   <div class="group/ch relative">
-                    <!-- Draggable onto the main area to open beside what you're reading.
-                         The link still navigates on a plain click; a drag is the other
-                         gesture the same row already invited. -->
+                    <!-- Draggable onto the main area to open beside what you're reading, or
+                         long-pressed to the same end where there is no drag to make. The link
+                         still navigates on a plain click; both are the other gesture the same
+                         row already invited. See `openBeside`. -->
                     <NuxtLink
                       :to="`/servers/${item.channel.server_id}/channels/${item.channel.id}`"
                       draggable="true"
                       class="mx-2 flex items-center gap-2 rounded py-1.5 pl-7 pr-2 text-sm hover:bg-muted"
                       @dragstart="writeDragPayload($event, {
+                        channelId: item.channel.id,
+                        title: item.channel.name,
+                        type: item.channel.type,
+                        path: `/servers/${item.channel.server_id}/channels/${item.channel.id}`,
+                      })"
+                      v-on="openBeside({
                         channelId: item.channel.id,
                         title: item.channel.name,
                         type: item.channel.type,
@@ -1105,19 +1168,44 @@ onBeforeUnmount(() => { userStream.unsubscribe(); stopPresence() })
 
       The drop zone is the whole main area, lit only while one of our channel drags is over
       it, so there's nothing to aim at until there's something to drop.
+
+      On a narrow screen the two panes stop being columns and become **pages**: the same two
+      children, laid out full-width in a horizontally snapping scroller you swipe between.
+      Two 190px columns is worse than one, but "this, while I watch that" is still the task —
+      it just becomes a flick rather than a glance. Only the presentation changes; the state
+      (`useSplitView`) is the same one the desktop divider drives, so a split set up on a
+      laptop is the pair of pages you swipe between on the phone.
     -->
     <div
       ref="splitArea"
       class="relative flex min-w-0 flex-1"
+      :class="pagerSplit && 'snap-x snap-mandatory overflow-x-auto overscroll-x-contain'"
       @dragover="onSplitDragOver"
       @dragleave="onSplitDragLeave"
       @drop="onSplitDrop"
     >
-      <main class="flex min-w-0 flex-1 flex-col">
+      <main
+        class="flex min-w-0 flex-col"
+        :class="pagerSplit ? 'snap-start' : 'flex-1'"
+        :style="pagerSplit ? { flex: '0 0 100%' } : undefined"
+      >
         <slot />
       </main>
 
-      <template v-if="pane && !narrow">
+      <!-- The docked conversation as the second page. No divider: there is no ratio to set
+           when each page is the whole screen. -->
+      <!-- `flex` by inline style for the same reason the docked pane sets it: SplitPane's own
+           root carries `flex-1`, and only a style beats it. -->
+      <SplitPane
+        v-if="pagerSplit"
+        :pane="pane!"
+        class="snap-start"
+        :style="{ flex: '0 0 100%' }"
+        @close="closeSplit"
+        @promote="promotePane"
+      />
+
+      <template v-else-if="pane">
         <!-- The divider. `select-none` because a drag that starts on a 5px strip otherwise
              ends up selecting the messages either side of it. -->
         <div
@@ -1168,9 +1256,9 @@ onBeforeUnmount(() => { userStream.unsubscribe(); stopPresence() })
          opened from: a video keeps playing, a chat keeps updating, and the pinned song follows
          you across channels, DMs, groups and servers. Music renders through the shelf now, so
          the old standalone MusicDock is gone. -->
-    <!-- Dragging windows around needs a pointer and room to put them, so the phone build
-         does without the shelf entirely. Desktop keeps it. -->
-    <FloatingWindows v-if="!isMobile" />
+    <!-- On a phone the shelf is still here; it's the chrome that changes — a bubble, a
+         full-screen sheet, or (for music) a bar docked along the bottom. See FloatingFrame. -->
+    <FloatingWindows />
 
     <!-- ⌘K. Mounted here, beside the shelf, for the same reason: it has to be reachable from
          every screen in the app, and the thing it navigates to is usually not the page it was

@@ -61,9 +61,15 @@ prints what it used before generating; check that line. `REVERB_KEY` must match 
 
 ### The API has to allow the app's origin
 
-A packaged app is not served from your web domain. Electron loads it from `app://side-chat`
-and Capacitor from `https://localhost` (Android) or `capacitor://localhost` (iOS), and those
-are the `Origin` headers the API sees. Until they're allowed, the browser engine blocks every
+A packaged app is not served from your web domain. Electron serves it from a loopback HTTP
+server at `http://127.0.0.1:43117` (and, only if that port is already taken, from the legacy
+`app://side-chat` scheme) and Capacitor from `https://localhost` (Android) or
+`capacitor://localhost` (iOS), and those are the `Origin` headers the API sees.
+
+The desktop app takes the loopback origin rather than `app://` because embedded players
+insist on it: the YouTube IFrame player won't start under an unknown scheme and the Spotify
+Web Playback SDK requires https-or-localhost, so under `app://` the music widget never made
+a sound. See the comment at the top of [desktop/main.js](desktop/main.js). Until they're allowed, the browser engine blocks every
 request before it leaves — which surfaces as "Unable to sign in. Please try again.", because
 the login POST never reaches Laravel at all.
 
@@ -71,15 +77,15 @@ Set `CORS_ALLOWED_ORIGINS` on the API (see [config/cors.php](backend/config/cors
 comma-separated list including all of them:
 
 ```
-CORS_ALLOWED_ORIGINS=https://your-web-app.example.com,app://side-chat,https://localhost,capacitor://localhost
+CORS_ALLOWED_ORIGINS=https://your-web-app.example.com,http://127.0.0.1:43117,app://side-chat,https://localhost,capacitor://localhost
 ```
 
 To check a deployed API from anywhere:
 
 ```bash
 curl -i -X OPTIONS https://api.example.com/api/auth/login \
-  -H 'Origin: app://side-chat' -H 'Access-Control-Request-Method: POST'
-# access-control-allow-origin must come back as app://side-chat
+  -H 'Origin: http://127.0.0.1:43117' -H 'Access-Control-Request-Method: POST'
+# access-control-allow-origin must come back as http://127.0.0.1:43117
 ```
 
 `make app-mobile` syncs into the native projects; open them in the platform IDE to run,

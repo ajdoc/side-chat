@@ -26,6 +26,9 @@ const {
   noiseSuppression,
   noiseSuppressionOptions,
   setNoiseSuppression,
+  suppressionStrength,
+  setSuppressionStrength,
+  suppressionStrengthRange,
   normalizeVolume,
   setNormalizeVolume,
   peers,
@@ -91,6 +94,18 @@ const selectedSpeaker = computed({
 const selectedSuppression = computed({
   get: () => noiseSuppression.value,
   set: (value: typeof noiseSuppression.value) => { void setNoiseSuppression(value) },
+})
+
+/**
+ * How the strength reads back to you. A bare "0.35" means nothing while you're deciding whether
+ * your fan is gone, so the number is a percentage and the word is what to expect from it.
+ */
+const strengthLabel = computed(() => {
+  const value = suppressionStrength.value
+  if (value < 0.2) return 'Gentle — takes the edge off, leaves your voice alone'
+  if (value < 0.45) return 'Balanced — steady noise goes, voice stays natural'
+  if (value < 0.75) return 'Strong — for a room with a fan or a road outside'
+  return 'Maximum — quietest background, and you will hear it on your voice'
 })
 
 const selectedResolution = computed({
@@ -197,6 +212,32 @@ const modeOptions = [
             Your mic is held quiet between words, so fans, keyboards and the rest of the room
             don't ride under your voice. Switch to Standard if you're playing or singing —
             this is tuned for speech and will chew on a held note.
+          </span>
+        </label>
+
+        <!-- How hard that cleanup works. Live: draggable mid-call, audible as you drag. -->
+        <label v-if="noiseSuppression === 'high'" class="block space-y-1">
+          <span class="flex items-center justify-between text-sm font-medium">
+            <span>Cleanup strength</span>
+            <span class="text-xs font-normal tabular-nums text-muted-foreground">
+              {{ Math.round(suppressionStrength * 100) }}%
+            </span>
+          </span>
+          <input
+            :value="suppressionStrength"
+            type="range"
+            :min="suppressionStrengthRange.min"
+            :max="suppressionStrengthRange.max"
+            :step="suppressionStrengthRange.step"
+            class="w-full cursor-pointer accent-primary"
+            @input="setSuppressionStrength(Number(($event.target as HTMLInputElement).value))"
+          >
+          <span class="block text-xs text-muted-foreground">
+            {{ strengthLabel }}
+          </span>
+          <span class="block text-xs text-muted-foreground">
+            Takes effect as you drag, even mid-call — talk while you move it and stop where your
+            room is gone but you still sound like yourself.
           </span>
         </label>
 

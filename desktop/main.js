@@ -2,16 +2,28 @@
 //
 // Three things here are load-bearing.
 //
-// 1. The bundle is served over a custom `app://` protocol rather than `file://`. Nuxt uses
-//    the History API for routing, and `file://` has no notion of a path that isn't a file —
-//    a deep link like /servers/3/channels/9 would 404 on reload. `app://` gives the SPA a
-//    real origin, which also makes localStorage, WebSockets and WebRTC behave normally.
+// 1. The bundle is served over **http on loopback**, not `file://` and not a custom scheme.
+//    Nuxt routes with the History API, so `file://` — which has no notion of a path that
+//    isn't a file — would 404 on a reload of /servers/3/channels/9. A custom `app://` scheme
+//    fixes that much and is still registered below as a fallback, but it is not good enough
+//    for the music widget: an embedded third party sees the embedder's origin, and the two
+//    engines the player runs on both refuse a scheme they don't recognise. YouTube's IFrame
+//    player won't start under an `app://` embedder and the Spotify Web Playback SDK requires
+//    https-or-localhost outright, so on the desktop build the music card sat there and never
+//    made a sound. `http://127.0.0.1` is a *potentially trustworthy* origin per the spec — a
+//    secure context, so getUserMedia, EME and service workers all still work — and it is the
+//    one origin every embeddable player already understands. The port is fixed so the origin
+//    is stable across launches; the origin is what localStorage (and therefore the auth
+//    token) hangs off.
 // 2. Media permission requests are answered here. Electron denies getUserMedia by default,
 //    which would silently break every voice channel.
 // 3. Screen sharing needs a source picker. Chromium's own picker isn't available to an
 //    Electron app, so `setDisplayMediaRequestHandler` supplies one.
 
 const { app, BrowserWindow, desktopCapturer, ipcMain, net, protocol, session, shell } = require('electron')
+const http = require('node:http')
+const fs = require('node:fs')
+const fsp = require('node:fs/promises')
 // Remote control is a bonus, never a reason the app won't open. The module itself already
 // tolerates its optional native dependency being absent, but a packaging slip that leaves the
 // file out entirely would otherwise throw here and take the whole shell down before it draws a
@@ -68,10 +80,27 @@ protocol.registerSchemesAsPrivileged([
   },
 ])
 
-app.whenReady().then(() => {
+// Two copies of the app would fight over the fixed port, and the loser would silently fall
+// back to `app://` — a different origin, so a second window logged out of the account the
+// first one is signed into. One instance; a second launch just raises the window we have.
+const gotLock = app.requestSingleInstanceLock()
+if (!gotLock) app.quit()
+
+/** Where the bundle is being served from, once the server is up. Set before any window opens. */
+let appOrigin = 'app://side-chat'
+
+app.on('second-instance', () => {
+  const win = BrowserWindow.getAllWindows()[0]
+  if (!win) return
+  if (win.isMinimized()) win.restore()
+  win.focus()
+})
+
+app.whenReady().then(async () => {
   const partition = session.defaultSession
 
   registerAppProtocol()
+  appOrigin = await startBundleServer()
   grantMediaPermissions(partition)
   provideScreenSources(partition)
   provideRemoteControl()
@@ -114,13 +143,117 @@ function createWindow() {
   // Anything that isn't the app itself belongs in the user's browser — an OAuth flow, a
   // link somebody posted. Spotify's link popup is the one exception the app opens itself.
   win.webContents.setWindowOpenHandler(({ url }) => {
-    if (url.startsWith('app://')) return { action: 'allow' }
+    if (url.startsWith('app://') || url.startsWith(appOrigin)) return { action: 'allow' }
     shell.openExternal(url)
     return { action: 'deny' }
   })
 
   if (DEV_URL) win.loadURL(DEV_URL)
-  else win.loadURL('app://side-chat/')
+  else win.loadURL(`${appOrigin}/`)
+}
+
+/**
+ * The fixed loopback port the bundle is served on.
+ *
+ * Fixed, not ephemeral, because the port is part of the origin and the origin is where the
+ * app's localStorage lives: a port that moved between launches would sign the user out every
+ * time they opened the app. Bound to 127.0.0.1 only, so nothing outside this machine can
+ * reach it.
+ */
+const BUNDLE_PORT = 43117
+
+const MIME = {
+  '.html': 'text/html; charset=utf-8',
+  '.js': 'text/javascript; charset=utf-8',
+  '.mjs': 'text/javascript; charset=utf-8',
+  '.css': 'text/css; charset=utf-8',
+  '.json': 'application/json; charset=utf-8',
+  '.webmanifest': 'application/manifest+json; charset=utf-8',
+  '.map': 'application/json; charset=utf-8',
+  '.txt': 'text/plain; charset=utf-8',
+  '.svg': 'image/svg+xml',
+  '.png': 'image/png',
+  '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
+  '.gif': 'image/gif',
+  '.webp': 'image/webp',
+  '.avif': 'image/avif',
+  '.ico': 'image/x-icon',
+  '.woff': 'font/woff',
+  '.woff2': 'font/woff2',
+  '.ttf': 'font/ttf',
+  '.wasm': 'application/wasm',
+  '.mp3': 'audio/mpeg',
+  '.ogg': 'audio/ogg',
+  '.webm': 'video/webm',
+  '.mp4': 'video/mp4',
+}
+
+/**
+ * Serve `desktop/web` over `http://127.0.0.1:<BUNDLE_PORT>`.
+ *
+ * Resolves to the origin to load. If the port can't be bound — something else on the machine
+ * has it — we fall back to the `app://` protocol rather than refusing to start: a desktop app
+ * whose music doesn't play is still much better than one that doesn't open.
+ */
+function startBundleServer() {
+  return new Promise((resolve) => {
+    const server = http.createServer(serveBundle)
+
+    server.once('error', (error) => {
+      console.error(`Could not serve the bundle on ${BUNDLE_PORT}, falling back to app://`, error)
+      resolve('app://side-chat')
+    })
+
+    server.listen(BUNDLE_PORT, '127.0.0.1', () => {
+      resolve(`http://127.0.0.1:${BUNDLE_PORT}`)
+    })
+
+    // Nothing should outlive the app; an unclosed listener keeps the process alive on quit.
+    app.once('will-quit', () => server.close())
+  })
+}
+
+/**
+ * One request against the bundle, with the SPA fallback that makes client-side routing work:
+ * any path that isn't a real file is the SPA's business, not a 404.
+ */
+async function serveBundle(req, res) {
+  if (req.method !== 'GET' && req.method !== 'HEAD') {
+    res.writeHead(405, { 'Allow': 'GET, HEAD' })
+    return res.end()
+  }
+
+  const { pathname } = new URL(req.url, `http://127.0.0.1:${BUNDLE_PORT}`)
+  const relative = decodeURIComponent(pathname).replace(/^\/+/, '')
+  const candidate = path.resolve(BUNDLE, relative)
+
+  // Refuse to serve anything outside the bundle, however the URL was spelled.
+  const withinBundle = candidate === BUNDLE || candidate.startsWith(BUNDLE + path.sep)
+  const target = withinBundle && relative && path.extname(relative)
+    ? candidate
+    : path.join(BUNDLE, 'index.html')
+
+  let stat
+  try {
+    stat = await fsp.stat(target)
+  } catch {
+    // A missing *asset* is a real 404; a missing index.html means a broken packaging job, and
+    // either way there is nothing useful to send.
+    res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' })
+    return res.end('Not found')
+  }
+
+  const type = MIME[path.extname(target).toLowerCase()] ?? 'application/octet-stream'
+  // The hashed `_nuxt` assets are immutable by construction; everything else (index.html
+  // above all) must be re-read, or an upgraded app would boot the previous build's HTML.
+  const cache = relative.startsWith('_nuxt/') ? 'public, max-age=31536000, immutable' : 'no-cache'
+  res.writeHead(200, { 'Content-Type': type, 'Content-Length': stat.size, 'Cache-Control': cache })
+  if (req.method === 'HEAD') return res.end()
+
+  fs.createReadStream(target)
+    .on('error', () => res.destroy())
+    .pipe(res)
 }
 
 /**

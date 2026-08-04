@@ -1,3 +1,4 @@
+import { useMediaQuery } from '@vueuse/core'
 import type { SideDeskSurfaceAppId, Widget } from '~/types'
 
 type WidgetType = Widget['type']
@@ -18,6 +19,16 @@ type WidgetType = Widget['type']
  * is *not* here: it keeps its own dedicated dock ({@link useMusicPin} / {@link MusicDock}),
  * whose listen-along and autoplay-restore behaviour is bespoke enough that folding it in would
  * cost more than it saves. A floating window is for everything else.
+ *
+ * ## On a phone
+ *
+ * The shelf used to be withheld from narrow screens entirely, which quietly broke the music
+ * pin: pinning still set the pin and stubbed the timeline card, but no shelf meant no player,
+ * so the music stopped and the card stayed dead across reloads. So the shelf now runs
+ * everywhere and it is the *chrome* that changes: {@link compact} says the viewport has no
+ * room to arrange panels on, and {@link FloatingFrame} answers with a bubble or a full-screen
+ * sheet — plus, for music, a docked bar — instead of a draggable, resizable window. The window
+ * *list* is identical either way, so geometry set on a desktop survives a visit on a phone.
  */
 
 export type FloatingWindowKind = 'widget' | 'conversation' | 'surface'
@@ -79,12 +90,23 @@ export interface FloatingSurfaceWindow extends FloatingWindowBase {
 export type FloatingWindow = FloatingWidgetWindow | FloatingConversationWindow | FloatingSurfaceWindow
 
 /** What {@link open} takes: the content, minus the geometry the shelf assigns itself. */
+/**
+ * Whether opening a window that is *already* on the shelf should also un-minimize it.
+ *
+ * True for anything a person just pressed — reopening a window you'd put away is how you get
+ * it back. False when the shelf is only re-establishing something it already had: the pinned
+ * song is re-pinned on every page load ({@link useMusicPin}'s `restore`), and without this
+ * that call reopened the window each time, so a player deliberately minimized came back
+ * uninvited on every launch — as a full-screen sheet, on a phone.
+ */
+type Reveal = { reveal?: boolean }
+
 export type OpenWidget = Pick<FloatingWidgetWindow, 'kind' | 'widgetId' | 'channelId' | 'widgetType' | 'title'>
-  & Partial<Pick<FloatingWidgetWindow, 'w' | 'h'>>
+  & Partial<Pick<FloatingWidgetWindow, 'w' | 'h'>> & Reveal
 export type OpenConversation = Pick<FloatingConversationWindow, 'kind' | 'channelId' | 'title' | 'icon'>
-  & Partial<Pick<FloatingConversationWindow, 'w' | 'h'>>
+  & Partial<Pick<FloatingConversationWindow, 'w' | 'h'>> & Reveal
 export type OpenSurface = Pick<FloatingSurfaceWindow, 'kind' | 'app' | 'basePath' | 'streamName' | 'canEdit' | 'title'>
-  & Partial<Pick<FloatingSurfaceWindow, 'w' | 'h'>>
+  & Partial<Pick<FloatingSurfaceWindow, 'w' | 'h'>> & Reveal
 
 const STORAGE_KEY = 'floating:windows'
 
@@ -118,6 +140,15 @@ const DEFAULT_SURFACE_SIZE = { w: 560, h: 480 }
 
 export function useFloatingWindows() {
   const windows = useState<FloatingWindow[]>(STORAGE_KEY, () => [])
+
+  /**
+   * No room to arrange panels — draw windows as bubbles and sheets instead.
+   *
+   * A viewport question, not a platform one, and deliberately the same breakpoint the sidebar
+   * becomes a drawer at (see useNavDrawer): the two are the same judgement about the same
+   * screen, and a window shelf floating over a drawer-width layout was never the intent.
+   */
+  const compact = useMediaQuery('(max-width: 767px)')
 
   /** Save the shelf, geometry and all, so it comes back after a reload. Client-only. */
   function persist() {
@@ -171,7 +202,11 @@ export function useFloatingWindows() {
   function open(spec: OpenWidget): FloatingWidgetWindow
   function open(spec: OpenConversation): FloatingConversationWindow
   function open(spec: OpenSurface): FloatingSurfaceWindow
-  function open(spec: OpenWidget | OpenConversation | OpenSurface): FloatingWindow {
+  function open(input: OpenWidget | OpenConversation | OpenSurface): FloatingWindow {
+    // Split off rather than spread into the window: `reveal` is an instruction to this call,
+    // not a property of the window, and letting it through would persist it into storage.
+    const { reveal = true, ...spec } = input as (OpenWidget | OpenConversation | OpenSurface) & Reveal
+
     // A widget floats at most once (its state is shared anyway); a conversation likewise, and a
     // surface app once per surface. Reopen just brings the existing window forward rather than
     // stacking a duplicate on top of it.
@@ -182,8 +217,11 @@ export function useFloatingWindows() {
         : `conversation:${spec.channelId}`
     const existing = windows.value.find(w => w.id === id)
     if (existing) {
-      existing.collapsed = false
-      focus(id)
+      if (reveal) {
+        existing.collapsed = false
+        focus(id)
+        persist()
+      }
       return existing
     }
 
@@ -216,7 +254,10 @@ export function useFloatingWindows() {
       y,
       w,
       h,
-      collapsed: false,
+      // Pinning a song on a phone should hand you a bar above the keyboard, not a sheet over
+      // the conversation you were reading — the pin's promise is that the music follows you
+      // *while you carry on*. Everything else was popped out to be looked at, so it opens.
+      collapsed: compact.value && spec.kind === 'widget' && spec.widgetType === 'music',
     } as FloatingWindow
 
     windows.value = [...windows.value, win]
@@ -246,5 +287,5 @@ export function useFloatingWindows() {
   const isSurfaceFloating = (basePath: string, app: string) =>
     windows.value.some(w => w.kind === 'surface' && w.basePath === basePath && w.app === app)
 
-  return { windows, hydrate, persist, open, close, update, focus, isWidgetFloating, isConversationFloating, isSurfaceFloating }
+  return { windows, compact, hydrate, persist, open, close, update, focus, isWidgetFloating, isConversationFloating, isSurfaceFloating }
 }

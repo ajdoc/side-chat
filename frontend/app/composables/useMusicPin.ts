@@ -80,7 +80,12 @@ export function useMusicPin() {
 
   const floating = useFloatingWindows()
 
-  function pin(w: Widget) {
+  /**
+   * @param reveal Whether an already-open player window should also be un-minimized. False for
+   *   {@link restore}, which re-pins on every page load and would otherwise reopen a player the
+   *   listener had deliberately put away — see the note on `Reveal` in useFloatingWindows.
+   */
+  function pin(w: Widget, reveal = true) {
     widget.value = w
     savedId.value = w.id
     listen(w.channel_id)
@@ -89,7 +94,7 @@ export function useMusicPin() {
     // pin: the sound follows you across channels, DMs, groups and servers. Music keeps its own
     // brain here (this composable) rather than the generic widget path, because its Spotify /
     // YouTube / listen-along machinery is bespoke; the shelf just gives it a frame.
-    floating.open({ kind: 'widget', widgetType: 'music', widgetId: w.id, channelId: w.channel_id, title: 'Music' })
+    floating.open({ kind: 'widget', widgetType: 'music', widgetId: w.id, channelId: w.channel_id, title: 'Music', reveal })
   }
 
   /**
@@ -127,7 +132,8 @@ export function useMusicPin() {
   async function restore() {
     if (widget.value || !savedId.value) return
     const w = await fetchWidget(savedId.value)
-    if (w) pin(w)
+    // Re-establishing, not opening: a window put away before the reload stays away.
+    if (w) pin(w, false)
     else savedId.value = 0
   }
 

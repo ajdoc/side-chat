@@ -7,6 +7,11 @@ import type { FloatingWindow } from '~/composables/useFloatingWindows'
  * — like the dock — every window it holds lives outside the routed page and survives navigation.
  * That's the whole point: a floated video keeps playing and a floated chat keeps updating while
  * you move around. Content is dispatched by kind; the chrome is shared ({@link FloatingFrame}).
+ *
+ * Rendered on every screen size, phones included. It used to be withheld below `md`, which had
+ * the side effect of breaking the music pin outright there — pinning stubbed the timeline card
+ * and set the pin, but with no shelf there was no player, so the song stopped and the card
+ * stayed a stub across reloads. The frame adapts instead: see {@link FloatingFrame}.
  */
 const { windows, hydrate } = useFloatingWindows()
 const { restore: restorePinnedMusic } = useMusicPin()
@@ -52,6 +57,12 @@ onMounted(() => {
         <!-- The face of the minimized bubble: just the window's icon. -->
         <template #bubble>
           <component :is="iconFor(w)" class="h-5 w-5" />
+        </template>
+
+        <!-- The face of the compact music bar. Asked for by the frame only when it's actually
+             wearing that shape, so nothing else pays for it. -->
+        <template v-if="w.kind === 'widget' && w.widgetType === 'music'" #bar="{ open }">
+          <FloatingMusicBar :open="open" />
         </template>
 
         <FloatingMusicContent v-if="w.kind === 'widget' && w.widgetType === 'music'" :win="w" />

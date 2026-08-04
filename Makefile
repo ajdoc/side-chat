@@ -237,6 +237,9 @@ app-apk: ## Build an Android APK → mobile/dist (Windows SDK + JDK)
 ICONS := frontend/.icons
 ANDROID_RES := mobile/android/app/src/main/res
 
+verify-mic: ## Measure the mic noise suppressor (dB of noise removed vs dB of speech lost)
+	$(COMPOSE) exec -T frontend node /app/scripts/verify-mic-suppression.mjs
+
 icons: ## Regenerate every app icon from frontend/public/brand/icon-source.png
 	$(COMPOSE) exec -T frontend sh -c 'npm i --no-save --silent --prefix /tmp/imgtool sharp && node /app/scripts/gen-icons.mjs'
 	@# The container only has frontend/ mounted, so the desktop and mobile shells are served
