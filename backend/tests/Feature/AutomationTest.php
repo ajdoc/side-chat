@@ -101,6 +101,79 @@ it('filters on conditions', function () {
     expect(fireTrigger($server, TriggerRegistry::MESSAGE_CREATED, ['body' => 'good morning']))->toBe(0);
 });
 
+it('requires every filter under “all”, and any one under “any”', function () {
+    Queue::fake();
+    [, $server] = ownerWithServer();
+
+    $conditions = [
+        ['field' => 'user_name', 'operator' => 'equals', 'value' => 'Ada'],
+        ['field' => 'user_email', 'operator' => 'contains', 'value' => 'example.com'],
+    ];
+
+    $all = automationOn($server, TriggerRegistry::MEMBER_JOINED, [['post_message', ['body' => 'hi']]], [
+        'conditions' => $conditions,
+        'condition_match' => 'all',
+    ]);
+    $any = automationOn($server, TriggerRegistry::MEMBER_JOINED, [['post_message', ['body' => 'hi']]], [
+        'conditions' => $conditions,
+        'condition_match' => 'any',
+    ]);
+
+    // Only the second holds: "all" rejects, "any" accepts. Both rules see the same event, so
+    // exactly one of them should be queued.
+    expect(fireTrigger($server, TriggerRegistry::MEMBER_JOINED, [
+        'user_name' => 'Grace',
+        'user_email' => 'grace@example.com',
+    ]))->toBe(1);
+
+    Queue::assertPushed(RunAutomation::class, fn (RunAutomation $job) => $job->automationId === $any->id);
+    Queue::assertNotPushed(RunAutomation::class, fn (RunAutomation $job) => $job->automationId === $all->id);
+
+    // Neither holds — "any" refuses too, so it isn't just "always true".
+    expect(fireTrigger($server, TriggerRegistry::MEMBER_JOINED, [
+        'user_name' => 'Grace',
+        'user_email' => 'grace@elsewhere.test',
+    ]))->toBe(0);
+});
+
+it('runs an unfiltered rule whichever way it is set to match', function () {
+    Queue::fake();
+    [, $server] = ownerWithServer();
+
+    // "Any of nothing" is false under a strict reading, and that reading would mean deleting
+    // your last filter silently switched the rule off.
+    automationOn($server, TriggerRegistry::MEMBER_JOINED, [['post_message', ['body' => 'hi']]], [
+        'condition_match' => 'any',
+    ]);
+
+    expect(fireTrigger($server, TriggerRegistry::MEMBER_JOINED, ['user_id' => 1]))->toBe(1);
+});
+
+it('defaults a rule to “all”, and round-trips the choice', function () {
+    [$owner, $server, $channel] = ownerWithChannel();
+    Passport::actingAs($owner);
+
+    $payload = [
+        'name' => 'Either name',
+        'trigger' => TriggerRegistry::MEMBER_JOINED,
+        'conditions' => [
+            ['field' => 'user_name', 'operator' => 'equals', 'value' => 'Ada'],
+            ['field' => 'user_name', 'operator' => 'equals', 'value' => 'Grace'],
+        ],
+        'actions' => [['type' => 'post_message', 'config' => ['channel_id' => $channel->id, 'body' => 'hi']]],
+    ];
+
+    // Existing rules never sent this field and have always meant "all" — so that's the default.
+    $this->postJson("/api/servers/{$server->id}/automations", $payload)
+        ->assertCreated()->assertJsonPath('data.condition_match', 'all');
+
+    $this->postJson("/api/servers/{$server->id}/automations", [...$payload, 'condition_match' => 'any'])
+        ->assertCreated()->assertJsonPath('data.condition_match', 'any');
+
+    $this->postJson("/api/servers/{$server->id}/automations", [...$payload, 'condition_match' => 'maybe'])
+        ->assertStatus(422)->assertJsonValidationErrors('condition_match');
+});
+
 it('stops fanning out once rules have caused each other too many times', function () {
     Queue::fake();
     [, $server] = ownerWithServer();

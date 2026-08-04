@@ -176,10 +176,18 @@ A rule has three parts:
 | A schedule ran | One of your recurring posts came due |
 | Badge granted | A member is given a badge, by rule or by hand |
 
-**Only when** — optional filters, e.g. *body contains "deploy"*. All of them must be true.
-For "either / or", make it two rules — the filter language deliberately has no `OR`, because
-the moment it grows one it needs parentheses, a parser, and error messages nobody wants to
-write.
+**Only when** — optional filters, e.g. *body contains "deploy"*.
+
+With more than one filter you choose how they combine:
+
+- **all of these are true** — every filter must hold. This is the default, and what a rule
+  with no choice recorded has always meant.
+- **any of these are true** — one is enough. Use it for "either of these two names".
+
+That's one choice per rule, not a nested expression: there's no way to write
+*(A and B) or C*. If you genuinely need that, it's two rules. A rule with **no** filters runs
+every time whichever setting it's on — deleting your last filter never quietly switches a rule
+off.
 
 **Do** — one or more steps, in order:
 

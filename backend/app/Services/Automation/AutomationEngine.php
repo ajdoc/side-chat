@@ -65,7 +65,7 @@ final class AutomationEngine
         $queued = 0;
 
         foreach (Automation::listeningFor($context->serverId, $context->trigger)->get() as $automation) {
-            if (! $this->conditions->passes($automation->conditions, $context)) {
+            if (! $this->conditions->passes($automation->conditions, $context, $automation->condition_match)) {
                 continue;
             }
 

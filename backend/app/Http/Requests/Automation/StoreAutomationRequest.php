@@ -32,6 +32,9 @@ class StoreAutomationRequest extends ServerStaffRequest
             'trigger_config' => ['nullable', 'array'],
             'enabled' => ['sometimes', 'boolean'],
 
+            // Whether the filters below are ANDed or ORed. One connective per rule — see
+            // ConditionEvaluator for why there's no nesting.
+            'condition_match' => ['sometimes', Rule::in(ConditionEvaluator::MATCHES)],
             'conditions' => ['nullable', 'array', 'max:10'],
             'conditions.*.field' => ['required', 'string', 'max:64'],
             'conditions.*.operator' => ['required', Rule::in(array_keys(ConditionEvaluator::OPERATORS))],

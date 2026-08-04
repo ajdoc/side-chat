@@ -13,7 +13,8 @@ use Illuminate\Database\Eloquent\Relations\HasMany;
 class Automation extends Model
 {
     protected $fillable = [
-        'server_id', 'name', 'trigger', 'trigger_config', 'conditions', 'enabled', 'builtin',
+        'server_id', 'name', 'trigger', 'trigger_config', 'conditions', 'condition_match',
+        'enabled', 'builtin',
     ];
 
     protected function casts(): array

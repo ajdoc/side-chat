@@ -276,7 +276,7 @@ const sections: { id: Section, label: string, icon: any }[] = [
 ]
 
 function newAutomation() {
-  editing.value = { name: '', trigger: '', conditions: [], actions: [], enabled: true }
+  editing.value = { name: '', trigger: '', conditions: [], condition_match: 'all', actions: [], enabled: true }
 }
 
 function edit(automation: Automation) {
@@ -793,7 +793,10 @@ const outcomeClass = {
                 <div class="mt-1 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
                   <span class="rounded bg-primary/10 px-1.5 py-0.5 text-primary">{{ triggerLabel(automation.trigger) }}</span>
                   <span>{{ automation.actions.length }} step{{ automation.actions.length === 1 ? '' : 's' }}</span>
-                  <span v-if="automation.conditions.length">{{ automation.conditions.length }} filter{{ automation.conditions.length === 1 ? '' : 's' }}</span>
+                  <span v-if="automation.conditions.length">
+                    {{ automation.conditions.length }} filter{{ automation.conditions.length === 1 ? '' : 's' }}
+                    <template v-if="automation.conditions.length > 1">({{ automation.condition_match === 'any' ? 'any' : 'all' }})</template>
+                  </span>
                   <!-- "Has it ever fired" is the first question anybody debugging asks. -->
                   <span>{{ automation.run_count ? `ran ${automation.run_count}×` : 'never run' }}</span>
                 </div>

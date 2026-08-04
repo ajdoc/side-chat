@@ -80,6 +80,10 @@ class BotDashboardController extends Controller
                 ->map(fn (array $trigger, string $name) => ['name' => $name] + $trigger)
                 ->values(),
             'actions' => $actions->catalogue(),
+            'condition_matches' => [
+                ['name' => ConditionEvaluator::MATCH_ALL, 'label' => 'all of these are true'],
+                ['name' => ConditionEvaluator::MATCH_ANY, 'label' => 'any of these are true'],
+            ],
             'operators' => collect(ConditionEvaluator::OPERATORS)
                 ->map(fn (string $label, string $name) => ['name' => $name, 'label' => $label])
                 ->values(),

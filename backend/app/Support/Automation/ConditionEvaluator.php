@@ -7,11 +7,14 @@ use Illuminate\Support\Str;
 /**
  * "Only when…" — the filter between a trigger firing and a rule running.
  *
- * A flat list of `{field, operator, value}` predicates, ANDed together. That is the whole
- * language, and the smallness is the design: the moment this grows grouping and OR it needs
- * a parser, an editor that can express a tree, and an error message for a rule that is
- * syntactically fine but means nothing. Anything that genuinely wants OR is two rules, which
- * is also easier to read on the dashboard.
+ * A flat list of `{field, operator, value}` predicates, joined by **one** connective chosen
+ * per rule: all of them must hold, or any one of them will do.
+ *
+ * One connective, not an expression tree. Grouping and precedence are what would need a
+ * parser, an editor that can draw a tree, and an error message for a rule that is
+ * syntactically fine but means nothing — this needs none of those, and it covers the case
+ * that actually comes up ("either of these two names"). Anything genuinely needing nested
+ * logic is still two rules.
  *
  * Unknown fields evaluate as null rather than throwing. A trigger's context varies by what
  * fired it, and a rule that mentions a field this particular event didn't carry has simply
@@ -39,31 +42,61 @@ final class ConditionEvaluator
         'is_not_empty' => 'is not empty',
     ];
 
+    /** Every filter must hold. */
+    public const MATCH_ALL = 'all';
+
+    /** Any one of them is enough. */
+    public const MATCH_ANY = 'any';
+
+    public const MATCHES = [self::MATCH_ALL, self::MATCH_ANY];
+
     /**
-     * Does every condition hold?
+     * Do this rule's conditions hold?
      *
-     * No conditions means yes — an unfiltered rule runs on every occurrence of its trigger,
-     * which is what "when someone joins, greet them" should mean without further ceremony.
+     * No conditions means yes, whichever connective is set — an unfiltered rule runs on every
+     * occurrence of its trigger, which is what "when someone joins, greet them" should mean
+     * without further ceremony. (Note that `any` of an empty list would be *false* under a
+     * strict reading; that reading would make deleting your last filter silently switch the
+     * rule off, so it isn't the one used.)
      *
      * @param  array<int, array<string, mixed>>|null  $conditions
      */
-    public function passes(?array $conditions, AutomationContext $context): bool
+    public function passes(?array $conditions, AutomationContext $context, string $match = self::MATCH_ALL): bool
     {
-        foreach ($conditions ?? [] as $condition) {
+        $conditions = array_values($conditions ?? []);
+
+        if ($conditions === []) {
+            return true;
+        }
+
+        $any = $match === self::MATCH_ANY;
+
+        foreach ($conditions as $condition) {
             if (! is_array($condition) || ! isset($condition['field'], $condition['operator'])) {
                 // A malformed row is not a licence to run: a rule whose filter we can't read
-                // has not been shown to apply.
+                // has not been shown to apply. Under `any` it's simply not the one that
+                // matched, so it's skipped rather than failing the whole rule.
+                if ($any) {
+                    continue;
+                }
+
                 return false;
             }
 
-            $actual = $context->get((string) $condition['field']);
+            $held = $this->test(
+                (string) $condition['operator'],
+                $context->get((string) $condition['field']),
+                $condition['value'] ?? null,
+            );
 
-            if (! $this->test((string) $condition['operator'], $actual, $condition['value'] ?? null)) {
-                return false;
+            // Short-circuit either way: the first hit settles `any`, the first miss settles
+            // `all`.
+            if ($held === $any) {
+                return $any;
             }
         }
 
-        return true;
+        return ! $any;
     }
 
     private function test(string $operator, mixed $actual, mixed $expected): bool

@@ -1058,6 +1058,8 @@ export interface Automation {
   trigger: string
   trigger_config: Record<string, unknown>
   conditions: AutomationCondition[]
+  /** Whether every filter must hold ('all') or just one of them ('any'). */
+  condition_match: 'all' | 'any'
   enabled: boolean
   /**
    * Set for the rules that have a dashboard page of their own (the welcome message, a
@@ -1094,6 +1096,7 @@ export interface AutomationCatalogue {
   triggers: { name: string, label: string, description: string, fields: string[] }[]
   actions: { name: string, label: string, schema: AutomationFieldSchema[] }[]
   operators: { name: string, label: string }[]
+  condition_matches: { name: string, label: string }[]
   /**
    * The pickers an action's schema can name, sent alongside so the builder never has to
    * know which field types imply an extra request.

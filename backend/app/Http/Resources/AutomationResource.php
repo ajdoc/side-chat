@@ -24,6 +24,8 @@ class AutomationResource extends JsonResource
             'trigger' => $this->trigger,
             'trigger_config' => $this->trigger_config ?? [],
             'conditions' => $this->conditions ?? [],
+            // 'all' | 'any' — whether every filter must hold or just one of them.
+            'condition_match' => $this->condition_match ?? 'all',
             'enabled' => (bool) $this->enabled,
             // Set for the rules that have a dashboard page of their own — the welcome
             // message, a reaction role. The generic list hides these; the feature page

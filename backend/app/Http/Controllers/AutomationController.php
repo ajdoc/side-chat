@@ -9,6 +9,7 @@ use App\Models\Automation;
 use App\Models\Server;
 use App\Services\Automation\AutomationEngine;
 use App\Support\Automation\AutomationContext;
+use App\Support\Automation\ConditionEvaluator;
 use App\Support\Automation\Subject;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Resources\Json\AnonymousResourceCollection;
@@ -118,6 +119,7 @@ class AutomationController extends Controller
                 'trigger' => $data['trigger'],
                 'trigger_config' => $data['trigger_config'] ?? null,
                 'conditions' => $data['conditions'] ?? null,
+                'condition_match' => $data['condition_match'] ?? ConditionEvaluator::MATCH_ALL,
                 'enabled' => $data['enabled'] ?? true,
             ])->save();
 

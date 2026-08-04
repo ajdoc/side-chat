@@ -96,6 +96,10 @@ function move(index: number, by: number) {
 }
 
 function addCondition() {
+  // Default the connective the first time a second filter appears, so it's never undefined
+  // on the way to the server.
+  if (draft.value.condition_match === undefined) patch({ condition_match: 'all' })
+
   const field = conditionFields.value[0] ?? ''
   const operator = props.catalogue.operators[0]?.name ?? 'equals'
   patch({ conditions: [...(draft.value.conditions ?? []), { field, operator, value: '' }] })
@@ -175,9 +179,21 @@ function insertPlaceholder(index: number, key: string, token: string, el: HTMLTe
     <!-- Only when. Hidden until asked for: most rules have no filter, and an empty box
          makes a simple rule look like it needs one. -->
     <div v-if="draft.trigger">
-      <div class="mb-1 flex items-center justify-between">
-        <label class="text-xs font-medium uppercase tracking-wide text-muted-foreground">Only when</label>
-        <button class="text-xs text-muted-foreground hover:text-foreground" @click="addCondition">
+      <div class="mb-1 flex items-center justify-between gap-2">
+        <div class="flex min-w-0 items-center gap-1.5">
+          <label class="text-xs font-medium uppercase tracking-wide text-muted-foreground">Only when</label>
+          <!-- Shown only once there's more than one filter: with a single filter "all" and
+               "any" mean the same thing, and offering the choice would imply otherwise. -->
+          <select
+            v-if="(draft.conditions ?? []).length > 1"
+            class="rounded border bg-background px-1.5 py-0.5 text-xs"
+            :value="draft.condition_match ?? 'all'"
+            @change="patch({ condition_match: ($event.target as HTMLSelectElement).value as 'all' | 'any' })"
+          >
+            <option v-for="m in catalogue.condition_matches" :key="m.name" :value="m.name">{{ m.label }}</option>
+          </select>
+        </div>
+        <button class="shrink-0 text-xs text-muted-foreground hover:text-foreground" @click="addCondition">
           <Plus class="mr-0.5 inline h-3 w-3" />Add a filter
         </button>
       </div>
@@ -212,7 +228,9 @@ function insertPlaceholder(index: number, key: string, token: string, el: HTMLTe
         </button>
       </div>
       <p v-if="(draft.conditions ?? []).length > 1" class="mt-1 text-xs text-muted-foreground">
-        All of these must be true. For “either / or”, make it two rules.
+        {{ (draft.condition_match ?? 'all') === 'any'
+          ? 'Any one of these is enough for the rule to run.'
+          : 'Every one of these must be true for the rule to run.' }}
       </p>
     </div>
 

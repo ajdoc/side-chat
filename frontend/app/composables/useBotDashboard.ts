@@ -103,6 +103,7 @@ export function useBotDashboard(serverId: number) {
       trigger: draft.trigger,
       trigger_config: draft.trigger_config ?? {},
       conditions: draft.conditions ?? [],
+      condition_match: draft.condition_match ?? 'all',
       enabled: draft.enabled ?? true,
       actions: (draft.actions ?? []).map(a => ({ type: a.type, config: a.config ?? {} })),
     }
