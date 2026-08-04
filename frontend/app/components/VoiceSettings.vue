@@ -23,6 +23,9 @@ const {
   outputDevices,
   micId,
   speakerId,
+  noiseSuppression,
+  noiseSuppressionOptions,
+  setNoiseSuppression,
   screenResolution,
   screenMode,
   canPickSpeaker,
@@ -69,6 +72,11 @@ const selectedMic = computed({
 const selectedSpeaker = computed({
   get: () => speakerId.value ?? '',
   set: (deviceId: string) => { if (deviceId) void setSpeaker(deviceId) },
+})
+
+const selectedSuppression = computed({
+  get: () => noiseSuppression.value,
+  set: (value: typeof noiseSuppression.value) => { void setNoiseSuppression(value) },
 })
 
 const selectedResolution = computed({
@@ -147,6 +155,24 @@ const modeOptions = [
             Your browser plays the call through the system default output — it doesn't allow
             choosing a speaker here. (Chrome and Edge do.)
           </p>
+        </label>
+
+        <!-- Noise suppression -->
+        <label class="block space-y-1">
+          <span class="text-sm font-medium">Noise suppression</span>
+          <select
+            v-model="selectedSuppression"
+            class="h-9 w-full rounded-md border bg-background px-2 text-sm"
+          >
+            <option v-for="o in noiseSuppressionOptions" :key="o.value" :value="o.value">
+              {{ o.label }} — {{ o.hint }}
+            </option>
+          </select>
+          <span v-if="noiseSuppression === 'high'" class="block text-xs text-muted-foreground">
+            Your mic is held quiet between words, so fans, keyboards and the rest of the room
+            don't ride under your voice. Switch to Standard if you're playing or singing —
+            this is tuned for speech and will chew on a held note.
+          </span>
         </label>
 
         <!-- Push to talk -->

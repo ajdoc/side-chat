@@ -54,6 +54,8 @@ const route = useRoute()
 const { servers, hasMore: hasMoreServers, fetchServers, loadMore: loadMoreServers, renameServer, deleteServer, leaveServer } = useServers()
 const { server, channels, openServer, loadMoreChannels, renameChannel, deleteChannel, patchServer } = useServer()
 const { conversations, hasMore: hasMoreChats, fetchConversations, loadMore: loadMoreChats } = useConversations()
+// Only the incoming half is a badge — a request you sent is not news you need chasing.
+const { incoming: incomingFriends, load: loadFriends } = useFriends()
 const { user, logout, updateProfile } = useAuth()
 const { hasDraft } = useDrafts()
 // People in a voice channel show under whatever they're called in this server.
@@ -278,6 +280,13 @@ const pendingCount = computed(() => joinRequests.value.length)
  */
 const rows = computed(() => {
   const list: any[] = []
+
+  // --- Friends ---
+  //
+  // Above the sections rather than inside one: it isn't a place you can open, it's the
+  // roster the places are made of, and it's where a pending request has to be visible from
+  // wherever you happen to be standing.
+  list.push({ id: 'friends', kind: 'friends' })
 
   // --- Chats ---
   list.push({ id: 'h-chats', kind: 'section', label: 'Chats', section: 'chats', open: chatsOpen.value })
@@ -589,7 +598,10 @@ onMounted(async () => {
   // the sidebar badge still does its job.
   ensureNotifyPermission()
 
-  await Promise.all([fetchServers(), fetchConversations()])
+  // Friends load with the sidebar, not with the friends page: the badge on the row is the
+  // whole reason you'd click it, and a badge that only appears once you're already there
+  // isn't one.
+  await Promise.all([fetchServers(), fetchConversations(), loadFriends()])
   await syncServer()
 })
 
@@ -732,6 +744,21 @@ onBeforeUnmount(() => { userStream.unsubscribe(); stopPresence() })
                     :class="item.conversation.mention ? 'ring-2 ring-primary/30' : ''"
                     :title="item.conversation.mention ? 'You were mentioned' : `${item.conversation.unread_count} unread`"
                   ><span v-if="item.conversation.mention" aria-hidden="true">@</span>{{ item.conversation.unread_count > 99 ? '99+' : item.conversation.unread_count }}</span>
+                </NuxtLink>
+
+                <NuxtLink
+                  v-else-if="item.kind === 'friends'"
+                  to="/friends"
+                  class="mx-2 flex w-[calc(100%-1rem)] items-center gap-2 rounded px-2 py-1.5 text-sm transition hover:bg-muted"
+                  :class="route.path === '/friends' ? 'bg-muted font-semibold text-foreground' : 'text-muted-foreground hover:text-foreground'"
+                >
+                  <Users class="h-4 w-4 shrink-0" />
+                  Friends
+                  <span
+                    v-if="incomingFriends.length"
+                    class="ml-auto shrink-0 rounded-full bg-primary px-1.5 py-0.5 text-[10px] font-semibold tabular-nums text-primary-foreground"
+                    :title="`${incomingFriends.length} friend request${incomingFriends.length === 1 ? '' : 's'}`"
+                  >{{ incomingFriends.length > 99 ? '99+' : incomingFriends.length }}</span>
                 </NuxtLink>
 
                 <button

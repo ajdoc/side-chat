@@ -1256,6 +1256,37 @@ export interface ServerJoinRequest {
   created_at: string
 }
 
+export type FriendshipStatus = 'pending' | 'accepted' | 'blocked'
+
+/**
+ * A tie between you and one other person, as *you* see it.
+ *
+ * The server stores one row per pair, so `user` is always the other one and `direction` is
+ * always relative to whoever asked — the same row reads "you asked Ben" on his friend list
+ * and "Ana asked you" on yours. See FriendshipResource.
+ */
+export interface Friendship {
+  id: number
+  status: FriendshipStatus
+  /** 'incoming' — they asked, you may accept. 'outgoing' — you asked, you may only cancel. */
+  direction: 'incoming' | 'outgoing'
+  user: User
+  created_at: string
+  updated_at: string
+}
+
+/** What FriendshipUpdated puts on your personal stream — both sides, so either can read it. */
+export interface FriendshipEvent {
+  id: number
+  status: FriendshipStatus
+  requester_id: number
+  addressee_id: number
+  requester: User
+  addressee: User
+  created_at: string
+  updated_at: string
+}
+
 export interface InvitePreview {
   server: { id: number, name: string, members_count: number }
   status: 'none' | 'pending' | 'member'

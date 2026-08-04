@@ -1,4 +1,4 @@
-import type { Conversation, IncomingCall, User } from '~/types'
+import type { Conversation, FriendshipEvent, IncomingCall, User } from '~/types'
 import { useDesktopNotifications } from '~/composables/useDesktopNotifications'
 
 /**
@@ -24,6 +24,7 @@ export function useUserStream() {
   const { incoming, ringingFor, stopRinging } = useCall()
   const { notify } = useDesktopNotifications()
   const { channelId: callChannelId, disconnect, disconnectedByModerator, mutedByModerator } = useVoice()
+  const { applyEvent: applyFriendship, removeEvent: removeFriendship } = useFriends()
 
   const subscribed = useState<number | null>('user-stream:id', () => null)
 
@@ -94,6 +95,18 @@ export function useUserStream() {
             })
           }
         }
+      })
+
+      // --- friends ---
+      //
+      // Somebody asked to be your friend, answered the request you sent, or blocked you.
+      // Same road as a DM and for the same reason: you are not subscribed to them, and the
+      // request has to arrive on whatever screen you're actually looking at.
+      .listen('.FriendshipUpdated', (event: FriendshipEvent) => {
+        applyFriendship(event)
+      })
+      .listen('.FriendshipRemoved', (p: { id: number, requester_id: number, addressee_id: number }) => {
+        removeFriendship(p)
       })
 
       // --- the ringing phone ---

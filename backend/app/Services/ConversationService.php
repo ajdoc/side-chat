@@ -12,7 +12,10 @@ final class ConversationService
 {
     public const PER_PAGE = 200;
 
-    public function __construct(private readonly ReadReceiptService $reads) {}
+    public function __construct(
+        private readonly ReadReceiptService $reads,
+        private readonly FriendService $friends,
+    ) {}
 
     /**
      * The Chats section of the sidebar: every DM and group chat this user is in, each with
@@ -45,24 +48,33 @@ final class ConversationService
     }
 
     /**
-     * People this user is allowed to start a chat with: anyone they share a server with.
+     * People this user is allowed to start a chat with: their friends, and anyone they
+     * share a server with.
      *
      * The rule is the point. Without it, "search users" is a directory of every account on
      * the instance and a DM is a message anyone can put in front of anyone — which is spam,
      * and which no amount of blocking afterwards really undoes. Sharing a server is the
      * weakest thing that still means "we have somewhere in common", and it's already how
-     * you'd have met.
+     * you'd have met. Friends are the strongest form of the same thing, so they're in here
+     * too — and stay in it once you've left the server you met in. Blocks come straight
+     * back out, either direction.
      *
      * @return Collection<int, User>
      */
     public function contactsFor(User $user, ?string $query = null, int $limit = 20): Collection
     {
+        $friendIds = $this->friends->friendIds($user);
+        $blockedIds = $this->friends->blockedIdsEitherWay($user);
+
         return User::query()
             ->whereKeyNot($user->getKey())
-            ->whereHas('servers', fn ($servers) => $servers->whereIn(
-                'servers.id',
-                $user->servers()->select('servers.id'),
-            ))
+            ->where(fn ($reachable) => $reachable
+                ->whereHas('servers', fn ($servers) => $servers->whereIn(
+                    'servers.id',
+                    $user->servers()->select('servers.id'),
+                ))
+                ->orWhereIn('users.id', $friendIds))
+            ->whereNotIn('users.id', $blockedIds)
             ->when($query, fn ($q) => $q->where(
                 fn ($w) => $w->where('name', 'ilike', '%'.$query.'%')
                     ->orWhere('email', 'ilike', '%'.$query.'%'),

@@ -31,6 +31,7 @@ use App\Http\Controllers\ConversationController;
 use App\Http\Controllers\DecisionController;
 use App\Http\Controllers\DeskAppsController;
 use App\Http\Controllers\DocumentController;
+use App\Http\Controllers\FriendController;
 use App\Http\Controllers\GifController;
 use App\Http\Controllers\GiveawayController;
 use App\Http\Controllers\InviteController;
@@ -418,6 +419,31 @@ Route::middleware('auth:api')->group(function () {
     Route::post('channels/{channel}/space/game/join', [SpaceGameController::class, 'join']);
     Route::post('channels/{channel}/space/game/act', [SpaceGameController::class, 'act']);
     Route::delete('channels/{channel}/space/game', [SpaceGameController::class, 'cancel']);
+
+    /*
+     * Friends.
+     *
+     * One table, four tabs: your friends, what's outstanding either way, and who you've
+     * blocked. Nothing here browses the instance — you add someone you can already see, or
+     * by typing their name exactly (see StoreFriendRequest for why).
+     *
+     * What a friendship buys you lives elsewhere: friends may DM each other without sharing
+     * a server, and a block shuts that door both ways.
+     */
+    Route::get('friends', [FriendController::class, 'index']);
+    Route::get('friends/requests', [FriendController::class, 'pending']);
+    Route::get('friends/blocked', [FriendController::class, 'blocked']);
+    // Send a request — or accept theirs, if you both pressed Add at once.
+    Route::post('friends', [FriendController::class, 'store']);
+    // Answering. Only the person who was asked; the action enforces it.
+    Route::post('friends/{friendship}/accept', [FriendController::class, 'accept']);
+    Route::post('friends/{friendship}/decline', [FriendController::class, 'decline']);
+    // Unfriend, or take back a request. Either party — same row, same delete.
+    Route::delete('friends/{friendship}', [FriendController::class, 'destroy']);
+    Route::delete('friends/user/{user}', [FriendController::class, 'destroyByUser']);
+    // Blocking reuses the same row: the two states are mutually exclusive by definition.
+    Route::post('friends/block', [FriendController::class, 'block']);
+    Route::delete('friends/block/{user}', [FriendController::class, 'unblock']);
 
     /*
      * DMs and group chats.

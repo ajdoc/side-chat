@@ -1,4 +1,13 @@
+import type { MicChain, NoiseSuppression } from '~/lib/micProcessing'
 import type { IceServer, Peer, PeerConnectionState, VoiceEffectPair, VoiceEffects, VoiceParticipant } from '~/types'
+import {
+  buildMicChain,
+  DEFAULT_NOISE_SUPPRESSION,
+  micConstraints,
+  NOISE_SUPPRESSION_LEVELS,
+  NOISE_SUPPRESSION_OPTIONS,
+  resetMicProcessing,
+} from '~/lib/micProcessing'
 
 /**
  * A voice call: a full mesh of WebRTC peer connections, signalled over Reverb.
@@ -65,16 +74,11 @@ const CAMERA_MAX_BITRATE = 600_000
 const MIC_MAX_BITRATE = 32_000
 
 /**
- * How the microphone is captured, in one place so a fresh join and a mid-call swap can't drift
- * apart. `channelCount: 1` is the mono capture the encoding budget is built around (see
- * MIC_MAX_BITRATE); the three processing flags are the browser's own echo/noise/gain cleanup.
+ * How the microphone is captured and cleaned up lives in ~/lib/micProcessing: the capture
+ * constraints (mono, and the browser's own echo/noise/gain cleanup) and the extra chain the
+ * "Aggressive" level adds on top of them. `channelCount: 1` there is the mono capture this
+ * file's encoding budget is built around — see MIC_MAX_BITRATE.
  */
-const MIC_AUDIO: MediaTrackConstraints = {
-  echoCancellation: true,
-  noiseSuppression: true,
-  autoGainControl: true,
-  channelCount: 1,
-}
 
 /**
  * Encoding is the other half of the cost, and it's the half that lags the *sharer*.
@@ -272,7 +276,20 @@ interface LocalPrefs {
 // MediaStreams, and a proxied MediaStream is not a MediaStream as far as the DOM is
 // concerned (assigning one to `srcObject` throws).
 const handles = new Map<number, PeerHandle>()
+/**
+ * What peers are sent. On the 'off' and 'standard' suppression levels this *is* the capture;
+ * on 'high' it's the output of the processing chain, and {@link rawStream} is the capture
+ * behind it. Everything that sends, mutes or meters your microphone goes through this one,
+ * so the rest of the file never has to know which of the two it's holding.
+ */
 let localStream: MediaStream | null = null
+/**
+ * The microphone itself, kept separately because the chain's output track is not the thing
+ * that holds the device: stopping it is what releases the mic and turns the browser's
+ * recording indicator off, and disabling it is what makes muting real rather than cosmetic.
+ */
+let rawStream: MediaStream | null = null
+let micChain: MicChain | null = null
 /**
  * Where remote control's two streams get delivered, once useRemoteControl registers for them.
  *
@@ -553,12 +570,14 @@ const MIC_RETRY_DELAY_MS = 300
  * so a headset that reconnects on load still ends up being the mic you chose. A denied
  * permission is never a device problem, so it surfaces immediately without burning the retries.
  */
-async function getMicStream(deviceId: string | null): Promise<MediaStream> {
+async function getMicStream(deviceId: string | null, level: NoiseSuppression): Promise<MediaStream> {
+  const audio = micConstraints(level)
+
   if (deviceId) {
     for (let attempt = 0; attempt < MIC_RETRY_ATTEMPTS; attempt++) {
       try {
         return await navigator.mediaDevices.getUserMedia({
-          audio: { deviceId: { exact: deviceId }, ...MIC_AUDIO },
+          audio: { deviceId: { exact: deviceId }, ...audio },
           video: false,
         })
       } catch (err: any) {
@@ -573,7 +592,7 @@ async function getMicStream(deviceId: string | null): Promise<MediaStream> {
     // stranding the join on a mic that isn't there.
   }
 
-  return navigator.mediaDevices.getUserMedia({ audio: { ...MIC_AUDIO }, video: false })
+  return navigator.mediaDevices.getUserMedia({ audio, video: false })
 }
 
 /** Cap the mic sender's bitrate — speech is cheap and this upload is paid once per peer. */
@@ -673,6 +692,11 @@ export function useVoice() {
   /** Chosen device ids — null means "let the browser pick its default". */
   const micId = useState<string | null>('voice:micId', () => loadSettings().micId)
   const speakerId = useState<string | null>('voice:speakerId', () => loadSettings().speakerId)
+  /** How hard your microphone is cleaned up on the way out — see ~/lib/micProcessing. */
+  const noiseSuppression = useState<NoiseSuppression>(
+    'voice:noiseSuppression',
+    () => loadSettings().noiseSuppression,
+  )
   const screenResolution = useState<ScreenResolution>('voice:screenResolution', () => loadSettings().resolution)
   const screenMode = useState<ScreenMode>('voice:screenMode', () => loadSettings().mode)
   /** Whether this browser can even honour an output-device choice (Chromium can; Firefox not). */
@@ -806,6 +830,7 @@ export function useVoice() {
   function loadSettings(): {
     micId: string | null
     speakerId: string | null
+    noiseSuppression: NoiseSuppression
     resolution: ScreenResolution
     mode: ScreenMode
     pushToTalk: boolean
@@ -813,6 +838,7 @@ export function useVoice() {
     const fallback = {
       micId: null,
       speakerId: null,
+      noiseSuppression: DEFAULT_NOISE_SUPPRESSION,
       resolution: DEFAULT_SCREEN_RESOLUTION,
       mode: DEFAULT_SCREEN_MODE,
       pushToTalk: false,
@@ -823,6 +849,9 @@ export function useVoice() {
       return {
         micId: typeof saved.micId === 'string' ? saved.micId : null,
         speakerId: typeof saved.speakerId === 'string' ? saved.speakerId : null,
+        noiseSuppression: NOISE_SUPPRESSION_LEVELS.includes(saved.noiseSuppression)
+          ? saved.noiseSuppression
+          : DEFAULT_NOISE_SUPPRESSION,
         resolution: SCREEN_RESOLUTIONS.includes(saved.resolution) ? saved.resolution : DEFAULT_SCREEN_RESOLUTION,
         mode: (['auto', 'detail', 'motion'] as const).includes(saved.mode) ? saved.mode : DEFAULT_SCREEN_MODE,
         pushToTalk: saved.pushToTalk === true,
@@ -837,6 +866,7 @@ export function useVoice() {
     localStorage.setItem('voice:settings', JSON.stringify({
       micId: micId.value,
       speakerId: speakerId.value,
+      noiseSuppression: noiseSuppression.value,
       resolution: screenResolution.value,
       mode: screenMode.value,
       pushToTalk: pushToTalk.value,
@@ -1509,6 +1539,32 @@ export function useVoice() {
     source.connect(handle.analyser)
   }
 
+  /**
+   * Point the "am I talking" meter at your own audio, building the analyser if this is the
+   * first time. Deliberately fed from the *end* of the processing chain rather than the
+   * capture: on the aggressive level the gate decides what leaves this machine, so a ring lit
+   * from the raw microphone would glow at room noise the far end never hears. What you see
+   * should be what they get.
+   */
+  function hookLocalMeter() {
+    if (!audioCtx) return
+
+    localSource?.disconnect()
+    localSource = null
+
+    localAnalyser ??= audioCtx.createAnalyser()
+    localAnalyser.fftSize = 512
+
+    if (micChain?.output) {
+      micChain.output.connect(localAnalyser)
+      return
+    }
+
+    if (!localStream) return
+    localSource = audioCtx.createMediaStreamSource(localStream)
+    localSource.connect(localAnalyser)
+  }
+
   /** Root-mean-square of the waveform: loudness, near enough, and cheap. */
   function loudness(analyser: AnalyserNode, buffer: Float32Array): number {
     analyser.getFloatTimeDomainData(buffer as Float32Array<ArrayBuffer>)
@@ -1572,8 +1628,20 @@ export function useVoice() {
       // everybody, and then discovering the browser won't give us a microphone. getMicStream
       // honours the remembered device exactly (so a reloaded call comes up on the mic you
       // chose, not the system default) and falls back on its own if that device has gone.
-      localStream = await getMicStream(micId.value)
+      rawStream = await getMicStream(micId.value, noiseSuppression.value)
+
+      // The processing chain has to exist before anything is sent, because what it produces
+      // *is* what gets sent — building it after the peers were wired would mean handing
+      // everybody the raw capture and swapping it out under them a moment later.
+      resetMicProcessing() // the worklet module belongs to the context, and this one is new
+      audioCtx = new AudioContext()
+      await audioCtx.resume()
+      micChain = await buildMicChain(audioCtx, rawStream, noiseSuppression.value)
+      localStream = micChain.stream
     } catch {
+      // Anything half-built (a capture we got before the context failed, say) goes back —
+      // a failed join must not leave the microphone open.
+      teardownMedia()
       status.value = 'error'
       error.value = 'We couldn\'t reach your microphone. Check the site\'s permissions and try again.'
       channelId.value = null
@@ -1601,12 +1669,7 @@ export function useVoice() {
       people: joined.effects?.people ?? [],
     }
 
-    audioCtx = new AudioContext()
-    await audioCtx.resume()
-    localSource = audioCtx.createMediaStreamSource(localStream)
-    localAnalyser = audioCtx.createAnalyser()
-    localAnalyser.fftSize = 512
-    localSource.connect(localAnalyser)
+    hookLocalMeter()
 
     // Now that the site holds mic permission, the device labels are readable — populate the
     // picker, and keep it current as headsets are plugged and pulled for the call's lifetime.
@@ -1752,8 +1815,17 @@ export function useVoice() {
 
     for (const id of [...handles.keys()]) destroyPeer(id)
 
+    micChain?.destroy()
+    micChain = null
+    resetMicProcessing()
+
     localStream?.getTracks().forEach(track => track.stop())
     localStream = null
+    // The capture is the thing actually holding the microphone — stopping the chain's output
+    // track releases nothing on its own, and a mic left open after a call is over is exactly
+    // the bug people are right never to forgive.
+    rawStream?.getTracks().forEach(track => track.stop())
+    rawStream = null
 
     // Every capture is stopped, not merely un-sent. This is what turns the camera light
     // and the "sharing your screen" bar off — and leaving either running after a call has
@@ -1830,9 +1902,14 @@ export function useVoice() {
    */
   function applyMic() {
     const open = micOpen.value
-    localStream?.getAudioTracks().forEach(track => {
-      track.enabled = open
-    })
+    // Both ends of the chain, and the capture above all: disabling only what we send would
+    // leave the microphone genuinely live — the browser's recording indicator lit, the OS
+    // still hearing the room — while the UI says you're muted. Mute has to mean the mic.
+    for (const stream of [rawStream, localStream]) {
+      stream?.getAudioTracks().forEach(track => {
+        track.enabled = open
+      })
+    }
     if (!open) selfSpeaking.value = false
   }
 
@@ -2075,50 +2152,80 @@ export function useVoice() {
   }
 
   /**
-   * Switch your microphone mid-call.
+   * Re-open the microphone mid-call and put what comes out of it on the wire.
    *
-   * Open the new device, then `replaceTrack` it into every peer's mic sender — same-kind
-   * swap, so no renegotiation and no gap the far end can hear. The catch is everything
-   * *else* pointed at the old track: the speaking meter is re-hooked to the new capture, and
-   * the new track inherits your current mute state so switching devices can't quietly unmute
-   * you. The old capture is stopped last, once nothing depends on it.
+   * Both things that can change the capture — picking a different device, and changing how
+   * hard it's cleaned up — are this same operation, because both need a *new* getUserMedia:
+   * echo cancellation and the rest are capture constraints, not something that can be turned
+   * on afterwards. So it's written once.
+   *
+   * The swap itself is `replaceTrack` into every peer's mic sender — same-kind, so no
+   * renegotiation and no gap the far end can hear. The care is all in what else pointed at
+   * the old track: the processing chain is rebuilt on the new capture, the speaking meter is
+   * re-hooked to it, and the new track inherits your current mute state so this can't quietly
+   * un-mute you. The old capture is stopped last, once nothing depends on it.
    */
+  async function swapMicCapture(deviceId: string | null, level: NoiseSuppression) {
+    let capture: MediaStream
+    try {
+      capture = await getMicStream(deviceId, level)
+    } catch {
+      return // device vanished or was denied; the current mic keeps working
+    }
+
+    const chain = audioCtx ? await buildMicChain(audioCtx, capture, level) : null
+    const stream = chain?.stream ?? capture
+    const track = stream.getAudioTracks()[0]
+    if (!track) {
+      capture.getTracks().forEach(t => t.stop())
+      chain?.destroy()
+      return
+    }
+
+    // Carry mute across the swap — a fresh capture starts enabled, which would un-mute you
+    // (and on push-to-talk, open the line without the key).
+    for (const s of [capture, stream]) s.getAudioTracks().forEach(t => { t.enabled = micOpen.value })
+
+    await Promise.all([...handles.values()].map(h => h.micSender?.replaceTrack(track)))
+
+    const oldCapture = rawStream
+    const oldStream = localStream
+    const oldChain = micChain
+
+    rawStream = capture
+    localStream = stream
+    micChain = chain
+
+    hookLocalMeter()
+
+    oldChain?.destroy()
+    oldStream?.getTracks().forEach(t => t.stop())
+    oldCapture?.getTracks().forEach(t => t.stop())
+  }
+
+  /** Switch your microphone. Remembered either way; applied on the spot if a call is live. */
   async function setMicDevice(deviceId: string) {
     micId.value = deviceId
     saveSettings()
     if (!inCall.value) return
 
-    let stream: MediaStream
-    try {
-      stream = await navigator.mediaDevices.getUserMedia({
-        audio: { deviceId: { exact: deviceId }, ...MIC_AUDIO },
-        video: false,
-      })
-    } catch {
-      return // device vanished or was denied; the current mic keeps working
-    }
-
-    const track = stream.getAudioTracks()[0]
-    if (!track) return
-
-    // Carry mute across the swap — a fresh capture starts enabled, which would un-mute you
-    // (and on push-to-talk, open the line without the key).
-    track.enabled = micOpen.value
-
-    await Promise.all([...handles.values()].map(h => h.micSender?.replaceTrack(track)))
-
-    const old = localStream
-    localStream = stream
-
-    // Re-point the speaking meter at the new capture.
-    if (audioCtx) {
-      localSource?.disconnect()
-      localSource = audioCtx.createMediaStreamSource(stream)
-      if (localAnalyser) localSource.connect(localAnalyser)
-    }
-
-    old?.getTracks().forEach(t => t.stop())
+    await swapMicCapture(deviceId, noiseSuppression.value)
     void refreshDevices() // labels firm up once a device is actually in use
+  }
+
+  /**
+   * Choose how hard your microphone is cleaned up — see ~/lib/micProcessing for what each
+   * level means. Mid-call this re-opens the capture, because the browser's own processing is
+   * decided at capture time and nothing downstream can add or remove it after the fact.
+   */
+  async function setNoiseSuppression(level: NoiseSuppression) {
+    if (level === noiseSuppression.value) return
+
+    noiseSuppression.value = level
+    saveSettings()
+    if (!inCall.value) return
+
+    await swapMicCapture(micId.value, level)
   }
 
   /** Switch which speaker the call plays out of — every peer's voice and every shared screen. */
@@ -2741,6 +2848,9 @@ export function useVoice() {
     outputDevices,
     micId,
     speakerId,
+    noiseSuppression,
+    noiseSuppressionOptions: NOISE_SUPPRESSION_OPTIONS,
+    setNoiseSuppression,
     screenResolution,
     screenMode,
     canPickSpeaker,

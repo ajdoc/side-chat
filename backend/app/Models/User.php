@@ -113,4 +113,20 @@ class User extends Authenticatable
     {
         return $this->belongsToMany(Conversation::class)->withTimestamps();
     }
+
+    /**
+     * Friend requests this user sent, and friendships they opened. Not "my friends" — a
+     * friendship is a single row shared by two people (see the migration), so half of them
+     * are on the other side of it. Ask {@see \App\Services\FriendService} for the pair.
+     */
+    public function sentFriendships(): HasMany
+    {
+        return $this->hasMany(Friendship::class, 'user_id');
+    }
+
+    /** The other half: requests made *to* this user, and friendships someone else opened. */
+    public function receivedFriendships(): HasMany
+    {
+        return $this->hasMany(Friendship::class, 'friend_id');
+    }
 }
