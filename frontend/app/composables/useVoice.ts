@@ -5,6 +5,7 @@ import type { IceServer, Peer, PeerConnectionState, VoiceEffectPair, VoiceEffect
 import {
   buildMicChain,
   DEFAULT_NOISE_SUPPRESSION,
+  DEFAULT_NORMALIZE_VOLUME,
   micConstraints,
   NOISE_SUPPRESSION_LEVELS,
   NOISE_SUPPRESSION_OPTIONS,
@@ -85,6 +86,14 @@ const CAMERA_MAX_BITRATE = 600_000
  * then makes the silences between words nearly free on top.
  */
 const MIC_MAX_BITRATE = 32_000
+
+/**
+ * The shared tab/system audio is the opposite case to the mic and gets the opposite budget: it
+ * is usually music or a video's soundtrack, it is continuous (so DTX saves nothing), and it is
+ * the one thing in a call people notice being compressed. 128kbps stereo is transparent enough
+ * for that and still an order of magnitude under the screen picture it arrives beside.
+ */
+const SHARED_AUDIO_MAX_BITRATE = 128_000
 
 /**
  * How the microphone is captured and cleaned up lives in ~/lib/micProcessing: the capture
@@ -505,9 +514,15 @@ async function base64ToGunzip(b64: string): Promise<string> {
 }
 
 /**
- * Turn Opus DTX on: while a line is silent the encoder sends only the occasional comfort-noise
+ * Turn Opus DTX and in-band FEC on: while a line is silent the encoder sends only the occasional comfort-noise
  * update instead of a full stream, so quiet costs almost nothing — and in a call most mics are
  * quiet most of the time.
+ *
+ * FEC is the other half, and it's what a lossy connection actually hears. Opus can carry a
+ * coarse copy of the previous frame inside the current one, so a single dropped packet — the
+ * common case on wifi, and the one that makes a word arrive as a click — is reconstructed
+ * instead of concealed. It costs a few percent of bitrate and only when the encoder judges the
+ * loss rate worth it, which is exactly the trade we want on both speech and shared music.
  *
  * Applied to every description we *send* (see signal), which is enough on its own: an Opus
  * encoder configures itself from the *remote* fmtp — its peer's declared receive preferences —
@@ -515,18 +530,19 @@ async function base64ToGunzip(b64: string): Promise<string> {
  * description or the perfect-negotiation state machine. A half-deployed pair simply gets the
  * saving in one direction rather than wedging.
  *
- * DTX *only*, deliberately. In BUNDLE both audio m-lines — your microphone and the shared
+ * These two *only*, deliberately. In BUNDLE both audio m-lines — your microphone and the shared
  * tab/system audio — share one Opus payload type and so one fmtp line; forcing mono or a low
  * bitrate here would also crush shared music. Those two belong to the mic alone, so they live
  * on the mic *sender* (applyMicParams caps its bitrate; channelCount: 1 captures it mono) and
- * leave the shared-audio stream at full quality. DTX is the one nudge that suits both: it does
- * nothing to continuous music (there's no silence to trim) and saves on everything else.
+ * leave the shared-audio stream at full quality. These two are the nudges that suit both: DTX
+ * does nothing to continuous music (there's no silence to trim) and saves on everything else,
+ * and FEC helps anything that has to survive a dropped packet.
  */
 function mungeOpus(sdp: string): string {
   const pt = sdp.match(/a=rtpmap:(\d+) opus\/48000/i)?.[1]
   if (!pt) return sdp
 
-  const want = ['usedtx=1']
+  const want = ['usedtx=1', 'useinbandfec=1']
   const fmtp = new RegExp(`a=fmtp:${pt} ([^\\r\\n]*)`)
 
   if (fmtp.test(sdp)) {
@@ -592,6 +608,38 @@ function preferEfficientVideo(transceiver: RTCRtpTransceiver) {
   }
 }
 
+/**
+ * Put Opus at the head of an audio transceiver's codec list.
+ *
+ * It is already first almost everywhere, and that "almost" is the point: a browser that has
+ * negotiated down to G.722 or PCMU gives you 8kHz telephone audio with no DTX, no FEC and no
+ * stereo, and none of the tuning in this file applies to it. A reorder rather than a filter,
+ * for the same reason as {@link preferEfficientVideo}: every codec stays offered, so a peer
+ * that genuinely can't do Opus still connects.
+ */
+function preferOpus(transceiver: RTCRtpTransceiver) {
+  if (typeof RTCRtpReceiver === 'undefined' || !RTCRtpReceiver.getCapabilities) return
+  if (!('setCodecPreferences' in transceiver)) return
+
+  const caps = RTCRtpReceiver.getCapabilities('audio')
+  if (!caps) return
+
+  const rank = (mimeType: string) => (mimeType.toLowerCase() === 'audio/opus' ? 0 : 1)
+
+  // Stable sort so everything below Opus keeps the browser's own ordering, including the
+  // red/telephone-event entries that must stay present.
+  const ordered = caps.codecs
+    .map((codec, index) => ({ codec, index }))
+    .sort((a, b) => rank(a.codec.mimeType) - rank(b.codec.mimeType) || a.index - b.index)
+    .map(entry => entry.codec)
+
+  try {
+    transceiver.setCodecPreferences(ordered)
+  } catch {
+    // An engine that rejects the list keeps its default order rather than losing audio.
+  }
+}
+
 const sleep = (ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms))
 
 /**
@@ -647,6 +695,18 @@ async function applyMicParams(sender: RTCRtpSender) {
   const params = sender.getParameters()
   params.encodings = params.encodings?.length ? params.encodings : [{}]
   params.encodings[0]!.maxBitrate = MIC_MAX_BITRATE
+  await sender.setParameters(params).catch(() => {})
+}
+
+/**
+ * Give the shared tab/system audio the headroom the mic is denied. Its Opus stream shares a
+ * payload type with the microphone's (BUNDLE, one fmtp — see mungeOpus), so quality here can
+ * only be asked for per-*sender*, which is exactly what this is.
+ */
+async function applySharedAudioParams(sender: RTCRtpSender) {
+  const params = sender.getParameters()
+  params.encodings = params.encodings?.length ? params.encodings : [{}]
+  params.encodings[0]!.maxBitrate = SHARED_AUDIO_MAX_BITRATE
   await sender.setParameters(params).catch(() => {})
 }
 
@@ -772,6 +832,11 @@ export function useVoice() {
   const noiseSuppression = useState<NoiseSuppression>(
     'voice:noiseSuppression',
     () => loadSettings().noiseSuppression,
+  )
+  /** Whether the chain rides your level toward everyone else's — see ~/lib/micProcessing. */
+  const normalizeVolume = useState<boolean>(
+    'voice:normalizeVolume',
+    () => loadSettings().normalizeVolume,
   )
   const screenResolution = useState<ScreenResolution>('voice:screenResolution', () => loadSettings().resolution)
   const screenMode = useState<ScreenMode>('voice:screenMode', () => loadSettings().mode)
@@ -907,6 +972,7 @@ export function useVoice() {
     micId: string | null
     speakerId: string | null
     noiseSuppression: NoiseSuppression
+    normalizeVolume: boolean
     spatialAudio: boolean
     spatialWidth: number
     spatialTurnsWithYou: boolean
@@ -918,6 +984,7 @@ export function useVoice() {
       micId: null,
       speakerId: null,
       noiseSuppression: DEFAULT_NOISE_SUPPRESSION,
+      normalizeVolume: DEFAULT_NORMALIZE_VOLUME,
       spatialAudio: false,
       spatialWidth: DEFAULT_WIDTH,
       spatialTurnsWithYou: false,
@@ -934,6 +1001,9 @@ export function useVoice() {
         noiseSuppression: NOISE_SUPPRESSION_LEVELS.includes(saved.noiseSuppression)
           ? saved.noiseSuppression
           : DEFAULT_NOISE_SUPPRESSION,
+        normalizeVolume: typeof saved.normalizeVolume === 'boolean'
+          ? saved.normalizeVolume
+          : DEFAULT_NORMALIZE_VOLUME,
         spatialAudio: saved.spatialAudio === true,
         spatialWidth: typeof saved.spatialWidth === 'number' && saved.spatialWidth >= 0 && saved.spatialWidth <= 1
           ? saved.spatialWidth
@@ -954,6 +1024,7 @@ export function useVoice() {
       micId: micId.value,
       speakerId: speakerId.value,
       noiseSuppression: noiseSuppression.value,
+      normalizeVolume: normalizeVolume.value,
       spatialAudio: spatialAudio.value,
       spatialWidth: spatialWidth.value,
       spatialTurnsWithYou: spatialTurnsWithYou.value,
@@ -1485,6 +1556,11 @@ export function useVoice() {
     for (const track of localStream.getAudioTracks()) {
       handle.micSender = pc.addTrack(track, localStream)
       void applyMicParams(handle.micSender)
+
+      // Before the first offer, so the whole session negotiates Opus rather than falling back
+      // to a narrowband codec none of this file's audio tuning reaches.
+      const mic = pc.getTransceivers().find(t => t.sender === handle.micSender)
+      if (mic) preferOpus(mic)
     }
 
     // If a speaker was chosen, route this peer's two audio elements to it as they're born —
@@ -1525,6 +1601,7 @@ export function useVoice() {
       // m-lines are [mic, screen-audio, camera, screen] on both ends; the polite peer adopts
       // them in that order (see ontrack).
       handle.screenAudioTransceiver = pc.addTransceiver('audio', { direction: 'sendrecv' })
+      preferOpus(handle.screenAudioTransceiver)
       handle.cameraTransceiver = pc.addTransceiver('video', { direction: 'sendrecv' })
       handle.screenTransceiver = pc.addTransceiver('video', { direction: 'sendrecv' })
 
@@ -1970,7 +2047,7 @@ export function useVoice() {
       // The context has its own output device, and a spatialised call plays out of it rather
       // than out of the <audio> elements — so the remembered speaker has to be set here too.
       if (speakerId.value) void applyContextSink(speakerId.value)
-      micChain = await buildMicChain(audioCtx, rawStream, noiseSuppression.value)
+      micChain = await buildMicChain(audioCtx, rawStream, noiseSuppression.value, normalizeVolume.value)
       localStream = micChain.stream
     } catch {
       // Anything half-built (a capture we got before the context failed, say) goes back —
@@ -2550,7 +2627,7 @@ export function useVoice() {
       return // device vanished or was denied; the current mic keeps working
     }
 
-    const chain = audioCtx ? await buildMicChain(audioCtx, capture, level) : null
+    const chain = audioCtx ? await buildMicChain(audioCtx, capture, level, normalizeVolume.value) : null
     const stream = chain?.stream ?? capture
     const track = stream.getAudioTracks()[0]
     if (!track) {
@@ -2603,6 +2680,21 @@ export function useVoice() {
     if (!inCall.value) return
 
     await swapMicCapture(micId.value, level)
+  }
+
+  /**
+   * Turn automatic levelling on or off. Unlike the suppression level this needs no new capture
+   * — it's a node in our own chain — but the chain is built once per capture, so mid-call it
+   * rides the same swap rather than growing a second way to rebuild itself.
+   */
+  async function setNormalizeVolume(enabled: boolean) {
+    if (enabled === normalizeVolume.value) return
+
+    normalizeVolume.value = enabled
+    saveSettings()
+    if (!inCall.value) return
+
+    await swapMicCapture(micId.value, noiseSuppression.value)
   }
 
   /**
@@ -2679,7 +2771,11 @@ export function useVoice() {
     // The browser's own "Stop sharing" bar bypasses our button entirely. Either track ending
     // (the user stops the video, or just the audio) tears the whole share down.
     screenTrack.onended = () => { void stopScreenShare() }
-    if (screenAudioTrack) screenAudioTrack.onended = () => { void stopScreenShare() }
+    if (screenAudioTrack) {
+      // Music, not speech — see startAudioShare.
+      screenAudioTrack.contentHint = 'music'
+      screenAudioTrack.onended = () => { void stopScreenShare() }
+    }
 
     // Slot the picture into each peer's screen transceiver, and the sound into the audio one,
     // then tell them the slots are live — see renegotiate() for why the second half isn't
@@ -2702,6 +2798,7 @@ export function useVoice() {
       if (sound && screenAudioTrack) {
         if (sound.direction !== 'sendrecv') sound.direction = 'sendrecv'
         await sound.sender.replaceTrack(screenAudioTrack)
+        await applySharedAudioParams(sound.sender)
       }
     }))
     await renegotiateAll()
@@ -2791,6 +2888,9 @@ export function useVoice() {
     }
 
     screenAudioTrack = track
+    // Tells the encoder this is music, not speech: no DTX-style silence trimming, no
+    // speech-shaped decisions about what's worth spending bits on.
+    track.contentHint = 'music'
     // The browser's own "Stop sharing" bar never touches our button.
     track.onended = () => { void stopAudioShare() }
 
@@ -2802,6 +2902,7 @@ export function useVoice() {
 
       if (sound.direction !== 'sendrecv') sound.direction = 'sendrecv'
       await sound.sender.replaceTrack(track)
+      await applySharedAudioParams(sound.sender)
     }))
     // Not optional: the slot was negotiated empty, and a far end that wasn't told a track
     // arrived drops its packets. See renegotiate().
@@ -3260,6 +3361,8 @@ export function useVoice() {
     resetPlacements,
     noiseSuppressionOptions: NOISE_SUPPRESSION_OPTIONS,
     setNoiseSuppression,
+    normalizeVolume,
+    setNormalizeVolume,
     screenResolution,
     screenMode,
     canPickSpeaker,

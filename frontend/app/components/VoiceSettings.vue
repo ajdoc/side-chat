@@ -26,6 +26,8 @@ const {
   noiseSuppression,
   noiseSuppressionOptions,
   setNoiseSuppression,
+  normalizeVolume,
+  setNormalizeVolume,
   peers,
   spatialAudio,
   canSpatialise,
@@ -195,6 +197,27 @@ const modeOptions = [
             Your mic is held quiet between words, so fans, keyboards and the rest of the room
             don't ride under your voice. Switch to Standard if you're playing or singing —
             this is tuned for speech and will chew on a held note.
+          </span>
+        </label>
+
+        <!-- Automatic volume -->
+        <label
+          v-if="noiseSuppression !== 'off'"
+          class="flex cursor-pointer items-start gap-2.5"
+        >
+          <input
+            type="checkbox"
+            class="mt-0.5 h-4 w-4 shrink-0 cursor-pointer accent-primary"
+            :checked="normalizeVolume"
+            @change="setNormalizeVolume(($event.target as HTMLInputElement).checked)"
+          >
+          <span class="space-y-0.5">
+            <span class="block text-sm font-medium">Automatic volume</span>
+            <span class="block text-xs text-muted-foreground">
+              Brings your level up or down to match everyone else's, so sitting back from your
+              mic doesn't make you the person nobody can hear. Adjusts slowly and only while
+              you're actually talking.
+            </span>
           </span>
         </label>
 

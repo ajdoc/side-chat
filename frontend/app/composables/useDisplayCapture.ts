@@ -236,7 +236,14 @@ export function useDisplayCapture() {
           frameRate: { ideal: options.frameRate, max: options.frameRate },
           height: { ideal: options.height, max: options.height },
         },
-        audio: options.audio,
+        // Shared sound is the source's own audio — music, a video's soundtrack, a game — and
+        // the browser's speech processing is actively wrong for it: noise suppression chews on
+        // sustained notes and auto gain rides the mix. Off explicitly, because Chrome applies
+        // some of it to display capture by default. There's no echo risk to trade away; this
+        // never touches the microphone.
+        audio: options.audio
+          ? { echoCancellation: false, noiseSuppression: false, autoGainControl: false }
+          : false,
       })
     }
 
