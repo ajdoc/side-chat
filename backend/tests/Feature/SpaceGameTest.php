@@ -2,6 +2,7 @@
 
 use App\Events\SpaceGameUpdated;
 use App\Models\Channel;
+use App\Models\SpaceGame;
 use App\Models\User;
 use App\Models\VoiceParticipant;
 use App\Services\Games\GameService;
@@ -236,6 +237,26 @@ it('lets anyone in the room cancel the game', function () {
     $this->deleteJson("/api/channels/{$channel->id}/space/game")
         ->assertOk()
         ->assertJsonPath('data.game.status', 'ended');
+});
+
+it('stops serving an ending once it has had its moment', function () {
+    [$channel, $users] = startedGame(3);
+
+    Passport::actingAs($users[1]);
+    $this->deleteJson("/api/channels/{$channel->id}/space/game")->assertOk();
+
+    // Straight away it's still on screen — whoever was playing gets to read the result.
+    $this->getJson("/api/channels/{$channel->id}/space/game")
+        ->assertOk()
+        ->assertJsonPath('data.game.status', 'ended');
+
+    // Later, the room is simply a room again: nothing clears the row until the next game is
+    // proposed, so without this a refresh would put the result card back up for everyone.
+    $this->travel(SpaceGame::ENDED_TTL_SECONDS + 1)->seconds();
+
+    $this->getJson("/api/channels/{$channel->id}/space/game")
+        ->assertOk()
+        ->assertJsonPath('data.game', null);
 });
 
 it('serves the game catalogue to any logged-in user', function () {

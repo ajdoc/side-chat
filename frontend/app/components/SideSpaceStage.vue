@@ -381,9 +381,23 @@ const amState = computed<AmongUsState | null>(() =>
 
 const gameRunning = computed(() => game.value?.status === 'running' && !!game.value.state)
 const gameMeeting = computed(() => gameRunning.value && amState.value?.phase === 'meeting')
+/**
+ * The ending you've already read, remembered across reloads.
+ *
+ * An ended game's row outlives its result card — nothing clears it until somebody proposes the
+ * next game — so "Back to the room" clearing `game` in memory lasted exactly until the next
+ * fetch. Keyed by when the game ended, which names one particular ending: the next one has a
+ * different stamp and shows normally.
+ */
+const dismissedEndingKey = `space-game-dismissed:${props.channel.id}`
+const dismissedEnding = ref<number | null>(
+  import.meta.client ? Number(localStorage.getItem(dismissedEndingKey)) || null : null)
+
 /** The panel shows for a proposal, a running game, or an ending worth reading — never a bare cancel. */
 const showGamePanel = computed(() => !!game.value && inThisRoom.value
-  && (game.value.status !== 'ended' || !!(game.value.state as { winner?: unknown } | null)?.winner))
+  && (game.value.status !== 'ended' || (
+    !!(game.value.state as { winner?: unknown } | null)?.winner
+    && game.value.ended_at !== dismissedEnding.value)))
 /** Offer the way in only when there's no game already on the table. */
 const canProposeGame = computed(() => inThisRoom.value && (!game.value || game.value.status === 'ended'))
 
@@ -593,7 +607,16 @@ async function onJoinGame() {
 
 async function onGameDismiss() {
   // An ended game is just cleared away locally; anything still live is called off for the room.
-  if (game.value?.status === 'ended') game.value = null
+  if (game.value?.status === 'ended') {
+    // Remembered, not merely hidden: the row stays on the server until the next game is
+    // proposed, so a hide that lived in memory came straight back on the next load.
+    const at = game.value.ended_at
+    if (at) {
+      dismissedEnding.value = at
+      if (import.meta.client) localStorage.setItem(dismissedEndingKey, String(at))
+    }
+    game.value = null
+  }
   else await cancelGame().catch(() => {})
 }
 

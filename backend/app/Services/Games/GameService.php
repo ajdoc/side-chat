@@ -350,7 +350,10 @@ class GameService
         $game = $channel->spaceGame;
         $handler = $game ? $this->handlerFor($game->type) : null;
 
-        if ($game === null || $handler === null) {
+        // A game that's over and has been over for a while is not shown at all: the row sticks
+        // around until the next propose replaces it, and handing an old ending to every fresh
+        // load is what makes a result card reappear on refresh, for everyone, days later.
+        if ($game === null || $handler === null || $game->isStaleEnding()) {
             return ['game' => null];
         }
 
@@ -363,6 +366,9 @@ class GameService
                 // Who was challenged, for a duel — null for a room game.
                 'opponent' => $game->opponent_id,
                 'start_mode' => $handler->startMode(),
+                // When it finished, so a client that has already dismissed this ending can
+                // recognise the same one after a reload instead of showing it again.
+                'ended_at' => $game->isEnded() ? $game->updated_at?->getTimestamp() : null,
                 'min_players' => $handler->minPlayers(),
                 // Whether *this* viewer could walk in right now — the whole of what the join
                 // button needs to know, worked out here so no client has to re-derive the rules.

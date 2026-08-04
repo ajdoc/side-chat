@@ -32,6 +32,18 @@ class SpaceGame extends Model
     /** Over — the result is up until somebody starts the next one. */
     public const ENDED = 'ended';
 
+    /**
+     * How long an ending stays on screen before the room is simply back to being a room.
+     *
+     * The result card ("Crew win", "you left the dungeon", a battle's outcome) is a *moment*, not
+     * a state of the room: it's meant to be read once by whoever was there and then dismissed.
+     * The row, though, outlives it — nothing deletes an ended game until somebody proposes the
+     * next one — so without a shelf life every later page load hands that card back out, to
+     * everyone, forever. Dating it from when the game ended keeps the card up for the people who
+     * were playing (and for a reload right after) and lets it lapse for everybody else.
+     */
+    public const ENDED_TTL_SECONDS = 120;
+
     protected $fillable = [
         'channel_id',
         'type',
@@ -73,5 +85,18 @@ class SpaceGame extends Model
     public function isEnded(): bool
     {
         return $this->status === self::ENDED;
+    }
+
+    /**
+     * An ending that has had its moment — old enough that nobody is still reading it.
+     *
+     * Timed from `updated_at`, which is exactly when the status became `ended`: an ended game is
+     * never written again (the next propose overwrites the row wholesale).
+     */
+    public function isStaleEnding(): bool
+    {
+        return $this->isEnded()
+            && $this->updated_at !== null
+            && $this->updated_at->lt(now()->subSeconds(self::ENDED_TTL_SECONDS));
     }
 }

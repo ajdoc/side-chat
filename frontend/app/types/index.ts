@@ -1330,6 +1330,8 @@ export interface SpaceGamePayload {
    */
   start_mode: 'vote' | 'challenge' | 'open'
   min_players: number
+  /** Unix seconds the game finished — null unless it has. Identifies one ending across reloads. */
+  ended_at: number | null
   /** Could you walk into this game right now? True only for a running, joinable, unfull one. */
   can_join: boolean
   /** Present only while a room-wide vote is open. */
