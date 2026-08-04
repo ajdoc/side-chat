@@ -30,8 +30,13 @@ const {
   spatialAudio,
   canSpatialise,
   roomPlacesPeople,
+  spatialWidth,
+  spatialTurnsWithYou,
   setSpatialAudio,
+  setSpatialWidth,
+  setSpatialTurnsWithYou,
   setPeerPlacement,
+  unplacePeer,
   resetPlacements,
   screenResolution,
   screenMode,
@@ -114,7 +119,16 @@ const modeOptions = [
       <Settings class="h-4 w-4" />
     </button>
 
-    <DialogContent class="max-w-md">
+    <!--
+      Capped to the viewport with the *body* doing the scrolling, not the page.
+
+      This panel has grown a long way past the two device pickers it started as, and an
+      unconstrained dialog simply runs off the bottom of a short window — taking the close
+      button, which is positioned against the panel's own top corner, off the top with it.
+      Two grid rows (header, then a scrolling body) keep the title and that button on screen
+      however much ends up in here.
+    -->
+    <DialogContent class="max-h-[85dvh] max-w-md grid-rows-[auto_minmax(0,1fr)]">
       <DialogHeader>
         <DialogTitle>Voice &amp; screen settings</DialogTitle>
         <DialogDescription>
@@ -122,7 +136,9 @@ const modeOptions = [
         </DialogDescription>
       </DialogHeader>
 
-      <div class="space-y-4">
+      <!-- Negative margin + padding so the scrollbar sits at the panel edge rather than
+           inset, and focus rings on the controls aren't clipped by the overflow. -->
+      <div class="-mx-6 space-y-4 overflow-y-auto px-6 py-1">
         <!-- Microphone -->
         <label class="block space-y-1">
           <span class="text-sm font-medium">Microphone</span>
@@ -201,15 +217,66 @@ const modeOptions = [
             </span>
           </label>
 
-          <p v-if="spatialAudio && roomPlacesPeople" class="text-xs text-muted-foreground">
-            You're in a Side Space, so the room does the placing: people sound like they're
-            standing where they're standing. Walk up to someone and they'll move to meet you.
-          </p>
+          <!-- How strong the effect is. Applies wherever the placements come from. -->
+          <label v-if="spatialAudio" class="block space-y-1">
+            <span class="flex items-center justify-between text-sm">
+              <span>Effect strength</span>
+              <span class="text-xs text-muted-foreground">{{ Math.round(spatialWidth * 100) }}%</span>
+            </span>
+            <input
+              type="range"
+              min="0"
+              max="100"
+              step="5"
+              class="w-full accent-primary"
+              :value="Math.round(spatialWidth * 100)"
+              @input="setSpatialWidth(Number(($event.target as HTMLInputElement).value) / 100)"
+            >
+            <span class="block text-xs text-muted-foreground">
+              How far apart voices sit. Turn it down if the full effect is distracting or
+              you're on speakers rather than headphones — at 0% everyone is back in the centre.
+            </span>
+          </label>
+
+          <template v-if="spatialAudio && roomPlacesPeople">
+            <p class="text-xs text-muted-foreground">
+              You're in a Side Space, so the room places people by default: they sound like
+              they're standing where they're standing. Pin anyone you'd rather hear from a
+              fixed spot.
+            </p>
+
+            <SpatialAudioMap
+              v-if="peers.length"
+              :peers="peers"
+              room-mode
+              @place="(id, placement) => setPeerPlacement(id, placement)"
+              @unplace="unplacePeer"
+              @reset="resetPlacements"
+            />
+
+            <label class="flex cursor-pointer items-start gap-2.5">
+              <input
+                type="checkbox"
+                class="mt-0.5 h-4 w-4 shrink-0 cursor-pointer accent-primary"
+                :checked="spatialTurnsWithYou"
+                @change="setSpatialTurnsWithYou(($event.target as HTMLInputElement).checked)"
+              >
+              <span class="space-y-0.5">
+                <span class="block text-sm font-medium">Turn with my character</span>
+                <span class="block text-xs text-muted-foreground">
+                  Off, up the screen is always "ahead" — what you hear matches what you're
+                  looking at. On, turning to face someone brings them round to the front, which
+                  is more like being there and less like reading a map.
+                </span>
+              </span>
+            </label>
+          </template>
 
           <SpatialAudioMap
             v-else-if="spatialAudio && peers.length"
             :peers="peers"
             @place="(id, placement) => setPeerPlacement(id, placement)"
+            @unplace="unplacePeer"
             @reset="resetPlacements"
           />
 

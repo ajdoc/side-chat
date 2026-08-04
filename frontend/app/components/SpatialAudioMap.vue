@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import type { Peer } from '~/types'
-import { RotateCcw } from 'lucide-vue-next'
+import { Pin, RotateCcw, X } from 'lucide-vue-next'
 
 /**
  * The call as a floor plan: you in the middle, everybody else a dot you can drag.
@@ -19,15 +19,31 @@ import { RotateCcw } from 'lucide-vue-next'
  * it clamps rather than wraps, because a voice that leaps from far-left to far-right when you
  * overshoot is not a control anyone can aim.
  *
+ * ## In a Side Space
+ *
+ * The same map, doing something slightly different: the dots *move*, because the room is
+ * placing people and they are walking about. Dragging one pins it — that person's voice stops
+ * following them and stays where you put it, which is what you want for the one person you're
+ * actually talking to while a room mills about around you. Pinned people are listed under the
+ * map so a pin is never something you can only discover by wondering why somebody isn't moving.
+ *
  * Nothing here is sent anywhere. Where you put people is yours, like their volume — see
  * setPeerPlacement.
  */
-const props = defineProps<{ peers: Peer[] }>()
+const props = defineProps<{
+  peers: Peer[]
+  /** True in a Side Space: positions are live, and placing somebody is an override. */
+  roomMode?: boolean
+}>()
 
 const emit = defineEmits<{
   place: [id: number, placement: { angle: number, distance: number }]
+  unplace: [id: number]
   reset: []
 }>()
+
+/** Who you've overridden. Only interesting in a Side Space, where the rest are still moving. */
+const pinned = computed(() => props.peers.filter(p => p.placed))
 
 const surface = ref<HTMLElement | null>(null)
 /** Who is being dragged, so the pointer handlers know what they're moving. */
@@ -129,7 +145,7 @@ const initials = (name: string) => name.trim().slice(0, 2).toUpperCase()
         @click="emit('reset')"
       >
         <RotateCcw class="h-3 w-3" />
-        Arrange for me
+        {{ props.roomMode ? 'All back to auto' : 'Arrange for me' }}
       </button>
     </div>
 
@@ -156,17 +172,42 @@ const initials = (name: string) => name.trim().slice(0, 2).toUpperCase()
         class="absolute flex h-9 w-9 -translate-x-1/2 -translate-y-1/2 cursor-grab items-center justify-center rounded-full border bg-background text-[11px] font-medium shadow-sm transition-shadow focus:outline-none focus:ring-2 focus:ring-primary"
         :class="dragging === peer.id ? 'cursor-grabbing shadow-md ring-2 ring-primary' : ''"
         :style="styleFor(peer)"
-        :title="`${peer.name} — ${bearing(peer)}`"
-        :aria-label="`${peer.name}, ${bearing(peer)}. Arrow keys to move.`"
+        :title="`${peer.name} — ${bearing(peer)}${peer.placed && props.roomMode ? ' (pinned)' : ''}`"
+        :aria-label="`${peer.name}, ${bearing(peer)}${peer.placed && props.roomMode ? ', pinned' : ''}. Arrow keys to move.`"
         @pointerdown="startDrag(peer.id, $event)"
         @keydown="nudge(peer, $event)"
       >
         {{ initials(peer.name) }}
+        <Pin
+          v-if="peer.placed && props.roomMode"
+          class="absolute -right-0.5 -top-0.5 h-3 w-3 rounded-full bg-background text-primary"
+        />
+      </button>
+    </div>
+
+    <div v-if="props.roomMode && pinned.length" class="flex flex-wrap items-center gap-1.5">
+      <span class="text-xs text-muted-foreground">Pinned:</span>
+      <button
+        v-for="peer in pinned"
+        :key="peer.id"
+        type="button"
+        class="flex items-center gap-1 rounded-full border bg-muted/50 py-0.5 pl-2 pr-1 text-xs transition hover:bg-muted"
+        :title="`Let the room place ${peer.name} again`"
+        @click="emit('unplace', peer.id)"
+      >
+        {{ peer.name }}
+        <X class="h-3 w-3 text-muted-foreground" />
       </button>
     </div>
 
     <p class="text-xs text-muted-foreground">
-      Drag someone to hear them from that direction — or focus a dot and use the arrow keys.
+      <template v-if="props.roomMode">
+        Dots move as people walk. Drag one to pin that person there instead — their voice stops
+        following them until you let the room have them back.
+      </template>
+      <template v-else>
+        Drag someone to hear them from that direction — or focus a dot and use the arrow keys.
+      </template>
       Where you put people is yours alone; nobody is told, and it's remembered for next time.
     </p>
   </div>

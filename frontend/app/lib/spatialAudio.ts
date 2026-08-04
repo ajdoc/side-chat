@@ -38,6 +38,8 @@
  * debuggable. So the panner does one job (direction) and gain does the other.
  */
 
+import type { Facing } from '~/lib/spaceMapEngine'
+
 /** A voice's position relative to you: a bearing, and how far off it is. */
 export interface SpatialPlacement {
   /** Radians. 0 is straight ahead, π/2 your right, π behind you, -π/2 your left. */
@@ -45,6 +47,18 @@ export interface SpatialPlacement {
   /** 0..1. Near to far — see {@link distanceGain} for what it costs in loudness. */
   distance: number
 }
+
+/**
+ * How wide the sound field is, 0..1 — the one dial over how strong all of this feels.
+ *
+ * Not everyone wants the full effect, and the reasons are real rather than fussy: hearing
+ * differs between ears and between people, generic HRTF filters fit some heads better than
+ * others, and on speakers rather than headphones a hard-panned voice can end up sounding like
+ * it's coming from somewhere else in your actual room. So the placement is a direction and
+ * this is how far towards the centre it gets pulled back — 0 is the old mono call, 1 is the
+ * full width.
+ */
+export const DEFAULT_WIDTH = 0.8
 
 /** Where somebody sits before anyone has moved them: ahead, at a conversational distance. */
 export const DEFAULT_PLACEMENT: SpatialPlacement = { angle: 0, distance: 0.5 }
@@ -103,10 +117,12 @@ export function arrangeInArc(ids: number[]): Map<number, SpatialPlacement> {
  * Turn "they are 3 tiles east and 1 north of me" into a placement.
  *
  * Screen space, so `dy` grows *downwards* — someone below you on the map is behind you in the
- * room, which is why the bearing is measured from -y. The stage's own facing isn't folded in:
- * the listener is treated as always facing up the screen, because that's the frame the player
- * is actually looking at, and rotating the sound field under someone who turned their sprite
- * around is disorienting rather than immersive.
+ * room, which is why the bearing is measured from -y.
+ *
+ * Your own facing isn't folded in here, deliberately: the default listener faces up the screen,
+ * because that's the frame you are actually looking at, and a sound field that swings every
+ * time you tap an arrow key is disorienting rather than immersive. Turning it into a
+ * first-person one is a choice you make — see {@link rotatePlacement}, applied afterwards.
  */
 export function placementFromOffset(dx: number, dy: number, farTiles = SPACE_FAR_TILES): SpatialPlacement {
   const tiles = Math.hypot(dx, dy)
@@ -134,8 +150,8 @@ export function distanceGain(distance: number): number {
 
 /** One person's voice, positioned. Created per peer, torn down with them. */
 export interface SpatialVoice {
-  /** Move them. Ramped rather than jumped — a position that steps is a click. */
-  setPlacement: (placement: SpatialPlacement) => void
+  /** Move them, at the current field width. Ramped rather than jumped — a step is a click. */
+  setPlacement: (placement: SpatialPlacement, width: number) => void
   /** Their loudness: your volume × mute × whatever the room says. 0 is silence. */
   setGain: (gain: number) => void
   /** Unhook everything. Does not touch the stream or the <audio> element. */
@@ -145,19 +161,43 @@ export interface SpatialVoice {
 /** Ramp constant for both position and gain — long enough not to click, short enough to track. */
 const RAMP_SECONDS = 0.06
 
+/**
+ * Which way "ahead" points when the room turns with you.
+ *
+ * Screen-up is the zero, because that's the frame you're looking at. Facing right means what
+ * was on your right is now in front of you, so every placement rotates the other way — hence
+ * the subtraction in {@link rotatePlacement}.
+ */
+export function facingAngle(facing: Facing): number {
+  if (facing === 'right') return Math.PI / 2
+  if (facing === 'down') return Math.PI
+  if (facing === 'left') return -Math.PI / 2
+
+  return 0
+}
+
+/** The same placement seen by a listener who has turned to face `facing`. */
+export function rotatePlacement(placement: SpatialPlacement, facing: Facing): SpatialPlacement {
+  return { angle: placement.angle - facingAngle(facing), distance: placement.distance }
+}
+
 function applyPlacement(
   ctx: AudioContext,
   node: PannerNode | StereoPannerNode,
   { angle, distance }: SpatialPlacement,
+  width: number,
 ) {
   const at = ctx.currentTime
+  const spread = Math.min(1, Math.max(0, width))
 
   if (!(node instanceof StereoPannerNode)) {
     const radius = NEAR_UNITS + (FAR_UNITS - NEAR_UNITS) * Math.min(1, Math.max(0, distance))
     // The listener faces -Z with +X to their right (WebAudio's convention), so an angle
     // measured clockwise from straight ahead is (sin, -cos) — the only place this file's
     // polar convention meets WebAudio's cartesian one.
-    const x = Math.sin(angle) * radius
+    // Width narrows the field by pulling voices towards the centre line rather than by
+    // shrinking the radius: it should change how far apart people sound, not how far away.
+    const x = Math.sin(angle) * radius * spread
     const z = -Math.cos(angle) * radius
 
     // positionX/Y/Z are AudioParams and can be ramped; the deprecated setPosition() cannot,
@@ -177,7 +217,7 @@ function applyPlacement(
   // The fallback is a stereo pan and nothing more: no elevation, no front/back, no HRTF.
   // `sin(angle)` collapses front and behind onto the same pan, which is the honest thing a
   // left/right fader can express.
-  node.pan.linearRampToValueAtTime(Math.max(-1, Math.min(1, Math.sin(angle))), at + RAMP_SECONDS)
+  node.pan.linearRampToValueAtTime(Math.max(-1, Math.min(1, Math.sin(angle) * spread)), at + RAMP_SECONDS)
 }
 
 /**
@@ -199,6 +239,7 @@ export function createSpatialVoice(
   ctx: AudioContext,
   stream: MediaStream,
   placement: SpatialPlacement,
+  width: number,
 ): SpatialVoice | null {
   if (!stream.getAudioTracks().length || ctx.state === 'closed') return null
 
@@ -224,10 +265,10 @@ export function createSpatialVoice(
     }
 
     source.connect(panner).connect(gain).connect(ctx.destination)
-    applyPlacement(ctx, panner, placement)
+    applyPlacement(ctx, panner, placement, width)
 
     return {
-      setPlacement: p => applyPlacement(ctx, panner, p),
+      setPlacement: (p, w) => applyPlacement(ctx, panner, p, w),
       setGain: (value) => {
         // Ramped for the same reason as position: in a Side Space this moves continuously,
         // and a gain that steps between frames is audible as a buzz on every footstep.

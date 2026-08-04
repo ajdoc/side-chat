@@ -1,4 +1,5 @@
 import type { MicChain, NoiseSuppression } from '~/lib/micProcessing'
+import type { Facing } from '~/lib/spaceMapEngine'
 import type { SpatialPlacement, SpatialVoice } from '~/lib/spatialAudio'
 import type { IceServer, Peer, PeerConnectionState, VoiceEffectPair, VoiceEffects, VoiceParticipant } from '~/types'
 import {
@@ -14,8 +15,10 @@ import {
   centreListener,
   createSpatialVoice,
   DEFAULT_PLACEMENT,
+  DEFAULT_WIDTH,
   distanceGain,
   placementFromOffset,
+  rotatePlacement,
   spatialSupported,
 } from '~/lib/spatialAudio'
 
@@ -389,6 +392,17 @@ const proximityGains = new Map<number, number>()
  * walking back into earshot arrives from the side they actually walked in from.
  */
 const proximityPlacements = new Map<number, SpatialPlacement>()
+/**
+ * The raw offsets those placements were computed from, in tiles, and which way you were facing
+ * at the time.
+ *
+ * Kept because a placement is a *derived* thing — offset, rotated by your facing if you asked
+ * for that — and the two settings that feed it can change while nobody is moving. Without the
+ * inputs, turning "the room turns with me" on would leave everyone where they were until their
+ * next footstep, which reads as the setting not working.
+ */
+const proximityOffsets = new Map<number, { x: number, y: number }>()
+let myFacing: Facing = 'up'
 /** Pending teardowns, so a peer who steps briefly out of range isn't dropped on the spot. */
 const dropTimers = new Map<number, ReturnType<typeof setTimeout>>()
 /**
@@ -733,6 +747,24 @@ export function useVoice() {
   const spatialAudio = useState<boolean>('voice:spatialAudio', () => loadSettings().spatialAudio)
   /** Whether this browser can do it at all. The setting is hidden rather than lying when not. */
   const canSpatialise = computed(() => spatialSupported())
+  /**
+   * How wide the sound field is, 0–1 — see DEFAULT_WIDTH. The dial for people who want the
+   * separation without voices flying out to the edges of their head, and the honest answer for
+   * anyone the full effect simply doesn't sit well with.
+   */
+  const spatialWidth = useState<number>('voice:spatialWidth', () => loadSettings().spatialWidth)
+  /**
+   * In a Side Space: does the room turn when your character does?
+   *
+   * Off by default, which is the third-person answer — up the screen is always "ahead", so what
+   * you hear matches what you're looking at. On, it's first-person: turn to face someone and
+   * they move to the front. Better for immersion, worse for the map, and enough of a
+   * coin-flip between people that it's a switch rather than a decision made for you.
+   */
+  const spatialTurnsWithYou = useState<boolean>(
+    'voice:spatialTurnsWithYou',
+    () => loadSettings().spatialTurnsWithYou,
+  )
   /** True in a Side Space, where positions come from where everyone is stood. */
   const roomPlacesPeople = useState<boolean>('voice:roomPlacesPeople', () => false)
 
@@ -876,6 +908,8 @@ export function useVoice() {
     speakerId: string | null
     noiseSuppression: NoiseSuppression
     spatialAudio: boolean
+    spatialWidth: number
+    spatialTurnsWithYou: boolean
     resolution: ScreenResolution
     mode: ScreenMode
     pushToTalk: boolean
@@ -885,6 +919,8 @@ export function useVoice() {
       speakerId: null,
       noiseSuppression: DEFAULT_NOISE_SUPPRESSION,
       spatialAudio: false,
+      spatialWidth: DEFAULT_WIDTH,
+      spatialTurnsWithYou: false,
       resolution: DEFAULT_SCREEN_RESOLUTION,
       mode: DEFAULT_SCREEN_MODE,
       pushToTalk: false,
@@ -899,6 +935,10 @@ export function useVoice() {
           ? saved.noiseSuppression
           : DEFAULT_NOISE_SUPPRESSION,
         spatialAudio: saved.spatialAudio === true,
+        spatialWidth: typeof saved.spatialWidth === 'number' && saved.spatialWidth >= 0 && saved.spatialWidth <= 1
+          ? saved.spatialWidth
+          : DEFAULT_WIDTH,
+        spatialTurnsWithYou: saved.spatialTurnsWithYou === true,
         resolution: SCREEN_RESOLUTIONS.includes(saved.resolution) ? saved.resolution : DEFAULT_SCREEN_RESOLUTION,
         mode: (['auto', 'detail', 'motion'] as const).includes(saved.mode) ? saved.mode : DEFAULT_SCREEN_MODE,
         pushToTalk: saved.pushToTalk === true,
@@ -915,6 +955,8 @@ export function useVoice() {
       speakerId: speakerId.value,
       noiseSuppression: noiseSuppression.value,
       spatialAudio: spatialAudio.value,
+      spatialWidth: spatialWidth.value,
+      spatialTurnsWithYou: spatialTurnsWithYou.value,
       resolution: screenResolution.value,
       mode: screenMode.value,
       pushToTalk: pushToTalk.value,
@@ -956,7 +998,7 @@ export function useVoice() {
       // silence someone is one too many, and the element is the one that can't also pan.
       handle.audio.muted = true
       handle.audio.volume = 1
-      handle.spatial.setPlacement(peer.placement)
+      handle.spatial.setPlacement(peer.placement, spatialWidth.value)
       // Distance costs loudness only for placements *you* made. In a Side Space `proximity`
       // is already a distance curve — one that knows about walls, which this doesn't — and
       // charging for the same distance twice would make far-off people vanish early.
@@ -1012,7 +1054,7 @@ export function useVoice() {
     if (!handle || !peer || handle.spatial || !audioCtx) return
     if (!spatialAudio.value || !canSpatialise.value) return
 
-    handle.spatial = createSpatialVoice(audioCtx, handle.audioStream, peer.placement)
+    handle.spatial = createSpatialVoice(audioCtx, handle.audioStream, peer.placement, spatialWidth.value)
     // Null means the browser wouldn't build it (or the track isn't there yet). The <audio>
     // element is still playing them the ordinary way, so this is a missing feature and not a
     // missing person — applyAudio takes the non-spatial branch and everything works.
@@ -1037,16 +1079,19 @@ export function useVoice() {
    * lands they sit dead ahead rather than somewhere arbitrary.
    */
   function initialPlacement(id: number): { placement: SpatialPlacement, placed: boolean } {
-    if (proximityMode) {
-      return { placement: proximityPlacements.get(id) ?? { ...DEFAULT_PLACEMENT, distance: 0 }, placed: false }
-    }
-
+    // A placement you made yourself outranks both automatic sources — the arc in a channel and
+    // the room in a Side Space. It's the same stored preference either way: "where I like to
+    // hear this person from" is one decision, not one per kind of call.
     const pref = loadPrefs()[id]
     if (typeof pref?.angle === 'number') {
       return {
         placement: { angle: pref.angle, distance: pref.distance ?? DEFAULT_PLACEMENT.distance },
         placed: true,
       }
+    }
+
+    if (proximityMode) {
+      return { placement: proximityPlacements.get(id) ?? { ...DEFAULT_PLACEMENT, distance: 0 }, placed: false }
     }
 
     return { placement: { ...DEFAULT_PLACEMENT }, placed: false }
@@ -1079,10 +1124,16 @@ export function useVoice() {
   /**
    * Move somebody. Yours alone, never sent, and remembered — this is the same kind of
    * decision as turning a person down, and it's stored next to it.
+   *
+   * In a Side Space this *pins* them: their voice stops following them round the room and
+   * stays where you put it, until you send them back to auto with {@link unplacePeer}. Which
+   * sounds like it defies the room, and does — deliberately. Someone you're actually trying to
+   * talk to while the room mills about is exactly the case where "realistic" is the wrong
+   * goal, and it's the same reason per-person volume is allowed to override distance.
    */
   function setPeerPlacement(id: number, placement: SpatialPlacement) {
     const peer = peers.value.find(p => p.id === id)
-    if (!peer || proximityMode) return
+    if (!peer) return
 
     const clamped: SpatialPlacement = {
       angle: placement.angle,
@@ -1095,6 +1146,27 @@ export function useVoice() {
   }
 
   /**
+   * Hand one person back to whichever automatic source this call has — the arc in a channel,
+   * the room in a Side Space. The per-person counterpart to {@link resetPlacements}.
+   */
+  function unplacePeer(id: number) {
+    const peer = peers.value.find(p => p.id === id)
+    if (!peer) return
+
+    patchPeer(id, { placed: false })
+    savePref(id, { angle: undefined, distance: undefined })
+
+    if (proximityMode) {
+      const placement = spacePlacementFor(id) ?? peer.placement
+      patchPeer(id, { placement })
+      applyAudio(id)
+      return
+    }
+
+    restackUnplaced()
+  }
+
+  /**
    * Throw the room away and lay it out again from scratch — including the people you placed.
    *
    * The escape hatch for an arrangement that has drifted somewhere unhelpful over a few
@@ -1102,14 +1174,64 @@ export function useVoice() {
    * layout fighting a preference you can no longer see.
    */
   function resetPlacements() {
-    if (proximityMode) return
-
     for (const peer of peers.value) {
       patchPeer(peer.id, { placed: false })
       savePref(peer.id, { angle: undefined, distance: undefined })
     }
 
-    restackUnplaced()
+    if (proximityMode) restackRoom()
+    else restackUnplaced()
+  }
+
+  /**
+   * Where a Side Space occupant sits, from the last offset we had for them.
+   *
+   * The whole derivation in one place, so the four things that can change it — they moved, you
+   * moved, you turned, you flipped the setting — all end up at the same answer.
+   */
+  function spacePlacementFor(id: number): SpatialPlacement | null {
+    const offset = proximityOffsets.get(id)
+    if (!offset) return null
+
+    const placement = placementFromOffset(offset.x, offset.y)
+
+    return spatialTurnsWithYou.value ? rotatePlacement(placement, myFacing) : placement
+  }
+
+  /** Re-seat everybody in a Side Space, after something that moves all of them at once. */
+  function restackRoom() {
+    if (!proximityMode) return
+
+    for (const peer of peers.value) {
+      const placement = spacePlacementFor(peer.id)
+      if (!placement) continue
+
+      // Kept up to date even for someone you've pinned: it's where they'd go back to, and
+      // un-pinning them shouldn't drop them at wherever the room last happened to say.
+      proximityPlacements.set(peer.id, placement)
+      if (peer.placed) continue
+
+      patchPeer(peer.id, { placement })
+      applyAudio(peer.id)
+    }
+  }
+
+  /**
+   * How wide the sound field is. Takes effect immediately on every voice — it's a single
+   * multiplier inside the panner, so this costs one ramp per person, not a rebuild.
+   */
+  function setSpatialWidth(width: number) {
+    spatialWidth.value = Math.min(1, Math.max(0, width))
+    saveSettings()
+
+    for (const id of handles.keys()) applyAudio(id)
+  }
+
+  /** First-person or third-person listening in a Side Space. See spatialTurnsWithYou. */
+  function setSpatialTurnsWithYou(on: boolean) {
+    spatialTurnsWithYou.value = on
+    saveSettings()
+    restackRoom()
   }
 
   /** Turn spatial audio on or off. Remembered, and applied to a live call on the spot. */
@@ -2096,6 +2218,7 @@ export function useVoice() {
     setProximityMode(false)
     lastStates.clear()
     proximityPlacements.clear()
+    proximityOffsets.clear()
 
     if (id) {
       try {
@@ -2224,6 +2347,7 @@ export function useVoice() {
       syncMemberIds()
       proximityGains.clear()
       proximityPlacements.clear()
+      proximityOffsets.clear()
       for (const timer of dropTimers.values()) clearTimeout(timer)
       dropTimers.clear()
     }
@@ -2249,9 +2373,17 @@ export function useVoice() {
    * either — the placement is kept up to date so switching the setting on mid-walk is right
    * immediately rather than at their next step.
    */
-  function setPeerProximity(id: number, gain: number, offset?: { x: number, y: number }) {
+  function setPeerProximity(id: number, gain: number, offset?: { x: number, y: number, facing?: Facing }) {
     const clamped = Math.min(1, Math.max(0, gain))
-    const placement = offset ? placementFromOffset(offset.x, offset.y) : null
+
+    if (offset) {
+      proximityOffsets.set(id, { x: offset.x, y: offset.y })
+      // Your own facing arrives with every occupant's offset (it's the same `self`), so the
+      // last one in wins and they all agree. Cheap enough not to bother de-duplicating.
+      if (offset.facing) myFacing = offset.facing
+    }
+
+    const placement = offset ? spacePlacementFor(id) : null
     const previous = proximityPlacements.get(id)
     // A hundredth of a radian is well under what anyone can localise, and this is the guard
     // that keeps a walking room from patching reactive state on every frame.
@@ -2268,10 +2400,13 @@ export function useVoice() {
 
     // Held even with no peer to apply it to: they may be out of connect range right now, and
     // these are the values createPeer will start them at when they walk back.
-    if (peers.value.some(p => p.id === id)) {
+    const peer = peers.value.find(p => p.id === id)
+    if (peer) {
       patchPeer(id, {
         proximity: clamped,
-        ...(placement && turned ? { placement } : {}),
+        // Distance still applies to a pinned person — they can walk out of earshot like
+        // anybody else. It's only the *direction* their voice comes from that you've fixed.
+        ...(placement && turned && !peer.placed ? { placement } : {}),
       })
       applyAudio(id)
     }
@@ -3115,8 +3250,13 @@ export function useVoice() {
     spatialAudio,
     canSpatialise,
     roomPlacesPeople,
+    spatialWidth,
+    spatialTurnsWithYou,
     setSpatialAudio,
+    setSpatialWidth,
+    setSpatialTurnsWithYou,
     setPeerPlacement,
+    unplacePeer,
     resetPlacements,
     noiseSuppressionOptions: NOISE_SUPPRESSION_OPTIONS,
     setNoiseSuppression,

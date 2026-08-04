@@ -1,5 +1,5 @@
 import type { Ref } from 'vue'
-import type { Occupant, SpaceMap } from '~/lib/spaceMapEngine'
+import type { Facing, Occupant, SpaceMap } from '~/lib/spaceMapEngine'
 import { audibility, inConnectRange } from '~/lib/spaceMapEngine'
 
 /**
@@ -22,7 +22,11 @@ interface Ctx {
   others: () => Record<number, Occupant & { tx: number, ty: number }>
   /** Everyone on the presence channel, dialled or not — including people we've yet to place. */
   knownMembers: () => Array<{ id: number }>
-  setPeerProximity: (id: number, gain: number, offset?: { x: number, y: number }) => void
+  setPeerProximity: (
+    id: number,
+    gain: number,
+    offset?: { x: number, y: number, facing?: Facing },
+  ) => void
   setPeerInRange: (id: number, inRange: boolean) => void
   fireEffect: (kind: 'join' | 'leave', id: number, name: string) => void
   /** A game meeting: the whole room hears the whole room, whatever the distance. */
@@ -78,7 +82,9 @@ function evaluate() {
     // Direction as well as loudness, so spatial audio can put a voice where its owner is
     // standing. Measured from the whispered positions for the same reason the gain is: both
     // ends computing from the truth is what keeps the two sides' answers in step.
-    ctx.setPeerProximity(member.id, gain, { x: at.x - self.x, y: at.y - self.y })
+    // Your facing rides along so the call can offer a first-person sound field — the room
+    // turning as you do — without this loop needing to know whether anyone wants one.
+    ctx.setPeerProximity(member.id, gain, { x: at.x - self.x, y: at.y - self.y, facing: self.facing })
     ctx.setPeerInRange(member.id, meeting ? true : inConnectRange(m, self, at))
 
     if (gain > 0) {
