@@ -37,6 +37,22 @@ contextBridge.exposeInMainWorld('sideChatDesktop', {
   },
 
   /**
+   * Direct-to-bucket uploads, made from the main process — see main.js for why they can't be
+   * made from the page. Nothing here can name a destination the API didn't sign: the URL and
+   * its headers come straight back from `POST /api/uploads` and are passed through untouched.
+   */
+  uploads: {
+    /** Open a PUT. Resolves to the id the slices and the finish are addressed to. */
+    begin: (url, headers) => ipcRenderer.invoke('upload:begin', { url, headers }),
+    /** Hand over one slice. Resolves when the socket has taken it — see main.js. */
+    write: (id, chunk) => ipcRenderer.invoke('upload:write', id, chunk),
+    /** No more bytes. Resolves to `{ status }` once the store has answered. */
+    finish: id => ipcRenderer.invoke('upload:finish', id),
+    /** Cancelled, or the page is giving up on it. */
+    abort: id => ipcRenderer.send('upload:abort', id),
+  },
+
+  /**
    * Remote control, sharer side only.
    *
    * Note what is *not* here: nothing that reads the screen, nothing that grants anything. This

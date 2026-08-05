@@ -31,6 +31,8 @@ const {
   suppressionStrengthRange,
   normalizeVolume,
   setNormalizeVolume,
+  outputVolume,
+  setOutputVolume,
   peers,
   spatialAudio,
   canSpatialise,
@@ -195,6 +197,29 @@ const modeOptions = [
             Your browser plays the call through the system default output — it doesn't allow
             choosing a speaker here. (Chrome and Edge do.)
           </p>
+        </label>
+
+        <!-- How loud everyone else is. Live: audible as you drag, mid-call. -->
+        <label class="block space-y-1">
+          <span class="flex items-center justify-between text-sm font-medium">
+            <span>Call volume</span>
+            <span class="text-xs font-normal tabular-nums text-muted-foreground">
+              {{ Math.round(outputVolume * 100) }}%
+            </span>
+          </span>
+          <input
+            type="range"
+            min="0"
+            max="100"
+            step="5"
+            class="w-full cursor-pointer accent-primary"
+            :value="Math.round(outputVolume * 100)"
+            @input="setOutputVolume(Number(($event.target as HTMLInputElement).value) / 100)"
+          >
+          <span class="block text-xs text-muted-foreground">
+            Everyone at once, and anything they're sharing — without touching how loud one
+            person is next to another. Turn a single person up or down on their tile instead.
+          </span>
         </label>
 
         <!-- Noise suppression -->

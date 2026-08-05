@@ -169,6 +169,9 @@ export function useChunkedUpload() {
     headers: Record<string, string>,
     opts: UploadOptions,
   ): Promise<void> {
+    const desktop = (globalThis as any).sideChatDesktop?.uploads
+    if (desktop) return putViaDesktop(file, url, headers, opts, desktop)
+
     return new Promise((resolve, reject) => {
       const xhr = new XMLHttpRequest()
 
@@ -205,6 +208,51 @@ export function useChunkedUpload() {
 
       xhr.send(file)
     })
+  }
+
+  /**
+   * The same PUT, made by the desktop shell's main process instead of by the page.
+   *
+   * The desktop bundle is served from `http://127.0.0.1:<port>`, an origin no bucket's CORS
+   * policy names, so the browser refuses the request before it leaves — which is why large
+   * attachments on the desktop app failed with "the storage service could not be reached"
+   * while the same file uploaded fine from a browser tab. The main process is not bound by
+   * the same-origin policy; see `provideUploads` in desktop/main.js.
+   *
+   * The file is read and sent a slice at a time, which is both what keeps a 2GB attachment
+   * out of memory and — since each write resolves only when the socket has taken it — where
+   * the progress numbers come from.
+   */
+  async function putViaDesktop(
+    file: File,
+    url: string,
+    headers: Record<string, string>,
+    opts: UploadOptions,
+    bridge: {
+      begin: (url: string, headers: Record<string, string>) => Promise<string>
+      write: (id: string, chunk: ArrayBuffer) => Promise<void>
+      finish: (id: string) => Promise<{ status: number }>
+      abort: (id: string) => void
+    },
+  ): Promise<void> {
+    const id = await bridge.begin(url, headers)
+
+    try {
+      for (let sent = 0; sent < file.size; sent += CHUNK_BYTES) {
+        opts.signal?.throwIfAborted()
+        await bridge.write(id, await file.slice(sent, sent + CHUNK_BYTES).arrayBuffer())
+        opts.onProgress?.(Math.min(1, (sent + CHUNK_BYTES) / file.size))
+      }
+
+      const { status } = await bridge.finish(id)
+      // Same verdict as the XHR path: a 2xx or the upload did not happen, whatever the body
+      // says, and the server must not then be told it completed.
+      if (status < 200 || status >= 300) throw new Error(`Upload failed (${status}).`)
+    } catch (e) {
+      // Abandoning the request also releases the socket; harmless if it already finished.
+      bridge.abort(id)
+      throw e
+    }
   }
 
   /** Bin a staged upload — a removed attachment, or one abandoned mid-transfer. */

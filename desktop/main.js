@@ -104,6 +104,7 @@ app.whenReady().then(async () => {
   grantMediaPermissions(partition)
   provideScreenSources(partition)
   provideRemoteControl()
+  provideUploads()
   createWindow()
 
   app.on('activate', () => {
@@ -356,6 +357,105 @@ function provideRemoteControl() {
   ipcMain.on('screen-share:stopped', () => {
     sharedSourceId = null
     void remoteControl.releaseAll()
+  })
+}
+
+/**
+ * Send a big attachment straight to the object store on the page's behalf.
+ *
+ * Large uploads take a signed URL and PUT the bytes to the bucket themselves, bypassing the
+ * API entirely (see useChunkedUpload). In a browser that works because the bucket's CORS
+ * policy names the site's origin. The desktop shell's origin is `http://127.0.0.1:43117` — a
+ * loopback port belonging to this machine, which no bucket policy will ever have heard of —
+ * so the preflight is refused and every large upload failed with "the storage service could
+ * not be reached", the browser's indistinguishable-from-offline report of a CORS rejection.
+ *
+ * The main process is not a browser and enforces no same-origin policy, so the fix is to make
+ * the PUT from here. `net.request` also goes through Chromium's network stack, so it keeps the
+ * proxy settings and system certificates the renderer would have used.
+ *
+ * The bytes arrive a slice at a time rather than as one buffer: these are the files big enough
+ * to be worth signing a URL for, and moving a 2GB `ArrayBuffer` across the bridge in one piece
+ * would copy it twice and be structured-cloned in between. Each `write` resolves only once the
+ * socket has taken the slice, which is what paces the renderer's reads to the network.
+ */
+function provideUploads() {
+  /** In-flight PUTs by id. One per upload; the renderer stages files one at a time. */
+  const inFlight = new Map()
+
+  ipcMain.handle('upload:begin', (_event, { url, headers } = {}) => {
+    // Only ever a signed URL our own API just handed the page. Anything else — a file:// or
+    // a custom scheme — is not something this bridge should be willing to fetch.
+    if (typeof url !== 'string' || !/^https?:\/\//i.test(url)) throw new Error('Unsupported upload URL.')
+
+    const request = net.request({ method: 'PUT', url })
+    for (const [key, value] of Object.entries(headers ?? {})) {
+      if (typeof value === 'string') request.setHeader(key, value)
+    }
+
+    const entry = { request, status: null, failure: null, settled: null }
+
+    // The response is read to completion and thrown away: the store answers an empty body on
+    // success and an XML error document otherwise, and the status is the whole verdict. Not
+    // draining it would leave the socket half-read and the request never finished.
+    request.on('response', (response) => {
+      response.on('data', () => {})
+      response.on('end', () => {
+        entry.status = response.statusCode
+        entry.settled?.()
+      })
+    })
+    request.on('error', (error) => {
+      entry.failure = error
+      entry.settled?.()
+    })
+
+    const id = `${Date.now()}-${Math.random().toString(36).slice(2)}`
+    inFlight.set(id, entry)
+
+    return id
+  })
+
+  // Resolves when the slice has been handed to the socket — the callback form of `write` is
+  // what makes this backpressure rather than an unbounded buffer in the main process.
+  ipcMain.handle('upload:write', (_event, id, chunk) => new Promise((resolve, reject) => {
+    const entry = inFlight.get(id)
+    if (!entry) return reject(new Error('That upload is no longer open.'))
+    if (entry.failure) return reject(entry.failure)
+
+    entry.request.write(Buffer.from(chunk), (error) => {
+      if (error) reject(error)
+      else resolve()
+    })
+  }))
+
+  ipcMain.handle('upload:finish', (_event, id) => new Promise((resolve, reject) => {
+    const entry = inFlight.get(id)
+    if (!entry) return reject(new Error('That upload is no longer open.'))
+
+    const done = () => {
+      inFlight.delete(id)
+      if (entry.failure) reject(new Error(entry.failure.message ?? 'The storage service could not be reached.'))
+      else resolve({ status: entry.status ?? 0 })
+    }
+
+    // Either half may already have happened: an error can arrive while the last slice is
+    // still being written, and a store that rejects the upload can answer before `end`.
+    if (entry.status !== null || entry.failure) done()
+    else entry.settled = done
+
+    if (!entry.failure) entry.request.end()
+  }))
+
+  ipcMain.on('upload:abort', (_event, id) => {
+    const entry = inFlight.get(id)
+    if (!entry) return
+    inFlight.delete(id)
+    try {
+      entry.request.abort()
+    } catch {
+      // Already finished or already aborted; either way there is nothing left to stop.
+    }
   })
 }
 

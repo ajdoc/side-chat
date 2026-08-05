@@ -1,5 +1,6 @@
 import type { MicChain, NoiseSuppression } from '~/lib/micProcessing'
 import type { Facing } from '~/lib/spaceMapEngine'
+import type { CleanedCapture } from '~/lib/shareEcho'
 import type { SpatialPlacement, SpatialVoice } from '~/lib/spatialAudio'
 import type { IceServer, Peer, PeerConnectionState, VoiceEffectPair, VoiceEffects, VoiceParticipant } from '~/types'
 import {
@@ -14,6 +15,7 @@ import {
   resetMicProcessing,
   SUPPRESSION_STRENGTH_RANGE,
 } from '~/lib/micProcessing'
+import { cancelCallEcho } from '~/lib/shareEcho'
 import {
   arrangeInArc,
   centreListener,
@@ -116,6 +118,16 @@ const SHARED_AUDIO_MAX_BITRATE = 128_000
  * someone with headroom trade it back up. Past ~4K it's the encoder, not the network, that
  * falls over, which is the whole reason the cap is on the capture and not just the bitrate.
  */
+/**
+ * Where the call's own fader starts, before anyone has touched it — see `outputVolume`.
+ *
+ * Not 1. A remote voice at full scale sits noticeably above the level people have their
+ * machine set to for everything else, so a call opened at 1 is the one thing on the system
+ * that makes them reach for the knob. Starting a little under leaves room to go *up* for a
+ * quiet talker, which a ceiling of 1 does not.
+ */
+const DEFAULT_OUTPUT_VOLUME = 0.75
+
 const SCREEN_RESOLUTIONS = [480, 720, 1080] as const
 type ScreenResolution = (typeof SCREEN_RESOLUTIONS)[number]
 const DEFAULT_SCREEN_RESOLUTION: ScreenResolution = 720
@@ -209,6 +221,14 @@ interface PeerHandle {
    * keep a remote stream flowing into WebAudio. See createSpatialVoice.
    */
   spatial: SpatialVoice | null
+  /**
+   * This peer's contribution to the echo canceller's reference mix — their voice and their
+   * shared sound, at the levels you're actually hearing them.
+   *
+   * Null unless a desktop share is carrying the machine's own audio, which is the only time
+   * anything needs to know what the call sounds like from outside. See openReferenceMix.
+   */
+  refTaps: { voice: GainNode, screen: GainNode } | null
   speakingUntil: number
   // --- perfect negotiation bookkeeping (see negotiate/onSignal) ---
   polite: boolean
@@ -349,6 +369,26 @@ let iceServers: IceServer[] = []
 let presence: any = null
 let audioCtx: AudioContext | null = null
 let localAnalyser: AnalyserNode | null = null
+/**
+ * A silent copy of everything the call is playing you — every voice, and every screen's sound —
+ * kept as one node so it can be handed to the echo canceller as the signal to subtract.
+ *
+ * Silent because it is never connected to the destination: the call is already audible through
+ * the peers' own <audio> elements, and connecting this as well would play everyone twice. It's
+ * a *tap*, and it only exists while a desktop share is carrying the machine's own sound — see
+ * openReferenceMix, and shareEcho.ts for what it's for.
+ */
+let referenceMix: GainNode | null = null
+/** The canceller wrapping the current share's audio, if one is in place. */
+let shareCleanup: CleanedCapture | null = null
+/**
+ * The capture the canceller is reading from, when one is in place.
+ *
+ * Held separately because the track the peers get is no longer the track the OS gave us: it's
+ * the graph's output, and stopping *that* leaves the real capture running — a screen still
+ * marked as being recorded, with nothing left listening to it.
+ */
+let rawShareAudioTrack: MediaStreamTrack | null = null
 // The WebAudio node feeding the speaking indicator from your mic. Kept in module scope so a
 // mid-call microphone swap can unhook the old capture and hook the new one. See setMicDevice.
 let localSource: MediaStreamAudioSourceNode | null = null
@@ -849,6 +889,21 @@ export function useVoice() {
     'voice:normalizeVolume',
     () => loadSettings().normalizeVolume,
   )
+  /**
+   * One fader over everybody, 0–1 — the call's own volume, on top of the machine's.
+   *
+   * It exists because the per-peer faders can't be the answer to "the call is too loud": they
+   * are a decision about *one person relative to the others*, and turning all of them down one
+   * at a time both undoes that comparison and has to be redone for every new person who joins.
+   * The system volume can't be the answer either, since it takes the music and the video down
+   * with it. So: multiplied into every peer's level in {@link applyAudio}, shared audio
+   * included, and left out of `savePref` entirely — it belongs to you, not to a person.
+   *
+   * The default is deliberately under 1. A voice arriving at a browser's full scale is louder
+   * than most of what people play through the same speakers, which is what "everyone is
+   * shouting" turned out to mean; this leaves headroom to turn a quiet talker *up*.
+   */
+  const outputVolume = useState<number>('voice:outputVolume', () => loadSettings().outputVolume)
   const screenResolution = useState<ScreenResolution>('voice:screenResolution', () => loadSettings().resolution)
   const screenMode = useState<ScreenMode>('voice:screenMode', () => loadSettings().mode)
   /** Whether this browser can even honour an output-device choice (Chromium can; Firefox not). */
@@ -985,6 +1040,7 @@ export function useVoice() {
     noiseSuppression: NoiseSuppression
     suppressionStrength: number
     normalizeVolume: boolean
+    outputVolume: number
     spatialAudio: boolean
     spatialWidth: number
     spatialTurnsWithYou: boolean
@@ -998,6 +1054,7 @@ export function useVoice() {
       noiseSuppression: DEFAULT_NOISE_SUPPRESSION,
       suppressionStrength: DEFAULT_SUPPRESSION_STRENGTH,
       normalizeVolume: DEFAULT_NORMALIZE_VOLUME,
+      outputVolume: DEFAULT_OUTPUT_VOLUME,
       spatialAudio: false,
       spatialWidth: DEFAULT_WIDTH,
       spatialTurnsWithYou: false,
@@ -1020,6 +1077,9 @@ export function useVoice() {
         normalizeVolume: typeof saved.normalizeVolume === 'boolean'
           ? saved.normalizeVolume
           : DEFAULT_NORMALIZE_VOLUME,
+        outputVolume: typeof saved.outputVolume === 'number' && saved.outputVolume >= 0 && saved.outputVolume <= 1
+          ? saved.outputVolume
+          : DEFAULT_OUTPUT_VOLUME,
         spatialAudio: saved.spatialAudio === true,
         spatialWidth: typeof saved.spatialWidth === 'number' && saved.spatialWidth >= 0 && saved.spatialWidth <= 1
           ? saved.spatialWidth
@@ -1042,6 +1102,7 @@ export function useVoice() {
       noiseSuppression: noiseSuppression.value,
       suppressionStrength: suppressionStrength.value,
       normalizeVolume: normalizeVolume.value,
+      outputVolume: outputVolume.value,
       spatialAudio: spatialAudio.value,
       spatialWidth: spatialWidth.value,
       spatialTurnsWithYou: spatialTurnsWithYou.value,
@@ -1057,6 +1118,62 @@ export function useVoice() {
     const idx = peers.value.findIndex(p => p.id === id)
     if (idx === -1) return
     peers.value.splice(idx, 1, { ...peers.value[idx]!, ...changes })
+  }
+
+  /**
+   * Start keeping a copy of what the call sounds like, for the echo canceller to subtract.
+   *
+   * Built only while it's needed, because it isn't free: two WebAudio source nodes per person,
+   * and they exist purely so a share can be cleaned up. Everyone already dialled is tapped here
+   * and anyone who joins later is tapped by {@link tapPeer}, which addPeer calls.
+   *
+   * The gains mirror what {@link applyAudio} put on the elements, and are kept mirrored by it,
+   * because the reference has to be the sound *as played*: someone you've turned down or muted
+   * contributes that much less echo, and telling the canceller otherwise would have it
+   * subtracting a voice that was never in the room.
+   */
+  function openReferenceMix(): GainNode | null {
+    if (!audioCtx) return null
+    if (referenceMix) return referenceMix
+
+    referenceMix = audioCtx.createGain()
+    handles.forEach((_handle, id) => tapPeer(id))
+
+    return referenceMix
+  }
+
+  /** Put the tap away. The canceller is torn down first — see stopScreenShare. */
+  function closeReferenceMix() {
+    handles.forEach((handle) => {
+      handle.refTaps?.voice.disconnect()
+      handle.refTaps?.screen.disconnect()
+      handle.refTaps = null
+    })
+    referenceMix?.disconnect()
+    referenceMix = null
+  }
+
+  /** Add one person to the reference mix. A no-op when nothing is listening for it. */
+  function tapPeer(id: number) {
+    const handle = handles.get(id)
+    if (!handle || handle.refTaps || !referenceMix || !audioCtx) return
+
+    const voice = audioCtx.createGain()
+    const screen = audioCtx.createGain()
+    voice.gain.value = 0
+    screen.gain.value = 0
+
+    // Sourced from the streams rather than the elements deliberately. A MediaElementAudioSource
+    // *redirects* an element's output into the graph — it would take the call out of the
+    // speakers and hand us responsibility for putting it back, sink selection and all — whereas
+    // a MediaStreamAudioSource is a second reader of the same stream and changes nothing.
+    audioCtx.createMediaStreamSource(handle.audioStream).connect(voice)
+    audioCtx.createMediaStreamSource(handle.screenAudioStream).connect(screen)
+    voice.connect(referenceMix)
+    screen.connect(referenceMix)
+
+    handle.refTaps = { voice, screen }
+    applyAudio(id) // push the levels they're currently being heard at
   }
 
   /**
@@ -1078,7 +1195,10 @@ export function useVoice() {
     if (!handle || !peer) return
 
     const muted = peer.localMuted || selfDeafened.value
-    const level = peer.volume * peer.proximity
+    // Three independent things, multiplied so that none of them overwrites another: your
+    // standing decision about this person, where you're both stood, and how loud the call is
+    // as a whole. See `outputVolume` for why the last one isn't just the system volume.
+    const level = peer.volume * peer.proximity * outputVolume.value
 
     if (handle.spatial) {
       // The element is kept muted rather than removed, and everything audible moves to the
@@ -1119,11 +1239,19 @@ export function useVoice() {
     //
     // Only in a Side Space, where "out of earshot" is a thing that exists. In a voice channel or a
     // DM every peer's proximity is a flat 1 and this is the same expression it always was.
-    handle.screenAudio.volume = peer.screenVolume
+    handle.screenAudio.volume = peer.screenVolume * outputVolume.value
     handle.screenAudio.muted = muted
       || peer.screenMuted
       || outOfEarshot(peer)
       || (peer.screenSharing && watchedScreen.value !== id)
+
+    // And the same two decisions again, onto the echo canceller's copy of them, so that what it
+    // subtracts is what your speakers are being asked to play. Only ever present mid-share; see
+    // openReferenceMix.
+    if (handle.refTaps) {
+      handle.refTaps.voice.gain.value = muted ? 0 : level
+      handle.refTaps.screen.gain.value = handle.screenAudio.muted ? 0 : handle.screenAudio.volume
+    }
   }
 
   // --- spatial audio: where each voice comes from (see ~/lib/spatialAudio) ---
@@ -1535,6 +1663,7 @@ export function useVoice() {
       negotiated: false,
       analyser: null,
       spatial: null,
+      refTaps: null,
       speakingUntil: 0,
       // The impolite peer fills these in just below; the polite peer adopts them in ontrack.
       screenAudioTransceiver: null,
@@ -1802,6 +1931,9 @@ export function useVoice() {
     // the case for somebody dialled at the gain we already computed for them. Without this a
     // peer created mid-room plays at full volume until they next move.
     applyAudio(id)
+    // If a share is currently having the call subtracted out of it, this person has to be part
+    // of what's subtracted — they're about to be coming out of the speakers like everyone else.
+    tapPeer(id)
 
     // A new arrival changes how the room divides up, and may already have audio (a peer
     // re-created in a Side Space adopts a stream that's still running). Both are cheap no-ops
@@ -2268,6 +2400,7 @@ export function useVoice() {
     screenTrack = null
     screenAudioTrack?.stop()
     screenAudioTrack = null
+    releaseShareAudio()
     screenStream.value = null
     audioShareStream.value = null
 
@@ -2413,6 +2546,22 @@ export function useVoice() {
     patchPeer(id, { localMuted })
     applyAudio(id)
     savePref(id, { muted: localMuted })
+  }
+
+  /**
+   * Turn the whole call up or down, for you alone. `volume` is 0–1.
+   *
+   * Live: every peer is re-levelled as you drag, so it can be set by ear mid-conversation
+   * rather than guessed at from a settings page. Remembered for next time, and applied to
+   * people who join after it — see the push in `addPeer`, which reads the same expression.
+   */
+  function setOutputVolume(volume: number) {
+    const clamped = Math.min(1, Math.max(0, volume))
+    if (clamped === outputVolume.value) return
+
+    outputVolume.value = clamped
+    peers.value.forEach(peer => applyAudio(peer.id))
+    saveSettings()
   }
 
   /** Turn one person up or down, for you alone. `volume` is 0–1. */
@@ -2771,6 +2920,45 @@ export function useVoice() {
 
   // --- screen sharing ---
 
+  /**
+   * Hand back a version of a share's audio with the call taken out of it — or the same track
+   * again, if that can't be done here.
+   *
+   * Only on the desktop app, and only in a call, because that is exactly the situation the echo
+   * comes from: Electron can only capture the machine's *whole* output, so a screen share's
+   * sound necessarily contains the other people in the call, played back to them a moment late.
+   * A browser tab share doesn't have this problem — the capture is scoped to the tab — and a
+   * share outside a call has nothing to cancel. See shareEcho.ts.
+   */
+  async function withoutCallEcho(track: MediaStreamTrack): Promise<MediaStreamTrack> {
+    if (!audioCtx || !inCall.value) return track
+    if (!(window as any).sideChatDesktop) return track
+
+    const reference = openReferenceMix()
+    if (!reference) return track
+
+    shareCleanup = await cancelCallEcho(audioCtx, track, reference)
+    if (!shareCleanup) {
+      closeReferenceMix()
+      return track
+    }
+
+    // The raw capture stays alive and feeding the graph; it's stopped alongside the cleaned one
+    // when the share ends — see releaseShareAudio.
+    rawShareAudioTrack = track
+
+    return shareCleanup.track
+  }
+
+  /** Undo {@link withoutCallEcho}: the graph, the tap, and the capture that was feeding them. */
+  function releaseShareAudio() {
+    shareCleanup?.destroy()
+    shareCleanup = null
+    closeReferenceMix()
+    rawShareAudioTrack?.stop()
+    rawShareAudioTrack = null
+  }
+
   async function startScreenShare() {
     if (!inCall.value || isSharing.value) return
 
@@ -2817,6 +3005,7 @@ export function useVoice() {
       // Music, not speech — see startAudioShare.
       screenAudioTrack.contentHint = 'music'
       screenAudioTrack.onended = () => { void stopScreenShare() }
+      screenAudioTrack = await withoutCallEcho(screenAudioTrack)
     }
 
     // Slot the picture into each peer's screen transceiver, and the sound into the audio one,
@@ -2867,6 +3056,8 @@ export function useVoice() {
     screenTrack = null
     screenAudioTrack?.stop()
     screenAudioTrack = null
+    // And the echo canceller, if this share's sound was going through one.
+    releaseShareAudio()
     screenStream.value = null
     // Stopping the tracks is enough for a browser capture; a native one is an OS-level
     // recording that outlives them, notification and all, until it's told to stop.
@@ -2929,12 +3120,16 @@ export function useVoice() {
       return
     }
 
-    screenAudioTrack = track
     // Tells the encoder this is music, not speech: no DTX-style silence trimming, no
     // speech-shaped decisions about what's worth spending bits on.
     track.contentHint = 'music'
-    // The browser's own "Stop sharing" bar never touches our button.
+    // The browser's own "Stop sharing" bar never touches our button. Left on the *capture*
+    // rather than what's sent, since the cleaned track below can't end on its own.
     track.onended = () => { void stopAudioShare() }
+
+    // Sharing sound alone on the desktop is the same whole-machine capture a screen share
+    // takes, so it carries the same echo and gets the same treatment.
+    screenAudioTrack = await withoutCallEcho(track)
 
     // The direction bump matters for the polite peer, whose slot was adopted recvonly: without
     // it they can hear a share but never send one. See createPeer.
@@ -2943,7 +3138,7 @@ export function useVoice() {
       if (!sound) return
 
       if (sound.direction !== 'sendrecv') sound.direction = 'sendrecv'
-      await sound.sender.replaceTrack(track)
+      await sound.sender.replaceTrack(screenAudioTrack)
       await applySharedAudioParams(sound.sender)
     }))
     // Not optional: the slot was negotiated empty, and a far end that wasn't told a track
@@ -2951,7 +3146,7 @@ export function useVoice() {
     await renegotiateAll()
 
     // A stream of its own rather than the capture, which still holds the stopped video track.
-    audioShareStream.value = markRaw(new MediaStream([track]))
+    audioShareStream.value = markRaw(new MediaStream([screenAudioTrack]))
     await publishState()
   }
 
@@ -2966,6 +3161,7 @@ export function useVoice() {
     // Stopped, not merely un-sent — this is what drops the "sharing" indicator.
     screenAudioTrack?.stop()
     screenAudioTrack = null
+    releaseShareAudio()
     audioShareStream.value = null
     await releaseDisplayCapture()
 
@@ -3408,6 +3604,9 @@ export function useVoice() {
     suppressionStrengthRange: SUPPRESSION_STRENGTH_RANGE,
     normalizeVolume,
     setNormalizeVolume,
+    // The call's own fader, over everybody at once.
+    outputVolume,
+    setOutputVolume,
     screenResolution,
     screenMode,
     canPickSpeaker,
