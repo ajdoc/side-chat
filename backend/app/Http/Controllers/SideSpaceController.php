@@ -26,6 +26,7 @@ use App\Models\User;
 use App\Support\SideSpace\Decorations;
 use App\Support\SideSpace\Doors;
 use App\Support\SideSpace\MapPresets;
+use App\Support\SideSpace\RoomPresets;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Response;
 use Illuminate\Support\Facades\Hash;
@@ -62,6 +63,9 @@ class SideSpaceController extends Controller
                 'key' => $key,
                 'label' => $preset['label'],
                 'description' => $preset['description'],
+                // Which heading the picker files it under — see MapPresets::GROUPS. Sent rather
+                // than inferred client-side so the two lists can't drift over what "Themed" is.
+                'group' => MapPresets::groupOf($key),
                 'width' => $preset['width'],
                 'height' => $preset['height'],
                 // The grid itself, so the picker can draw a real thumbnail of the room rather
@@ -71,6 +75,26 @@ class SideSpaceController extends Controller
                 'objects' => $preset['objects'],
                 'spawn' => $preset['spawn'],
             ];
+        }
+
+        return response()->json(['data' => $presets]);
+    }
+
+    /**
+     * The ways a room drawn inside a map can be furnished.
+     *
+     * Deliberately a separate list from {@see self::presets()} above, not a section of it: a map
+     * preset replaces a whole Side Space and a room preset fills a rectangle inside one, and the
+     * two have different shapes (no size, no walls, no entrance here) because they answer
+     * different questions. Kept on the server for the same reason the other one is — the client
+     * has to be *given* a room to stamp rather than inventing geometry we'd then have to trust.
+     */
+    public function roomPresets(): JsonResponse
+    {
+        $presets = [];
+
+        foreach (RoomPresets::all() as $key => $preset) {
+            $presets[] = ['key' => $key, ...$preset];
         }
 
         return response()->json(['data' => $presets]);

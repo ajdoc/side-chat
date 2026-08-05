@@ -1,4 +1,5 @@
 import { useLocalStorage } from '@vueuse/core'
+import { asEmote, EMOTE_MS } from '~/lib/spaceEmotes'
 
 /**
  * How long a said line hangs over somebody's head, and the window it grows across.
@@ -31,8 +32,8 @@ const TYPING_TTL = 4000
 export const BUBBLE_MAX_CHARS = 140
 
 interface Bubble {
-  kind: 'typing' | 'said'
-  /** Empty for `typing`, which draws dots rather than text. */
+  kind: 'typing' | 'said' | 'emote'
+  /** Empty for `typing`, which draws dots rather than text. A single glyph for `emote`. */
   text: string
   /** When it expires — see bubbleFor, which is the only thing that checks. */
   until: number
@@ -87,9 +88,9 @@ export function useSpaceChatBubbles() {
     const now = Date.now()
     const existing = bubbles.value[id]
 
-    // A line they've just said outranks the fact they're typing the next one: it has something
-    // to read in it, and it's about to expire on its own anyway.
-    if (existing?.kind === 'said' && existing.until > now) return
+    // A line they've just said — or a face they've just pulled — outranks the fact they're
+    // typing the next one: it has something in it, and it's about to expire on its own anyway.
+    if (existing && existing.kind !== 'typing' && existing.until > now) return
 
     bubbles.value = { ...bubbles.value, [id]: { kind: 'typing', text: '', until: now + TYPING_TTL } }
   }
@@ -100,6 +101,25 @@ export function useSpaceChatBubbles() {
 
     const { [id]: _gone, ...rest } = bubbles.value
     bubbles.value = rest
+  }
+
+  /**
+   * They pulled a face — picked an emote, or reacted to a message.
+   *
+   * Outranks everything, including a line they said a moment ago, and is the only bubble that
+   * does. An emote is a *response*: somebody waves back at what you just said, and drawing the
+   * thing they said thirty characters ago instead would be showing the question over the answer.
+   * It's also the shortest-lived, so whatever it interrupted is a couple of seconds from being
+   * over anyway.
+   *
+   * Muting still applies — see {@link bubbleFor}. Somebody whose chatter you've turned off has
+   * not been turned off in halves.
+   */
+  function noteEmote(id: number, glyph: string) {
+    const emote = asEmote(glyph)
+    if (!emote) return
+
+    bubbles.value = { ...bubbles.value, [id]: { kind: 'emote', text: emote, until: Date.now() + EMOTE_MS } }
   }
 
   /** They said something. Replaces their typing bubble, which is what it was leading to. */
@@ -147,5 +167,5 @@ export function useSpaceChatBubbles() {
     bubbles.value = {}
   }
 
-  return { enabled, noteTyping, forgetTyping, noteSaid, bubbleFor, isMuted, toggleMuted, clearBubbles }
+  return { enabled, noteTyping, forgetTyping, noteSaid, noteEmote, bubbleFor, isMuted, toggleMuted, clearBubbles }
 }

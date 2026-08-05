@@ -2,6 +2,7 @@
 import { Check, CheckCircle2, Copy, CornerUpLeft, Forward, Info, MessagesSquare, MoreHorizontal, Paperclip, Pencil, Pin, PinOff, Rocket, Trash2, X } from 'lucide-vue-next'
 import type { Message, User } from '~/types'
 import { memberBadgesKey } from '~/composables/useChannelMembers'
+import { emoteOnly } from '~/lib/spaceEmotes'
 import { Button } from '~/components/ui/button'
 import {
   AlertDialog,
@@ -73,6 +74,18 @@ const canModify = computed(() =>
   !isSystem.value && props.currentUserId != null && props.message.user.id === props.currentUserId,
 )
 const attachments = computed(() => props.message.attachments ?? [])
+
+/**
+ * The glyph, if this message is nothing but emoji — else null, and it renders as ordinary text.
+ *
+ * Only when it stands alone: an emote with a file or a widget attached to it is a message with
+ * a decoration, and blowing the decoration up to four times the size would bury what it came
+ * with. See {@link emoteOnly}, which is also what the Side Space checks before popping one over
+ * somebody's head.
+ */
+const emoteBody = computed(() => (
+  attachments.value.length || props.message.widget ? null : emoteOnly(props.message.body ?? '')
+))
 
 const { stripMarkdown } = useMarkdown()
 // Everyone on a message — author, the person replied to, whoever forwarded it — is shown
@@ -350,7 +363,18 @@ onBeforeUnmount(() => clearTimeout(copiedTimer))
 
       <!-- VIEWING -->
       <template v-else>
-        <MarkdownBody v-if="message.body" :source="message.body" :edited="message.edited" />
+        <!--
+          An emote is a message that is nothing but emoji, and it's drawn as a picture rather
+          than as a line of text — the same convention every chat app has settled on, and the
+          thing that makes sending one feel like a gesture instead of a very short sentence.
+          Anything with a word in it goes through Markdown as usual; see emoteOnly.
+        -->
+        <p v-if="emoteBody" class="py-0.5 text-4xl leading-tight">
+          {{ emoteBody }}
+          <span v-if="message.edited" class="align-middle text-[10px] text-muted-foreground">(edited)</span>
+        </p>
+
+        <MarkdownBody v-else-if="message.body" :source="message.body" :edited="message.edited" />
 
         <!-- interactive widget card (music player / kanban board) — kept live over the stream -->
         <WidgetCard v-if="message.type === 'widget' && message.widget" :widget="message.widget" />

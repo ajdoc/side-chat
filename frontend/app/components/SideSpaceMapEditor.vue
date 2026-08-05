@@ -104,8 +104,12 @@ const DECOR_GROUPS: { title: string, kinds: string[] }[] = [
   { title: 'Things that do something', kinds: ['speaker', 'tv', 'computer', 'arcade', 'racer', 'easel', 'noticeboard'] },
   // The Side Desk's own apps, standing in the room: the whiteboard *is* the Board tab.
   { title: 'Your Side Desk, in the room', kinds: ['whiteboard', 'lectern', 'planner', 'filecabinet'] },
-  { title: 'Furniture', kinds: ['desk', 'couch', 'bench', 'chair', 'stool', 'bookshelf', 'cabinet', 'fridge', 'watercooler', 'lamp'] },
-  { title: 'Bits and pieces', kinds: ['plant', 'crate', 'barrel', 'campfire', 'rug', 'mat'] },
+  { title: 'Furniture', kinds: ['desk', 'couch', 'bench', 'chair', 'stool', 'throne', 'bookshelf', 'cabinet', 'fridge', 'watercooler', 'lamp'] },
+  // The stone set. Built for the gyms, but it's what turns any room into a hall rather than an
+  // office, so the themed presets lean on it too — and a room you can't add a pillar to is a
+  // room you can't finish.
+  { title: 'Stone and ceremony', kinds: ['pillar', 'statue', 'torch', 'boulder'] },
+  { title: 'Bits and pieces', kinds: ['plant', 'plush', 'plush_vessel', 'plush_pickachu', 'crate', 'barrel', 'campfire', 'rug', 'mat'] },
   { title: 'On the wall', kinds: ['painting', 'poster', 'window', 'clock', 'shelf'] },
 ]
 
@@ -169,7 +173,19 @@ const camera = reactive<Camera>({ x: 0, y: 0, zoom: 1, width: 0, height: 0 })
  * Behind a toggle rather than always open, because it *replaces the room* and shouldn't be one
  * stray click away in a panel you're using to paint.
  */
-const { presets, load: loadPresets, loading: loadingPresets } = useSpacePresets()
+const { grouped: groupedPresets, load: loadPresets, loading: loadingPresets } = useSpacePresets()
+
+/**
+ * The ways a *room* can come furnished, and which one new rooms are drawn as.
+ *
+ * A different catalogue from the one above, and the distinction is the whole point: those
+ * replace the map, these fill a rectangle inside it. Fetched when the room tool is first
+ * reached for rather than on mount, since most editing sessions never draw a room at all.
+ */
+const { presets: roomPresets, load: loadRoomPresets } = useSpaceRoomPresets()
+const roomStyle = ref('empty')
+
+watch(tool, (t) => { if (t === 'zone') void loadRoomPresets() }, { immediate: true })
 const showPresets = ref(false)
 /** Which preset was last loaded, so the panel can show what you're now working from. */
 const loadedPreset = ref<string | null>(null)
@@ -313,6 +329,19 @@ function placeDecor(x: number, y: number) {
     y,
     facing: facing.value,
   }]
+}
+
+/**
+ * Lay an existing room out again, from the dropdown beside its name.
+ *
+ * The select goes back to its placeholder afterwards, because it's a *verb* rather than a
+ * property of the room. A room doesn't have a style — it has whatever furniture happens to be
+ * standing in it, which you're free to rearrange straight afterwards, and leaving "Throne room"
+ * selected in the box would claim otherwise.
+ */
+function restyleZone(zone: SpaceZone, key: string, select?: HTMLSelectElement) {
+  if (key) furnishZone(zone, key)
+  if (select) select.value = ''
 }
 
 function refuse(why: string) {
@@ -570,7 +599,7 @@ function onPointerUp(e: PointerEvent) {
 
   if (w < 1 || h < 1) return
 
-  zones.value = [...zones.value, {
+  const zone: SpaceZone = {
     id: `z-${Date.now().toString(36)}`,
     name: `Room ${zones.value.length + 1}`,
     kind: 'private',
@@ -578,7 +607,48 @@ function onPointerUp(e: PointerEvent) {
     y,
     w,
     h,
-  }]
+  }
+
+  zones.value = [...zones.value, zone]
+
+  // A room you dragged comes out furnished, if you asked for one that does. The old behaviour
+  // is still there and still the default — it's the `empty` style, which lays a floor and
+  // stops, and naming it is better than hiding it.
+  furnishZone(zone, roomStyle.value)
+}
+
+/**
+ * Lay a room out in one of the styles: floor, then furniture.
+ *
+ * Three steps, in an order that matters. The floor goes down first, because the furniture
+ * rulebook checks what a piece is standing on and would refuse a couch on a wall tile that is
+ * about to become carpet. Then whatever was already inside the room is cleared, so re-styling a
+ * room *replaces* it rather than stacking a second set of sofas on the first. Then the pieces
+ * go in one at a time, each through the same {@link refusalFor} a hand-placed one goes through
+ * — a preset gets no more licence than a person does, so a room drawn over a pillar simply
+ * comes out with one fewer bench and no way to save a map the API would reject.
+ */
+function furnishZone(zone: SpaceZone, key: string) {
+  const preset = roomPresets.value.find(p => p.key === key)
+  if (!preset) return
+
+  for (let dy = zone.y; dy < zone.y + zone.h; dy++) {
+    for (let dx = zone.x; dx < zone.x + zone.w; dx++) setTile(dx, dy, preset.floor)
+  }
+
+  objects.value = objects.value.filter(o => !objectInZone(o, zone))
+
+  const stamp = Date.now().toString(36)
+  let n = 0
+
+  for (const piece of anchorObjects(preset, zone)) {
+    const face = piece.facing ?? 'down'
+    if (refusalFor(piece.kind, piece.x, piece.y, face)) continue
+
+    objects.value = [...objects.value, { ...piece, facing: face, id: `d-${stamp}-${n++}` }]
+  }
+
+  refused.value = ''
 }
 
 // --- the grid's size ---
@@ -1068,6 +1138,39 @@ onBeforeUnmount(() => {
           </div>
         </div>
 
+        <!--
+          What a room you drag comes out as.
+
+          Sits with the brushes rather than in the room list below, because it's a setting for
+          the *tool* — you choose the style and then draw, the way you choose a tile and then
+          paint. "Empty" is the default and is the behaviour dragging a room has always had;
+          everything else lays a floor and furnishes it in one go.
+        -->
+        <div v-if="!isDecorMode && tool === 'zone'" class="space-y-1.5">
+          <Label class="flex items-center gap-1.5 text-xs text-muted-foreground">
+            <SquareDashed class="h-3.5 w-3.5" /> New rooms come as
+          </Label>
+
+          <div class="grid gap-1">
+            <button
+              v-for="p in roomPresets"
+              :key="p.key"
+              type="button"
+              class="rounded border px-2 py-1 text-left transition-colors"
+              :class="roomStyle === p.key ? 'border-primary bg-muted' : 'hover:bg-muted/50'"
+              @click="roomStyle = p.key"
+            >
+              <span class="block text-xs font-medium">{{ p.label }}</span>
+              <span class="block text-[10px] leading-snug text-muted-foreground">{{ p.description }}</span>
+            </button>
+          </div>
+
+          <p class="text-[11px] leading-snug text-muted-foreground">
+            Drag out a room and it's laid out for you. The furniture spreads to fit — anything
+            that won't fit is left out.
+          </p>
+        </div>
+
         <!-- The furniture. -->
         <div class="space-y-1.5">
           <Label class="flex items-center gap-1.5 text-xs text-muted-foreground">
@@ -1154,15 +1257,29 @@ onBeforeUnmount(() => {
 
         <div v-if="!isDecorMode && zones.length" class="space-y-1.5">
           <Label class="text-xs text-muted-foreground">Rooms</Label>
-          <div v-for="z in zones" :key="z.id" class="flex items-center gap-1.5">
-            <Input v-model="z.name" class="h-7 text-xs" />
-            <button
-              class="rounded p-1 text-muted-foreground hover:text-destructive"
-              :title="`Remove ${z.name}`"
-              @click="zones = zones.filter(o => o.id !== z.id)"
+          <div v-for="z in zones" :key="z.id" class="space-y-1">
+            <div class="flex items-center gap-1.5">
+              <Input v-model="z.name" class="h-7 text-xs" />
+              <button
+                class="rounded p-1 text-muted-foreground hover:text-destructive"
+                :title="`Remove ${z.name}`"
+                @click="zones = zones.filter(o => o.id !== z.id)"
+              >
+                <Trash2 class="h-3.5 w-3.5" />
+              </button>
+            </div>
+
+            <!-- Re-furnish a room that already exists. Replaces its floor and everything
+                 standing on it, which is why it says so and why it isn't a one-click chip. -->
+            <select
+              class="h-6 w-full rounded border bg-background px-1 text-[10px] text-muted-foreground"
+              :title="`Lay ${z.name} out again — replaces its floor and furniture`"
+              @focus="loadRoomPresets()"
+              @change="restyleZone(z, ($event.target as HTMLSelectElement).value, $event.target as HTMLSelectElement)"
             >
-              <Trash2 class="h-3.5 w-3.5" />
-            </button>
+              <option value="">Lay it out as…</option>
+              <option v-for="p in roomPresets" :key="p.key" :value="p.key">{{ p.label }}</option>
+            </select>
           </div>
         </div>
 
@@ -1187,20 +1304,27 @@ onBeforeUnmount(() => {
               <Loader2 class="h-3.5 w-3.5 animate-spin" /> Loading layouts…
             </p>
 
-            <button
-              v-for="p in presets"
-              :key="p.key"
-              type="button"
-              class="w-full space-y-1 rounded-md border p-1.5 text-left transition-colors"
-              :class="loadedPreset === p.key ? 'border-primary bg-muted' : 'hover:bg-muted/50'"
-              :title="p.description"
-              @click="applyPreset(p)"
-            >
-              <!-- The real grid, so what you pick is what you get. -->
-              <SideSpaceMapThumbnail :tiles="p.tiles" :width="p.width" :height="p.height" />
-              <span class="block text-xs font-medium">{{ p.label }}</span>
-              <span class="block text-[10px] leading-snug text-muted-foreground">{{ p.width }}×{{ p.height }}</span>
-            </button>
+            <!-- Under the same headings the creation page uses, from the same grouping — see
+                 useSpacePresets. In a rail this narrow, seventeen unlabelled thumbnails is a
+                 scroll you give up on. -->
+            <div v-for="group in groupedPresets" :key="group.title" class="space-y-1">
+              <p class="pt-1 text-[10px] uppercase tracking-wide text-muted-foreground/70">{{ group.title }}</p>
+
+              <button
+                v-for="p in group.items"
+                :key="p.key"
+                type="button"
+                class="w-full space-y-1 rounded-md border p-1.5 text-left transition-colors"
+                :class="loadedPreset === p.key ? 'border-primary bg-muted' : 'hover:bg-muted/50'"
+                :title="p.description"
+                @click="applyPreset(p)"
+              >
+                <!-- The real grid, so what you pick is what you get. -->
+                <SideSpaceMapThumbnail :tiles="p.tiles" :width="p.width" :height="p.height" />
+                <span class="block text-xs font-medium">{{ p.label }}</span>
+                <span class="block text-[10px] leading-snug text-muted-foreground">{{ p.width }}×{{ p.height }}</span>
+              </button>
+            </div>
           </div>
         </div>
 

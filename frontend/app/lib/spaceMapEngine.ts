@@ -163,6 +163,18 @@ export interface Occupant {
    * lookup per person.
    */
   shout?: string | null
+  /**
+   * The id of whoever they're holding hands with, or null.
+   *
+   * Whispered with the position for the same reason `seatedOn` is: it cannot be worked out from
+   * where two people are standing — two friends side by side and two people queueing look
+   * identical — and the room has to draw the link between them from the first thing it hears.
+   *
+   * Stated by *both* ends, which is what makes it self-correcting. Each client writes only its
+   * own half, so a dropped "let go" leaves one person claiming a link the other denies, and the
+   * room draws it only when both agree. See `holdHands` and `handLink` in useSpacePresence.
+   */
+  handWith?: number | null
 }
 
 // --- the grid ---

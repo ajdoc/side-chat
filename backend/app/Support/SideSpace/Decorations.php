@@ -101,12 +101,21 @@ final class Decorations
             'bench' => self::kind('Bench', w: 2),
             'chair' => self::kind('Office chair', solid: false),
             'stool' => self::kind('Stool', solid: false),
+            // Walk-on-able like the other single seats. Two tiles square, so that a person
+            // sitting on it doesn't cover the thing they're sitting on — whether you can *sit*
+            // on it at all is the browser's business, see the note on `seat` in lib/spaceDecor.ts.
+            'throne' => self::kind('Iron throne', w: 2, h: 2, solid: false),
             'bookshelf' => self::kind('Bookshelf'),
             'cabinet' => self::kind('Cabinet'),
             'fridge' => self::kind('Fridge'),
             'watercooler' => self::kind('Water cooler'),
             'lamp' => self::kind('Floor lamp'),
             'plant' => self::kind('Potted plant'),
+            // Soft, and therefore not solid: a toy on the floor is stepped over, not walked round.
+            // One kind per outfit, because an object stores nothing but a kind and a place.
+            'plush' => self::kind('Espurr plush', solid: false),
+            'plush_vessel' => self::kind('Espurr Vessel plush', solid: false),
+            'plush_pickachu' => self::kind('Espurr Pikachu plush', solid: false),
             'crate' => self::kind('Crate'),
             'barrel' => self::kind('Barrel'),
             'campfire' => self::kind('Campfire'),

@@ -89,9 +89,67 @@ function urlFor(spec: SheetSpec): string {
  * being called from a render loop.
  */
 export function sheetImage(spec: SheetSpec): HTMLImageElement | null {
+  return imageAt(urlFor(spec))
+}
+
+/**
+ * A still picture: one image, no frames, no directions.
+ *
+ * The other shape artwork arrives in. A sheet is for something that *moves* — it has to declare
+ * its columns and it is read as eight rows of directions — and a great deal of what a room is
+ * made of doesn't move and has one view: a throne, a statue, a sign. Making those pretend to be
+ * a one-frame animation would mean an eight-row PNG that is seven-eighths empty, and a `columns`
+ * count that means nothing.
+ *
+ * Same cache and the same rule about a missing file: it falls back to whatever the caller would
+ * have drawn anyway.
+ */
+export interface StillSpec {
+  /** Path under {@link SHEET_ROOT}, *with* the extension — e.g. `decor/iron-throne.png`. */
+  src: string
+  /** How tall to draw it, in tiles. Width follows from the image's own aspect ratio. */
+  scale: number
+}
+
+export function stillImage(spec: StillSpec): HTMLImageElement | null {
+  return imageAt(`${SHEET_ROOT}/${spec.src}`)
+}
+
+/**
+ * Draw a still, anchored at the bottom centre of `px, py` — the same anchor every sprite in the
+ * room uses, so a piece of furniture stands on its tiles rather than hovering over them.
+ *
+ * Returns whether it drew anything, so a caller can fall through to its own artwork in one line.
+ */
+export function drawStill(
+  ctx: CanvasRenderingContext2D,
+  spec: StillSpec,
+  px: number,
+  py: number,
+  size: number,
+): boolean {
+  const img = stillImage(spec)
+  if (!img) return false
+
+  const dh = size * spec.scale
+  const dw = dh * (img.width / img.height)
+
+  ctx.drawImage(img, px - dw / 2, py - dh, dw, dh)
+
+  return true
+}
+
+/**
+ * The cache behind both. Synchronous read, load started on the first ask.
+ *
+ * Never throws and never waits — see the note at the top about being called from a render loop.
+ * A file nobody has added yet is the expected case rather than an error worth reporting, and a
+ * failed load is remembered as failed: retrying every frame would be sixty requests a second
+ * for a 404.
+ */
+function imageAt(url: string): HTMLImageElement | null {
   if (!import.meta.client) return null
 
-  const url = urlFor(spec)
   const held = cache.get(url)
 
   if (held !== undefined) return held || null
@@ -103,8 +161,6 @@ export function sheetImage(spec: SheetSpec): HTMLImageElement | null {
     cache.set(url, img)
     for (const listen of loadListeners) listen()
   }
-  // A sheet nobody has added yet is the expected case, not an error worth reporting: the
-  // caller's own artwork is drawn instead and the room looks finished either way.
   img.onerror = () => cache.set(url, false)
   img.src = url
 

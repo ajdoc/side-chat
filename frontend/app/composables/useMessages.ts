@@ -1,5 +1,55 @@
 import type { CommentSummary, GifResult, LinkPreview, Message, Reaction, SideChat, SideChatForum, SideDeskAppId, StartedThread, Thread, Widget } from '~/types'
 
+/**
+ * Somebody just added a reaction, worked out from the two lists either side of the change.
+ *
+ * The broadcast says what the reactions *are*, not what happened to them, which is right for a
+ * chip row that only ever needs the total. Anything that wants to react to the *act* — a Side
+ * Space popping the emoji over the reactor's head, say — has to spot the difference itself, and
+ * doing it once here is better than every listener re-deriving it.
+ */
+export interface ReactionAdded {
+  channelId: number
+  messageId: number
+  userId: number
+  emoji: string
+}
+
+/*
+ * Module scope, unlike everything else in this file, because `useMessages()` hands out fresh
+ * refs on every call and a listener registered against one instance would be invisible to the
+ * instance that owns the subscription. Same reasoning as the room-event listeners in
+ * useSpacePresence.
+ */
+const reactionListeners = new Set<(event: ReactionAdded) => void>()
+
+/**
+ * Watch reactions land. Returns its own undo.
+ *
+ * Additions only. A reaction taken back is a correction, and there's nothing to show for it —
+ * an emote that un-happened is not an event anybody in a room would have noticed.
+ */
+export function onReactionAdded(listener: (event: ReactionAdded) => void): () => void {
+  reactionListeners.add(listener)
+
+  return () => reactionListeners.delete(listener)
+}
+
+/** Who is in `next` that wasn't in `before`, for each emoji. Usually exactly one person. */
+function newReactors(before: Reaction[], next: Reaction[]): Array<{ userId: number, emoji: string }> {
+  const added: Array<{ userId: number, emoji: string }> = []
+
+  for (const row of next) {
+    const had = new Set((before.find(r => r.emoji === row.emoji)?.users ?? []).map(u => u.id))
+
+    for (const u of row.users) {
+      if (!had.has(u.id)) added.push({ userId: u.id, emoji: row.emoji })
+    }
+  }
+
+  return added
+}
+
 // Messages for one text channel, plus the real-time Reverb subscription.
 export function useMessages() {
   const api = useApi()
@@ -242,11 +292,30 @@ export function useMessages() {
 
   /** Add the reaction, or take it back if it's already yours. */
   async function toggleReaction(messageId: number, emoji: string) {
+    const before = messages.value.find(m => m.id === messageId)?.reactions ?? []
+
     const res = await api<{ data: Message }>(`/api/messages/${messageId}/reactions`, {
       method: 'POST',
       body: { emoji },
     })
     replaceMessage(res.data)
+
+    /*
+     * Your own reaction is announced from here rather than left to the broadcast.
+     *
+     * The response has already been written into the timeline by the time your own
+     * `.ReactionToggled` arrives, so the diff there finds nothing changed and says nothing —
+     * which is exactly right for the chip row and exactly wrong for you, the one person who
+     * definitely just reacted. So the actor's own event comes off the response.
+     */
+    const channel = channelId.value
+    if (channel === null) return
+
+    for (const added of newReactors(before, res.data.reactions ?? [])) {
+      for (const listen of reactionListeners) {
+        listen({ channelId: channel, messageId, userId: added.userId, emoji: added.emoji })
+      }
+    }
   }
 
   /** Pin the message, or unpin it if it's already pinned. */
@@ -282,7 +351,17 @@ export function useMessages() {
     '.MessageUpdated': (m: Message) => replaceMessage(m),
     '.MessageDeleted': (p: { id: number }) => removeMessage(p.id),
     '.ReactionToggled': (p: { message_id: number, reactions: Reaction[] }) => {
+      // Diffed before the patch, since the patch is what destroys the "before".
+      const before = messages.value.find(m => m.id === p.message_id)?.reactions ?? []
+
       patchMessage(p.message_id, { reactions: p.reactions })
+
+      const channel = channelId.value
+      if (channel === null) return
+
+      for (const { userId, emoji } of newReactors(before, p.reactions)) {
+        for (const listen of reactionListeners) listen({ channelId: channel, messageId: p.message_id, userId, emoji })
+      }
     },
     // A comment ("word-reaction") was posted or removed — refresh the chips. We receive
     // our own broadcast too, so this is also how the actor's chips update.

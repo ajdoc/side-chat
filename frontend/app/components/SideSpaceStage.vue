@@ -21,8 +21,10 @@ import {
   ScreenShare,
   ScreenShareOff,
   Gamepad2,
+  Hand,
   Lock,
   Shirt,
+  Smile,
   Sofa,
   SwitchCamera,
   Users,
@@ -56,6 +58,7 @@ import { decorInFront, decorKind, decorSize, seatInFront, seatOn } from '~/lib/s
 import { canTryPassword, doorInFront, lockMap, mayPass, passesExpireAt, syncDoors } from '~/lib/spaceDoors'
 import { EFFECT_MS, drawRoomEffect, drawRoomEffectLabel } from '~/lib/spaceEffects'
 import { normaliseLook } from '~/lib/spaceAvatar'
+import { EMOTES, EMOTE_MS, emojiSprite } from '~/lib/spaceEmotes'
 import { Button } from '~/components/ui/button'
 
 /**
@@ -147,6 +150,15 @@ const {
   stand,
   seated,
   isWalking,
+  approach,
+  approachingId,
+  handPartnerOf,
+  handOffer,
+  offerHand,
+  acceptHand,
+  declineHand,
+  letGo,
+  emote,
   subscribe: subscribeMoves,
   unsubscribe: unsubscribeMoves,
   onRoomEvent,
@@ -251,6 +263,69 @@ const facingObject = ref<SpaceObject | null>(null)
  * no app, and pressing E at a TV should watch it rather than sit on it.
  */
 const facingSeat = ref<SpaceObject | null>(null)
+
+/**
+ * How close somebody has to be standing before you can reach for their hand.
+ *
+ * Deliberately a plain radius rather than the "in front of you" reach the furniture uses. A
+ * chair is a thing at a *facing*, and a person is a person: turning to face somebody before you
+ * can offer them your hand is a rule nobody would guess and everybody would trip over.
+ */
+const HOLD_REACH = 1.9
+
+/**
+ * The nearest person you could take by the hand, if any.
+ *
+ * Tracked in the frame loop beside {@link facingObject} and written only when it changes, for
+ * the same reason: "who am I standing next to" is a continuous function of where everybody is,
+ * and a ref rewritten sixty times a second would re-render the prompt sixty times a second.
+ */
+const nearestPerson = ref<{ id: number, name: string } | null>(null)
+
+/** Whether the emote grid is unfolded. Shut by default — see the bar in the template. */
+const emoteBarOpen = ref(false)
+
+/** Whether the "who's here" list is open. */
+const rosterOpen = ref(false)
+
+/**
+ * Everybody in the room but you, nearest first, with what it takes to decide to walk over.
+ *
+ * The room's answer to a problem a map has and a list of participants doesn't: you can see six
+ * people, and you have no idea *which* six, because from across a 30-tile room a sprite is a
+ * hat. The call dock beside it answers a different question — it lists who you can currently
+ * hear, which is deliberately only the people near you.
+ *
+ * Recomputed off `others`, which is a `shallowRef` mutated in place during the frame loop, so
+ * this only refreshes when the roster genuinely changes (somebody arrives, leaves, is pruned).
+ * The distances are therefore a beat behind at worst, which is the right trade for a list you
+ * read rather than a thing you aim at.
+ */
+const roster = computed(() => {
+  const self = me.value
+
+  return Object.values(others.value)
+    .map(o => ({
+      id: o.id,
+      name: o.name,
+      // Where they are, said in the way that's useful: the room they're in if the map names
+      // one, else how far off they are.
+      zone: map.value ? zoneAt(map.value, o.x, o.y)?.name ?? null : null,
+      distance: self ? Math.hypot(o.x - self.x, o.y - self.y) : 0,
+      audible: audibleIds.value.includes(o.id),
+      sitting: !!o.seatedOn,
+    }))
+    .sort((a, b) => a.distance - b.distance)
+})
+
+/** Walk over to somebody from the list, and get the list out of the way while you do. */
+function goTo(id: number) {
+  approach(id)
+  rosterOpen.value = false
+}
+
+/** Whose hand you're holding, or null. Read from your own half of the link — see handPartnerOf. */
+const holdingWith = computed(() => (me.value ? handPartnerOf(me.value) : null))
 
 /**
  * Everyone standing in the room, me included — what the doors are computed against.
@@ -1017,6 +1092,42 @@ function checkFurniture() {
     : null
 
   if (seat?.id !== facingSeat.value?.id) facingSeat.value = seat
+
+  checkNeighbour()
+}
+
+/**
+ * Who's standing close enough to reach, if anybody.
+ *
+ * Nearest wins, and nobody at all during a game — in a round of Among Us, "hold hands with the
+ * person next to you" is a prompt that would either give somebody away or get them killed.
+ */
+function checkNeighbour() {
+  const self = me.value
+  let found: { id: number, name: string } | null = null
+
+  if (self && !gameRunning.value) {
+    let best = HOLD_REACH
+
+    for (const o of Object.values(others.value)) {
+      const d = Math.hypot(o.x - self.x, o.y - self.y)
+      if (d < best) { best = d; found = { id: o.id, name: o.name } }
+    }
+  }
+
+  if (found?.id !== nearestPerson.value?.id) nearestPerson.value = found
+}
+
+/**
+ * Reach for the nearest hand, or let go of the one you're holding.
+ *
+ * One gesture for both, because in the room they are the same gesture: your hand is either in
+ * somebody's or it isn't. Offering is a *request* — see `offerHand`, and the reason it has to
+ * be one is that holding hands tows the other person about.
+ */
+function toggleHand() {
+  if (holdingWith.value) return letGo()
+  if (nearestPerson.value) offerHand(nearestPerson.value.id)
 }
 
 /** The label on the prompt — "Press E to put something on". */
@@ -1151,7 +1262,7 @@ async function useFurniture() {
  */
 const DRAG_TILES = 0.9
 /** The pointer currently steering, where it went down, and how far it has been since. */
-let steering: { id: number, from: { x: number, y: number }, moved: number } | null = null
+let steering: { id: number, from: { x: number, y: number }, moved: number, person: number | null } | null = null
 
 /** Where in the room a pointer is, in tiles. */
 function pointerWorld(e: PointerEvent) {
@@ -1182,8 +1293,30 @@ function onPointerDown(e: PointerEvent) {
   const at = pointerWorld(e)
   if (!at) return
 
-  steering = { id: e.pointerId, from: at, moved: 0 }
+  // Who, if anyone, was under the pointer when it went down. Settled here rather than on release
+  // because by then they may have taken a step, and a tap should land on the person you aimed at.
+  steering = { id: e.pointerId, from: at, moved: 0, person: personAt(at) }
   walkTo(at.x, at.y)
+}
+
+/**
+ * The person standing at a point, or null. Yourself never counts.
+ *
+ * Generous — nearly a whole tile — because a sprite is drawn taller than the tile it stands on
+ * and people aim at the *figure*, which is mostly above their feet. Nearest wins, so two people
+ * on adjacent tiles resolve to whichever you were closer to rather than to whoever the roster
+ * happens to list first.
+ */
+function personAt(at: { x: number, y: number }): number | null {
+  let best: { id: number, d: number } | null = null
+
+  for (const o of Object.values(others.value)) {
+    // Aimed a little above the feet, which is where the sprite actually is.
+    const d = Math.hypot(o.x - at.x, o.y - 0.35 - at.y)
+    if (d < 0.8 && (!best || d < best.d)) best = { id: o.id, d }
+  }
+
+  return best?.id ?? null
 }
 
 function onPointerMove(e: PointerEvent) {
@@ -1217,11 +1350,16 @@ function onPointerUp(e: PointerEvent) {
   if (!steering || e.pointerId !== steering.id) return
 
   const dragged = steering.moved > DRAG_TILES
+  const person = steering.person
   steering = null
 
   // A drag was steering, so releasing means stop. A tap was an instruction, so it stands and we
   // carry on walking to it — which is the whole point of being able to tap the far side of a room.
-  if (dragged) stopWalking()
+  if (dragged) return stopWalking()
+
+  // A tap that landed on somebody is a different instruction from a tap on the floor: go *to
+  // them*, and keep going as they move. See `approach` — the target is a person, not a tile.
+  if (person !== null) approach(person)
 }
 
 // --- how close you're standing to it ---
@@ -1290,7 +1428,8 @@ function trackPinch() {
  * type an E when you're reading another channel.
  */
 function onInteractKey(e: KeyboardEvent) {
-  if (e.key !== 'e' && e.key !== 'E' && e.key !== 'Enter') return
+  const key = e.key.toLowerCase()
+  if (key !== 'e' && key !== 'h' && e.key !== 'Enter') return
   if (!inThisRoom.value) return
   // A sheet is open over the room — the editor, or the picker. Neither is a place where a
   // letter should reach past it and switch the telly on.
@@ -1298,6 +1437,23 @@ function onInteractKey(e: KeyboardEvent) {
 
   const el = e.target as HTMLElement | null
   if (el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.isContentEditable)) return
+
+  /*
+   * H is the other person's key, and it stays out of E's way entirely.
+   *
+   * Its own binding rather than another branch of the E ladder because E is already four things
+   * deep — a door, a seat, a machine, a task — and each one of those is about a *place*. Who is
+   * standing next to you is a different question and deserves a different key, or the answer to
+   * "what does E do here" becomes genuinely unpredictable.
+   */
+  if (key === 'h') {
+    // An offer waiting on you is what H means first: it's the one that would otherwise need
+    // the mouse, and taking an offered hand is the same gesture as offering one.
+    if (handOffer.value) { e.preventDefault(); acceptHand(); return }
+    if (holdingWith.value || nearestPerson.value) { e.preventDefault(); toggleHand() }
+
+    return
+  }
 
   // During a game, E does the game: a task at your feet, or a body to report. Nothing else, so
   // that "press E" always means the one thing worth doing where you're standing.
@@ -1463,6 +1619,11 @@ function draw() {
   // according to object key order, which changes as people come and go. Pets are sorted into
   // the same list rather than drawn after their owner, or a pet standing a tile north of you
   // would be painted over your head.
+  // Before the cast, so an arm passes behind both the people it joins rather than across them.
+  // It's the one thing in the room that belongs to a *pair*, so it has nowhere in a list sorted
+  // by one person's depth to go.
+  drawHandLinks(ctx)
+
   const cast: Array<{ y: number, paint: () => void }> = []
 
   for (const o of Object.values(others.value)) {
@@ -1489,6 +1650,7 @@ function draw() {
   // *tile* — pinning an HTML bubble to a moving world-space position means a transform update
   // every frame, which is the one thing canvas is already doing.
   drawPrompt(ctx)
+  drawHandPrompt(ctx)
   drawLocks(ctx)
 }
 
@@ -1650,6 +1812,46 @@ function drawPrompt(ctx: CanvasRenderingContext2D) {
 }
 
 /**
+ * "H · Hold hands", over whoever you're standing next to.
+ *
+ * Hung over the *person* rather than over your own head, which is what makes it obvious who it
+ * means when three people are stood in a huddle. Once you're holding on it follows your partner
+ * and reads "Let go", because that's the only thing the key does from there.
+ */
+function drawHandPrompt(ctx: CanvasRenderingContext2D) {
+  if (!inThisRoom.value || gameRunning.value) return
+
+  const partner = holdingWith.value
+  const target = partner ?? (nearestPerson.value ? others.value[nearestPerson.value.id] : null)
+  if (!target) return
+
+  const size = TILE * camera.zoom
+  const p = toScreen(camera, target.x, target.y)
+  const verb = partner ? 'Let go' : 'Hold hands'
+  // No key to name on a phone; the button under the room is how you do it there.
+  const label = narrow.value ? verb : `H · ${verb}`
+
+  ctx.save()
+  ctx.font = `600 ${Math.max(10, size * 0.28)}px system-ui, sans-serif`
+  ctx.textAlign = 'center'
+  ctx.textBaseline = 'middle'
+
+  const w = ctx.measureText(label).width + size * 0.5
+  const h = size * 0.46
+  // Above the name plate under their feet, and clear of whatever bubble is over their head.
+  const cy = p.y + size * 0.95
+
+  ctx.fillStyle = partner ? 'rgb(190 24 93 / 0.9)' : 'rgb(23 23 30 / 0.85)'
+  ctx.beginPath()
+  ctx.roundRect(p.x - w / 2, cy - h / 2, w, h, h / 2)
+  ctx.fill()
+
+  ctx.fillStyle = '#ffffff'
+  ctx.fillText(label, p.x, cy + 1)
+  ctx.restore()
+}
+
+/**
  * The game's things on the floor: your tasks, and any bodies.
  *
  * Tasks are drawn only for the player they belong to — the state already hides everyone else's,
@@ -1804,6 +2006,7 @@ function drawPerson(
    */
   const bubble = bubbleFor(o.id)
   if (bubble?.kind === 'typing') drawTyping(ctx, p.x, p.y, size)
+  else if (bubble?.kind === 'emote') drawEmote(ctx, bubble.text, p.x, p.y, size, bubble.until)
   else if (bubble) drawSpeech(ctx, bubble.text, p.x, p.y, size, bubble.until)
   else if (o.shout) drawShout(ctx, o.shout, p.x, p.y, size)
 
@@ -1967,6 +2170,81 @@ function drawSpeech(ctx: CanvasRenderingContext2D, said: string, x: number, y: n
   lines.forEach((l, i) => ctx.fillText(l, x, firstY + i * lineHeight))
 
   ctx.restore()
+}
+
+/**
+ * An emote: one glyph over somebody's head, popped and then let go.
+ *
+ * Bare, with no bubble round it, and that's the point — a speech bubble says "they typed this",
+ * and an emoji floating over a head says "they did that". It also has to read from right across
+ * the room at a tenth the size of a sentence, which a glyph can and a box of text can't.
+ *
+ * The pop is a short overshoot on the way in and a rise-and-fade on the way out, driven off the
+ * expiry the bubble store already carries rather than a clock of its own — so an emote that
+ * arrived a second late is a second further through its life, exactly as a said line is.
+ */
+function drawEmote(ctx: CanvasRenderingContext2D, glyph: string, x: number, y: number, size: number, until: number) {
+  const left = until - Date.now()
+  if (left <= 0) return
+
+  // Rasterised once at 128px and scaled *down* here — drawing it as text at this size is what
+  // made it blurry. See emojiSprite.
+  const art = emojiSprite(glyph)
+  if (!art) return
+
+  const age = EMOTE_MS - left
+  // Overshoot to 1.25 and settle: an emote that merely appeared would be missed by anybody not
+  // already looking at that corner of the room, which is most of the room.
+  const grow = Math.min(1, age / 160)
+  const scale = grow < 1 ? grow * 1.25 : 1 + Math.max(0, 0.25 - (age - 160) / 700)
+  // The last half second: drifting up as it goes, which is what makes it read as released.
+  const fade = Math.min(1, left / 500)
+
+  const drawn = size * 0.95 * scale
+  const cy = y - size * 1.05 - (1 - fade) * size * 0.35
+
+  ctx.save()
+  ctx.globalAlpha *= fade
+  ctx.drawImage(art, x - drawn / 2, cy - drawn / 2, drawn, drawn)
+  ctx.restore()
+}
+
+/**
+ * The arm between two people holding hands.
+ *
+ * Drawn once per pair rather than once per person — see {@link handPartnerOf}, which only
+ * answers when both ends agree — and *under* the sprites, so it comes out of the hips rather
+ * than across the faces. A gentle sag, because a straight line between two figures reads as a
+ * rope and a curve reads as an arm.
+ */
+function drawHandLinks(ctx: CanvasRenderingContext2D) {
+  const size = TILE * camera.zoom
+  const drawn = new Set<number>()
+
+  for (const o of occupants.value) {
+    const partner = handPartnerOf(o)
+    if (!partner || drawn.has(o.id)) continue
+
+    drawn.add(o.id)
+    drawn.add(partner.id)
+
+    const a = toScreen(camera, o.x, o.y)
+    const b = toScreen(camera, partner.x, partner.y)
+    // Hands are at about hip height on a sprite anchored at its feet.
+    const ay = a.y - size * 0.1
+    const by = b.y - size * 0.1
+
+    ctx.save()
+    ctx.globalAlpha = 0.85
+    ctx.strokeStyle = 'rgb(244 114 182)'
+    ctx.lineWidth = Math.max(2, size * 0.09)
+    ctx.lineCap = 'round'
+    ctx.beginPath()
+    ctx.moveTo(a.x, ay)
+    ctx.quadraticCurveTo((a.x + b.x) / 2, (ay + by) / 2 + size * 0.22, b.x, by)
+    ctx.stroke()
+    ctx.restore()
+  }
 }
 
 /**
@@ -2472,6 +2750,11 @@ watch(inThisRoom, (now) => {
               <template v-if="narrow">and tap the button that appears to put something on for whoever's nearby.</template>
               <template v-else>and press <kbd class="rounded border px-1">E</kbd> to put something on for whoever's nearby.</template>
             </p>
+            <p class="text-xs text-muted-foreground">
+              <template v-if="narrow">Tap somebody to walk over to them, and tap the button to offer them your hand.</template>
+              <template v-else>Click somebody to walk over to them, then <kbd class="rounded border px-1">H</kbd> to hold hands — you'll pull each other along.</template>
+              Pull a face with the emote bar in the corner; reacting to a message pops the same emoji over your head.
+            </p>
           </div>
         </div>
 
@@ -2522,7 +2805,7 @@ watch(inThisRoom, (now) => {
         </component>
 
         <button
-          v-if="inThisRoom && hasPrompt && !blockedDoor"
+          v-if="inThisRoom && hasPrompt && !blockedDoor && !handOffer"
           type="button"
           class="absolute bottom-2 left-1/2 flex -translate-x-1/2 items-center gap-2 rounded-full bg-foreground px-3 py-1.5 text-xs font-medium text-background shadow-lg transition hover:opacity-90 disabled:opacity-60"
           :disabled="using"
@@ -2532,6 +2815,133 @@ watch(inThisRoom, (now) => {
           <span v-else-if="!narrow" class="rounded border border-background/40 px-1 text-[10px] leading-4">E</span>
           {{ interactHint }}
         </button>
+
+        <!--
+          Somebody has offered you their hand.
+
+          Sits where the "press E" pill would be and outranks it, because it's the one thing on
+          screen with somebody waiting at the other end of it. Two buttons rather than one: a
+          request that could only be accepted is not a request, and holding hands drags you
+          around the room, so declining has to be as easy as agreeing.
+        -->
+        <div
+          v-if="inThisRoom && handOffer"
+          class="absolute bottom-2 left-1/2 flex -translate-x-1/2 items-center gap-2 rounded-full bg-pink-600 px-3 py-1.5 text-xs font-medium text-white shadow-lg"
+        >
+          <Hand class="h-3.5 w-3.5" />
+          <span>{{ handOffer.name }} wants to hold hands</span>
+          <button type="button" class="rounded-full bg-white/20 px-2 py-0.5 transition hover:bg-white/30" @click="acceptHand()">
+            Take it<span v-if="!narrow" class="ml-1 rounded border border-white/40 px-1 text-[10px] leading-4">H</span>
+          </button>
+          <button type="button" class="rounded-full px-2 py-0.5 text-white/70 transition hover:text-white" @click="declineHand()">
+            No
+          </button>
+        </div>
+
+        <!--
+          Reaching for the person next to you, on a screen with no keyboard to press H on.
+
+          Only when there is somebody to reach for, and it steps aside for the offer above and
+          for the furniture pill below it — three pills stacked in the same corner would be a
+          menu, and none of these is worth one.
+        -->
+        <button
+          v-if="inThisRoom && !handOffer && !hasPrompt && !blockedDoor && (holdingWith || nearestPerson)"
+          type="button"
+          class="absolute bottom-2 left-1/2 flex -translate-x-1/2 items-center gap-2 rounded-full px-3 py-1.5 text-xs font-medium shadow-lg transition hover:opacity-90"
+          :class="holdingWith ? 'bg-pink-600 text-white' : 'bg-foreground text-background'"
+          @click="toggleHand()"
+        >
+          <Hand class="h-3.5 w-3.5" />
+          <span v-if="!narrow" class="rounded border border-current/40 px-1 text-[10px] leading-4 opacity-70">H</span>
+          {{ holdingWith ? `Let go of ${holdingWith.name}` : `Hold hands with ${nearestPerson?.name}` }}
+        </button>
+
+        <!--
+          The emote bar.
+
+          Down the left edge, opposite the zoom buttons and out of the way of both the pills
+          along the bottom and the people rail on the right. Collapsed to a single face until
+          you want it, because a permanent grid of twelve emoji over a room you're trying to
+          walk in is a menu bar, not a room.
+        -->
+        <div v-if="inThisRoom && !gameRunning && !gameMeeting" class="absolute left-2 top-2 flex flex-col items-start gap-1">
+          <!--
+            Who's actually in here, and a way to get to them.
+
+            The one thing a map can't tell you by being a map: from across the room every sprite
+            is a hat. Distinct from the call dock on the right, which lists who you can *hear* —
+            that's the near half of this list by definition, and the people worth walking to are
+            precisely the ones missing from it.
+          -->
+          <button
+            type="button"
+            class="flex h-8 items-center gap-1.5 rounded-lg border bg-background/90 px-2 text-muted-foreground shadow-sm backdrop-blur transition-colors hover:bg-muted hover:text-foreground"
+            :class="rosterOpen ? 'bg-muted text-foreground' : undefined"
+            :aria-expanded="rosterOpen"
+            title="Who's in this room"
+            @click="rosterOpen = !rosterOpen"
+          >
+            <Users class="h-4 w-4" />
+            <span class="text-xs font-medium">{{ roster.length + 1 }}</span>
+          </button>
+
+          <div v-if="rosterOpen" class="w-56 overflow-hidden rounded-lg border bg-background/95 shadow-sm backdrop-blur">
+            <p class="border-b px-2 py-1.5 text-[11px] font-medium uppercase tracking-wide text-muted-foreground/70">
+              In this room
+            </p>
+
+            <p v-if="!roster.length" class="px-2 py-3 text-xs text-muted-foreground">
+              Just you, for the moment.
+            </p>
+
+            <ul v-else class="max-h-56 overflow-y-auto py-1">
+              <li v-for="p in roster" :key="p.id" class="flex items-center gap-2 px-2 py-1">
+                <span class="min-w-0 flex-1">
+                  <span class="block truncate text-xs font-medium">{{ p.name }}</span>
+                  <span class="block truncate text-[10px] text-muted-foreground">
+                    {{ p.zone ?? `${Math.round(p.distance)} tiles away` }}
+                    <template v-if="p.sitting"> · sitting</template>
+                    <template v-if="!p.audible"> · out of earshot</template>
+                  </span>
+                </span>
+                <button
+                  type="button"
+                  class="shrink-0 rounded border px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+                  :title="`Walk over to ${p.name}`"
+                  @click="goTo(p.id)"
+                >
+                  Go to
+                </button>
+              </li>
+            </ul>
+          </div>
+
+          <button
+            type="button"
+            class="flex h-8 w-8 items-center justify-center rounded-lg border bg-background/90 text-muted-foreground shadow-sm backdrop-blur transition-colors hover:bg-muted hover:text-foreground"
+            :class="emoteBarOpen ? 'bg-muted text-foreground' : undefined"
+            :title="emoteBarOpen ? 'Close the emotes' : 'Pull a face'"
+            :aria-expanded="emoteBarOpen"
+            aria-label="Emotes"
+            @click="emoteBarOpen = !emoteBarOpen"
+          >
+            <Smile class="h-4 w-4" />
+          </button>
+
+          <div v-if="emoteBarOpen" class="grid w-[104px] grid-cols-3 gap-0.5 rounded-lg border bg-background/90 p-1 shadow-sm backdrop-blur">
+            <button
+              v-for="e in EMOTES"
+              :key="e.glyph"
+              type="button"
+              class="flex h-8 w-8 items-center justify-center rounded text-lg leading-none transition-colors hover:bg-muted"
+              :title="e.label"
+              @click="emote(e.glyph)"
+            >
+              {{ e.glyph }}
+            </button>
+          </div>
+        </div>
 
         <!--
           How close you're standing. The wheel and a two-finger pinch do the same thing; these are

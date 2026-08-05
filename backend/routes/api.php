@@ -356,6 +356,9 @@ Route::middleware('auth:api')->group(function () {
      * presence channel and never reaches this file. See routes/channels.php.
      */
     Route::get('space/map-presets', [SideSpaceController::class, 'presets']);
+    // The ways a *room* inside a map can be furnished — a different thing from the layouts
+    // above, which are whole maps. See App\Support\SideSpace\RoomPresets.
+    Route::get('space/room-presets', [SideSpaceController::class, 'roomPresets']);
     Route::get('channels/{channel}/space/map', [SideSpaceController::class, 'show']);
     // Owner only: this replaces the room everyone is standing in.
     Route::put('channels/{channel}/space/map', [SideSpaceController::class, 'update']);

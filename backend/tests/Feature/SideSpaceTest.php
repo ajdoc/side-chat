@@ -8,7 +8,10 @@ use App\Models\User;
 use App\Models\VoiceParticipant;
 use App\Models\Widget;
 use App\Services\VoiceService;
+use App\Support\SideSpace\Decorations;
 use App\Support\SideSpace\MapPresets;
+use App\Support\SideSpace\RoomPresets;
+use App\Support\SideSpace\Tiles;
 use Illuminate\Support\Facades\Event;
 use Laravel\Passport\Passport;
 
@@ -118,6 +121,59 @@ it('lists the map presets, each one whole enough to load over a room', function 
     $res->assertJsonStructure([
         'data' => [['key', 'label', 'description', 'width', 'height', 'tiles', 'zones', 'objects', 'spawn' => ['x', 'y']]],
     ]);
+});
+
+it('lists the room presets, each one furnishable on the floor it asks for', function () {
+    Passport::actingAs(User::factory()->create());
+
+    $res = $this->getJson('/api/space/room-presets')
+        ->assertOk()
+        ->assertJsonCount(count(RoomPresets::keys()), 'data')
+        // "Empty" leads, because it's the default and it's what dragging a room always did.
+        ->assertJsonPath('data.0.key', 'empty');
+
+    $res->assertJsonStructure([
+        'data' => [['key', 'label', 'description', 'floor', 'w', 'h', 'objects']],
+    ]);
+
+    /*
+     * The rules a room preset has to keep, checked here because a preset is stamped into
+     * somebody's map by the client and a broken one is a room that quietly comes out with half
+     * its furniture missing — which looks like a bug in the editor rather than a typo in a list.
+     *
+     * Three things, and they're the same three the map validator enforces on a saved room:
+     * the kinds exist, they fit inside the layout they were authored at, and nothing solid
+     * stands inside anything else solid.
+     */
+    foreach (RoomPresets::all() as $key => $preset) {
+        expect(Tiles::isWalkable($preset['floor']))->toBeTrue("The '$key' room is paved with something nobody can stand on.");
+
+        $taken = [];
+
+        foreach ($preset['objects'] as $object) {
+            $kind = Decorations::find($object['kind']);
+            expect($kind)->not->toBeNull("The '$key' room uses furniture that doesn't exist: {$object['kind']}.");
+
+            [$w, $h] = Decorations::size($object, $kind);
+
+            expect($object['x'])->toBeGreaterThanOrEqual(0)
+                ->and($object['y'])->toBeGreaterThanOrEqual(0)
+                ->and($object['x'] + $w)->toBeLessThanOrEqual($preset['w'], "A {$object['kind']} hangs off the edge of the '$key' room.")
+                ->and($object['y'] + $h)->toBeLessThanOrEqual($preset['h'], "A {$object['kind']} hangs off the edge of the '$key' room.");
+
+            if (! $kind['solid']) {
+                continue;
+            }
+
+            // Solid-on-solid only. A rug under a couch is the point, and always was.
+            for ($dy = $object['y']; $dy < $object['y'] + $h; $dy++) {
+                for ($dx = $object['x']; $dx < $object['x'] + $w; $dx++) {
+                    expect($taken)->not->toContain("$dx,$dy", "Two solid pieces overlap in the '$key' room at $dx,$dy.");
+                    $taken[] = "$dx,$dy";
+                }
+            }
+        }
+    }
 });
 
 // --- rebuilding the map ---

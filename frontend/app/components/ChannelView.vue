@@ -4,6 +4,7 @@ import type { Channel, GifResult, Message } from '~/types'
 import type { FloatingConversationIcon } from '~/composables/useFloatingWindows'
 import { Button } from '~/components/ui/button'
 import { memberBadgesKey, mentionNamesKey, useChannelMembers } from '~/composables/useChannelMembers'
+import { emoteOnly } from '~/lib/spaceEmotes'
 
 /**
  * A channel's timeline: the messages, the composer, threads, pins, read receipts, typing.
@@ -72,7 +73,7 @@ const {
 // over people's heads in the room. Fed from here rather than from the stage because this is
 // where both already arrive: a second set of whisper handlers on `channel.{id}` would come off
 // with the first one torn down. See useSpaceChatBubbles.
-const { noteTyping, forgetTyping, noteSaid, clearBubbles } = useSpaceChatBubbles()
+const { noteTyping, forgetTyping, noteSaid, noteEmote, clearBubbles } = useSpaceChatBubbles()
 
 const { members: mentionMembers, names: mentionNames, badges: memberBadges, load: loadMembers } = useChannelMembers()
 // What `/` offers in this channel — built-ins plus whatever the bots here answer to.
@@ -340,7 +341,10 @@ async function onSend(body: string, files: File[], gif?: GifResult, uploadIds: s
      * loading, is it a widget card. You typed it a moment ago. That's the whole test.
      */
     if (isSpace.value && user.value) {
-      if (body.trim()) noteSaid(user.value.id, body)
+      const emote = files.length ? null : emoteOnly(body)
+
+      if (emote) noteEmote(user.value.id, emote)
+      else if (body.trim()) noteSaid(user.value.id, body)
       else if (files.length) noteSaid(user.value.id, files.length > 1 ? '📎 sent some files' : '📎 sent a file')
     }
     replyingTo.value = null
@@ -417,10 +421,36 @@ function raiseBubble(m: Message | undefined) {
   if (m.type === 'system' || m.type === 'widget' || !m.user) return
   if (Date.now() - Date.parse(m.created_at) > BUBBLE_FRESH_MS) return
 
+  // A message that is nothing but emoji is an emote, and gets the glyph over the head rather
+  // than a speech bubble with an emoji in it — the same message, drawn as what it is. Which is
+  // the whole point of being able to send one from the composer: in a room it *is* a gesture.
+  const emote = m.attachments?.length ? null : emoteOnly(m.body ?? '')
+  if (emote) return noteEmote(m.user.id, emote)
+
   const line = m.body?.trim()
     || (m.attachments?.length ? (m.attachments.length > 1 ? '📎 sent some files' : '📎 sent a file') : '')
   if (line) noteSaid(m.user.id, line)
 }
+
+/**
+ * A reaction in this channel pops over the reactor's head in the room.
+ *
+ * Wired here rather than in the stage for the same reason the said and typing bubbles are: this
+ * is the component that owns the channel's stream, and a listener attached from the canvas
+ * would be a second thing to tear down when either one of them goes.
+ *
+ * Gated on the channel, because a reaction landing in a DM you happen to also have open is not
+ * something anybody in *this* room did. And gated on the room being a room at all — bubbles are
+ * only ever drawn by a Side Space, so anywhere else this is bookkeeping for an absent canvas.
+ *
+ * Reacting is already an emote; it was only ever drawn in one of the two places you were
+ * looking. See lib/spaceEmotes.ts.
+ */
+onScopeDispose(onReactionAdded((e) => {
+  if (!isSpace.value || e.channelId !== props.channel.id) return
+
+  noteEmote(e.userId, e.emoji)
+}))
 
 /**
  * Every keystroke: tell the channel, and — in a room — put the dots over your own head too.

@@ -212,6 +212,23 @@ function sendGif(gif: GifResult) {
   emit('submit', '', [], gif)
 }
 
+/*
+ * So does an emote, and for the same reason: it's a whole message, not an ingredient.
+ *
+ * It goes out as an ordinary message whose body is the glyph — no new type, no new endpoint,
+ * nothing downstream to teach. Everything a message already does (edit, reply, react, pin,
+ * search, a bot rule) keeps working on it, and the only two places that treat it specially are
+ * both *renderers*: MessageItem draws it big, and a Side Space pops it over your head.
+ *
+ * Whatever you'd half-typed is left alone. An emote is an aside — "😂" while you finish the
+ * sentence you were writing is exactly the case this exists for, and clearing the box would
+ * make it the one thing in the composer that eats your draft.
+ */
+function sendEmote(glyph: string) {
+  if (props.sending) return
+  emit('submit', glyph, [])
+}
+
 // Every edit does two things: persist the draft (so it survives leaving the channel or a
 // reload) and, when there's real content, poke the typing whisper. Emptying the box saves
 // nothing — setDraft drops the entry — so a sent or cleared message leaves no draft behind.
@@ -284,6 +301,7 @@ onBeforeUnmount(() => {
         @paste="onPaste"
       >
         <template #toolbar-end>
+          <EmotePicker @select="sendEmote" />
           <GifPicker @select="sendGif" />
           <!-- A voice note lands in the pending list like any other file, so it can be heard,
                captioned or dropped before it goes. -->

@@ -47,6 +47,28 @@ layout as above: 4 frames per direction, eight directions top to bottom.
 
 The yellow-hooded version, shared the same way by the `espurr_pickachu` pet and costume.
 
+## Stills — furniture that doesn't move
+
+    sprites/decor/iron-throne.png
+
+Not a sheet. A `StillSpec` is one image with one view: no frames, no eight directions, no
+`columns`. Most furniture is this shape — a throne, a statue, a sign — and making it pretend to
+be a one-frame animation would mean a PNG that is seven-eighths empty.
+
+Requirements are only two: **transparent background** (same as below) and **taller than it is
+wide is fine** — `scale` says how many tiles tall it draws and the width follows from the
+image's own aspect ratio, anchored at the bottom centre of the piece's footprint. So a throne on
+a 2×2 footprint drawn at `scale: 3` rises a whole tile above the back of it, and somebody sitting
+on the front row is drawn in front of the seat with the blades still over their head.
+
+Declared next to the fallback art in `app/lib/spaceDecor.ts`:
+
+    still: { src: 'decor/iron-throne.png', scale: 2.8 }
+
+Pick `scale` so the *width* that follows lands on the footprint: the throne is 458×623 on a 2×2
+piece, so 2.8 tiles tall is 2.06 wide — it fills its floor space instead of overhanging it, and
+the extra 0.8 goes up. Missing files fall back to the character grid, exactly as sheets do.
+
 ## Preparing a generated sheet
 
 Sheets that come out of an image generator need two passes before they're committed, and neither
@@ -66,6 +88,10 @@ that and the sprite goes soft.
    noise reads as a JPEG of pixel art.
 
 Together those took the Espurr Pikachu sheet from 1.87 MB to 112 KB at full resolution.
+
+Both passes are scripted — see [`scripts/sprites/`](../../scripts/sprites/README.md). They work
+on stills as well as sheets: the iron throne arrived as a 1.73 MB screenshot with the
+checkerboard painted into the pixels and came out 121 KB.
 
 ## Backgrounds must be transparent
 

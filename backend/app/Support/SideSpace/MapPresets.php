@@ -47,6 +47,14 @@ final class MapPresets
             'lounge' => self::lounge(),
             'park' => self::park(),
             'campfire' => self::campfire(),
+            // The themed four. Same machinery as the plain rooms above — they're only presets —
+            // but built to be somewhere rather than something, which is what a room you'd
+            // actually hang about in has that a floor plan doesn't.
+            'throne-room' => self::throneRoom(),
+            'green-hall' => self::greenHall(),
+            'sleep-temple' => self::sleepTemple(),
+            'espurr-den' => self::espurrDen(),
+            'new-york' => self::newYork(),
             // The gyms: an arena crossed with an office, one per badge. See gym().
             'gym-cinnabar' => self::gymCinnabar(),
             'gym-celadon' => self::gymCeladon(),
@@ -62,6 +70,32 @@ final class MapPresets
     public static function keys(): array
     {
         return array_keys(self::all());
+    }
+
+    /**
+     * Which heading a preset sits under in the picker.
+     *
+     * A lookup rather than a field on each preset, because grouping is a fact about the *list* —
+     * it exists only so seventeen rooms in a grid read as three short choices instead of one long
+     * scroll — and threading it through seventeen builders would put a presentation concern in
+     * the middle of the geometry. The order of {@see self::GROUPS} is the order they're shown in.
+     */
+    public const GROUPS = [
+        'Rooms' => ['office', 'lounge', 'park', 'campfire', 'blank'],
+        'Themed' => ['throne-room', 'green-hall', 'sleep-temple', 'espurr-den', 'new-york'],
+        'Gyms' => ['gym-cinnabar', 'gym-celadon', 'gym-vermilion', 'gym-azalea', 'gym-olivine', 'gym-blackthorn'],
+    ];
+
+    /** The heading this preset belongs under. Anything unlisted falls in with the plain rooms. */
+    public static function groupOf(string $key): string
+    {
+        foreach (self::GROUPS as $group => $keys) {
+            if (in_array($key, $keys, true)) {
+                return $group;
+            }
+        }
+
+        return array_key_first(self::GROUPS);
     }
 
     /**
@@ -291,6 +325,351 @@ final class MapPresets
                 ['bench', 7, 13], ['bench', 11, 6], ['speaker', 13, 9], ['plant', 6, 8],
             ]),
             'spawn' => ['x' => 9, 'y' => 14],
+        ];
+    }
+
+    // --- the themed rooms ---
+
+    /**
+     * A great hall: one long aisle, and a throne of swords at the end of it. 26×20.
+     *
+     * The shape is doing the theming as much as the furniture is. Everything points north —
+     * the carpet runner, the pillars, the braziers — so that walking in puts you at the bottom
+     * of a room whose whole geometry is about who is sitting at the top of it. The two rooms
+     * off it are the counterweight: a sealed council chamber where the actual arguing happens,
+     * and a walled garden with a tree in it where it doesn't.
+     */
+    private static function throneRoom(): array
+    {
+        $w = 26;
+        $h = 20;
+        $tiles = self::room($w, $h, Tiles::FLOOR);
+
+        // The aisle, and the raised boards at the end of it. Order matters: the dais is painted
+        // over the runner, because the throne stands on the platform, not on the carpet.
+        self::rect($tiles, 11, 1, 4, 18, Tiles::CARPET);
+        self::rect($tiles, 9, 1, 8, 3, Tiles::WOOD);
+
+        // The small council: sealed, one door, and carpeted so it doesn't read as a cell.
+        self::chamber($tiles, 0, 12, 8, 8, Tiles::FLOOR, [[7, 15]]);
+        self::rect($tiles, 1, 13, 6, 6, Tiles::CARPET);
+
+        // The godswood: the same box with grass and a couple of trees in it, so the room has
+        // one corner that isn't stone.
+        self::rect($tiles, 19, 13, 6, 6, Tiles::GRASS);
+        self::chamber($tiles, 18, 12, 8, 8, Tiles::GRASS, [[18, 15]]);
+        self::stamp($tiles, 20, 14, [Tiles::TREE]);
+        self::stamp($tiles, 23, 17, [Tiles::TREE]);
+
+        return [
+            'label' => 'Throne Room',
+            'description' => 'A great hall of stone and braziers with an iron throne at the head of it',
+            'name' => 'Throne Room',
+            'width' => $w,
+            'height' => $h,
+            'tiles' => $tiles,
+            'zones' => [
+                ['id' => 'council', 'name' => 'Small council', 'kind' => 'private', 'x' => 1, 'y' => 13, 'w' => 6, 'h' => 6],
+                ['id' => 'godswood', 'name' => 'Godswood', 'kind' => 'private', 'x' => 19, 'y' => 13, 'w' => 6, 'h' => 6],
+            ],
+            'objects' => self::objects([
+                // The seat, and the two fires that say it's the seat.
+                ['throne', 12, 2], ['torch', 10, 2], ['torch', 15, 2],
+                ['statue', 9, 1], ['statue', 16, 1],
+                // The hall: pillars down both sides and braziers between them.
+                ['pillar', 8, 5], ['pillar', 8, 8], ['pillar', 8, 11],
+                ['pillar', 17, 5], ['pillar', 17, 8], ['pillar', 17, 11],
+                ['torch', 9, 6], ['torch', 16, 6], ['torch', 9, 10], ['torch', 16, 10],
+                // Long tables along the walls, for the feast the hall is otherwise too tidy for.
+                ['desk', 4, 8], ['bench', 4, 9], ['desk', 20, 8], ['bench', 20, 9],
+                ['barrel', 3, 5], ['crate', 21, 5], ['speaker', 6, 3],
+                // The council chamber: the map on the wall, the ledgers, somewhere to sit.
+                ['whiteboard', 2, 13], ['bookshelf', 1, 13], ['lectern', 5, 13],
+                ['desk', 2, 15], ['chair', 2, 14], ['chair', 3, 14], ['bench', 2, 17],
+                ['filecabinet', 6, 18], ['plant', 6, 16],
+                // The godswood.
+                ['bench', 20, 17], ['bench', 22, 14], ['plant', 19, 18], ['torch', 24, 13],
+                // Banners.
+                ['painting', 5, 0], ['painting', 20, 0], ['poster', 2, 0], ['clock', 12, 0],
+                ['mat', 12, 18], ['mat', 13, 18],
+            ]),
+            'spawn' => ['x' => 12, 'y' => 18],
+        ];
+    }
+
+    /**
+     * A timber hall opening onto a glade with a stream through it. 28×20.
+     *
+     * Half indoors and half out, joined by one short path — the only preset where the door in
+     * the middle is the whole design. Inside is the long table and the hearth; outside is trees,
+     * water and flowers, and the two halves are close enough that the hall's noise reaches the
+     * grass. Ringed by trees rather than walls on the outside, like the Park.
+     */
+    private static function greenHall(): array
+    {
+        $w = 28;
+        $h = 20;
+
+        $tiles = self::fill($w, $h, Tiles::GRASS);
+        self::border($tiles, Tiles::TREE);
+
+        // The hall: boards inside a box of wall, with a double doorway onto the glade.
+        self::rect($tiles, 1, 2, 14, 16, Tiles::WOOD);
+        self::chamber($tiles, 1, 2, 14, 16, Tiles::WOOD, [[14, 9], [14, 10]]);
+
+        // A stone hearth in the corner, and a runner down the length of the table.
+        self::rect($tiles, 2, 3, 4, 2, Tiles::PATH);
+        self::rect($tiles, 6, 4, 4, 12, Tiles::CARPET);
+
+        // The stream, with sand banks and a ford at each end — water is solid, so the shallow
+        // ends are the only way across, which is what makes the far side feel like the far side.
+        self::rect($tiles, 19, 1, 4, 18, Tiles::SAND);
+        self::rect($tiles, 20, 2, 2, 16, Tiles::WATER);
+
+        // The path from the hall door to the water.
+        self::rect($tiles, 15, 9, 4, 2, Tiles::PATH);
+
+        self::rect($tiles, 24, 3, 3, 4, Tiles::FLOWERS);
+        self::rect($tiles, 24, 13, 3, 4, Tiles::TALL_GRASS);
+
+        foreach ([[17, 4], [17, 15], [25, 9], [23, 11]] as [$x, $y]) {
+            self::stamp($tiles, $x, $y, [Tiles::TREE]);
+        }
+
+        return [
+            'label' => 'Green Hall',
+            'description' => 'A timber feast hall opening onto a glade with a stream and flowers',
+            'name' => 'Green Hall',
+            'width' => $w,
+            'height' => $h,
+            'tiles' => $tiles,
+            'zones' => [
+                ['id' => 'hall', 'name' => 'The hall', 'kind' => 'private', 'x' => 2, 'y' => 3, 'w' => 12, 'h' => 14],
+                ['id' => 'glade', 'name' => 'The glade', 'kind' => 'private', 'x' => 23, 'y' => 2, 'w' => 4, 'h' => 16],
+            ],
+            'objects' => self::objects([
+                // The long table: two rows of four, benches on both sides of each.
+                ['desk', 6, 5], ['bench', 6, 4], ['bench', 6, 6],
+                ['desk', 8, 5], ['bench', 8, 4], ['bench', 8, 6],
+                ['desk', 6, 9], ['bench', 6, 8], ['bench', 6, 10],
+                ['desk', 8, 9], ['bench', 8, 8], ['bench', 8, 10],
+                // The hearth end.
+                ['campfire', 3, 3], ['barrel', 2, 6], ['crate', 3, 6], ['speaker', 12, 12],
+                // The written-down half of a hall: songs, maps, records.
+                ['bookshelf', 12, 3], ['cabinet', 12, 4], ['lectern', 12, 6], ['filecabinet', 12, 8],
+                // The soft end.
+                ['rug', 2, 11], ['couch', 2, 13], ['plant', 2, 16], ['plant', 13, 16],
+                // The doors themselves.
+                ['door', 14, 9], ['door', 14, 10],
+                ['painting', 4, 2], ['window', 9, 2], ['painting', 12, 2],
+                // Outside: torches at the door, benches by the water, a stone figure in the trees.
+                ['torch', 15, 8], ['torch', 15, 11],
+                ['bench', 23, 7], ['bench', 23, 14], ['statue', 24, 10],
+                ['plant', 26, 5], ['plant', 26, 15], ['crate', 17, 17], ['barrel', 18, 17],
+            ]),
+            'spawn' => ['x' => 16, 'y' => 10],
+        ];
+    }
+
+    /**
+     * A dark temple: pews, an aisle, and a stage you'd worship at. 22×22.
+     *
+     * Built as a venue rather than a room. The pews all face the same way, the aisle runs the
+     * length of it, and everything worth pressing E on — the speakers most of all — is up on the
+     * boards at the north end, because the point of the room is the thing happening at the front
+     * of it. The two water alcoves are where you go when you want to stop being in the crowd.
+     */
+    private static function sleepTemple(): array
+    {
+        $w = 22;
+        $h = 22;
+        $tiles = self::room($w, $h, Tiles::FLOOR);
+
+        // Carpet everywhere inside, a stone aisle cut through it, boards for the stage.
+        self::rect($tiles, 2, 2, 18, 18, Tiles::CARPET);
+        self::rect($tiles, 10, 4, 2, 16, Tiles::PATH);
+        self::rect($tiles, 6, 2, 10, 5, Tiles::WOOD);
+
+        // Two still pools, one either side. Sand ring, water in the middle: you stand at the
+        // edge of it, which is the only thing you can do with water here anyway.
+        foreach ([2, 16] as $x0) {
+            self::rect($tiles, $x0, 9, 4, 4, Tiles::SAND);
+            self::rect($tiles, $x0 + 1, 10, 2, 2, Tiles::WATER);
+        }
+
+        return [
+            'label' => 'Sleep Temple',
+            'description' => 'A dark hall of pews facing a candlelit stage, with still water either side',
+            'name' => 'Sleep Temple',
+            'width' => $w,
+            'height' => $h,
+            'tiles' => $tiles,
+            'zones' => [
+                ['id' => 'stage', 'name' => 'The stage', 'kind' => 'private', 'x' => 6, 'y' => 2, 'w' => 10, 'h' => 5],
+                ['id' => 'pool-west', 'name' => 'West pool', 'kind' => 'private', 'x' => 2, 'y' => 9, 'w' => 4, 'h' => 4],
+                ['id' => 'pool-east', 'name' => 'East pool', 'kind' => 'private', 'x' => 16, 'y' => 9, 'w' => 4, 'h' => 4],
+            ],
+            'objects' => self::objects([
+                // The stage: two masked figures, the stacks, and the book you read from.
+                ['statue', 10, 2], ['statue', 11, 2],
+                ['speaker', 7, 2], ['speaker', 14, 2], ['lectern', 8, 4],
+                ['torch', 6, 2], ['torch', 15, 2], ['torch', 6, 6], ['torch', 15, 6],
+                ['campfire', 8, 6], ['campfire', 13, 6],
+                // The pews: four rows either side of the aisle, all facing the stage.
+                ['bench', 7, 9], ['bench', 12, 9],
+                ['bench', 7, 11], ['bench', 12, 11],
+                ['bench', 7, 13], ['bench', 12, 13],
+                ['bench', 7, 15], ['bench', 12, 15],
+                // Candles down the aisle, in the gaps the pews leave.
+                ['torch', 9, 10], ['torch', 12, 10], ['torch', 9, 16], ['torch', 12, 16],
+                ['pillar', 5, 8], ['pillar', 5, 16], ['pillar', 16, 8], ['pillar', 16, 16],
+                // The pools.
+                ['torch', 5, 9], ['torch', 16, 9], ['barrel', 2, 12], ['crate', 19, 12],
+                ['poster', 10, 0], ['poster', 11, 0], ['painting', 4, 0], ['painting', 17, 0],
+                ['noticeboard', 10, 21],
+                ['mat', 10, 20], ['mat', 11, 20],
+            ]),
+            'spawn' => ['x' => 10, 'y' => 19],
+        ];
+    }
+
+    /**
+     * A den full of plush Espurrs, with a garden corner and a small pond. 22×16.
+     *
+     * The one room here that isn't trying to be impressive. Carpet everywhere, soft furniture,
+     * something to play on, and the plushes scattered about the way toys actually end up —
+     * a few together in the nest, one abandoned in the middle of the floor, one out in the grass.
+     */
+    private static function espurrDen(): array
+    {
+        $w = 22;
+        $h = 16;
+        $tiles = self::room($w, $h, Tiles::CARPET);
+
+        // The nest: boards in the corner, which is where the pile of plushes lives.
+        self::rect($tiles, 2, 2, 8, 5, Tiles::WOOD);
+
+        // A patch of garden that has somehow got indoors, and a pond in the other corner.
+        self::rect($tiles, 15, 10, 6, 5, Tiles::GRASS);
+        self::rect($tiles, 16, 11, 3, 2, Tiles::FLOWERS);
+        self::rect($tiles, 17, 2, 4, 4, Tiles::SAND);
+        self::rect($tiles, 18, 3, 2, 2, Tiles::WATER);
+
+        return [
+            'label' => 'Espurr Den',
+            'description' => 'A carpeted den of plush Espurrs, with a garden corner and a small pond',
+            'name' => 'Espurr Den',
+            'width' => $w,
+            'height' => $h,
+            'tiles' => $tiles,
+            'zones' => [
+                ['id' => 'nest', 'name' => 'The nest', 'kind' => 'private', 'x' => 2, 'y' => 2, 'w' => 8, 'h' => 5],
+                ['id' => 'garden', 'name' => 'Garden corner', 'kind' => 'private', 'x' => 15, 'y' => 10, 'w' => 6, 'h' => 5],
+            ],
+            'objects' => self::objects([
+                // The pile. All three outfits, because a collection is the point of a collection.
+                ['plush', 3, 3], ['plush_vessel', 5, 3], ['plush_pickachu', 7, 3],
+                ['plush', 4, 5], ['plush_vessel', 8, 5],
+                // And the strays.
+                ['plush_pickachu', 12, 8], ['plush', 2, 13], ['plush_vessel', 16, 12], ['plush', 19, 13],
+                // The soft corner, facing the telly.
+                ['tv', 3, 10], ['rug', 5, 10], ['couch', 5, 12], ['couch', 3, 8], ['speaker', 1, 10],
+                // Somewhere to make something.
+                ['desk', 12, 6], ['stool', 12, 7], ['stool', 13, 7], ['easel', 15, 6],
+                ['arcade', 19, 8], ['racer', 20, 8],
+                // Shelves and lamps.
+                ['bookshelf', 10, 1], ['cabinet', 11, 1], ['lamp', 1, 1], ['lamp', 20, 1],
+                ['bench', 16, 14], ['plant', 15, 10], ['plant', 20, 14],
+                ['shelf', 5, 0], ['painting', 8, 0], ['window', 14, 0], ['clock', 3, 0],
+                ['mat', 10, 14],
+            ]),
+            'spawn' => ['x' => 10, 'y' => 13],
+        ];
+    }
+
+    /**
+     * A city block: two sidewalks, the street between them, and rooms off it. 30×22.
+     *
+     * The only preset built round a *thoroughfare*. Everything faces the street, the street is
+     * the only way from one end to the other, and the three interiors — a diner, a bodega, an
+     * apartment lobby — open onto it. Which makes it the room where you keep bumping into
+     * people, because a corridor with doors off it is exactly what a busy channel wants and
+     * exactly what an open floor plan never gives you.
+     *
+     * The little park at the east end is the counterweight: somewhere with grass and a bench
+     * that you can see the street from without standing in it.
+     */
+    private static function newYork(): array
+    {
+        $w = 30;
+        $h = 22;
+
+        // Concrete everywhere, with the road as a band of worn path down the middle. Bordered
+        // with wall rather than trees: a city block ends at a building, not at a hedge.
+        $tiles = self::room($w, $h, Tiles::FLOOR);
+        self::rect($tiles, 1, 9, 28, 4, Tiles::PATH);
+
+        // The crossing: two stripes of boards across the road, which is what a zebra crossing
+        // is at this resolution — a marked place to step off the kerb.
+        self::rect($tiles, 11, 9, 1, 4, Tiles::WOOD);
+        self::rect($tiles, 13, 9, 1, 4, Tiles::WOOD);
+
+        // North side: the diner and the bodega, each a sealed room with a door onto the street.
+        self::chamber($tiles, 2, 1, 10, 8, Tiles::FLOOR, [[6, 8]]);
+        self::rect($tiles, 3, 2, 8, 6, Tiles::WOOD);
+        self::chamber($tiles, 15, 1, 9, 8, Tiles::FLOOR, [[19, 8]]);
+        self::rect($tiles, 16, 2, 7, 6, Tiles::CARPET);
+
+        // South side: the apartment lobby, and the pocket park beside it.
+        self::chamber($tiles, 3, 13, 9, 8, Tiles::FLOOR, [[7, 13]]);
+        self::rect($tiles, 4, 14, 7, 6, Tiles::CARPET);
+
+        self::rect($tiles, 16, 14, 12, 7, Tiles::GRASS);
+        self::rect($tiles, 20, 16, 4, 3, Tiles::FLOWERS);
+        foreach ([[17, 15], [26, 15], [17, 20], [26, 20]] as [$x, $y]) {
+            self::stamp($tiles, $x, $y, [Tiles::TREE]);
+        }
+
+        return [
+            'label' => 'New York',
+            'description' => 'A city block: a street with a diner, a bodega, a lobby and a pocket park',
+            'name' => 'New York',
+            'width' => $w,
+            'height' => $h,
+            'tiles' => $tiles,
+            'zones' => [
+                ['id' => 'diner', 'name' => 'The diner', 'kind' => 'private', 'x' => 3, 'y' => 2, 'w' => 8, 'h' => 6],
+                ['id' => 'bodega', 'name' => 'The bodega', 'kind' => 'private', 'x' => 16, 'y' => 2, 'w' => 7, 'h' => 6],
+                ['id' => 'lobby', 'name' => 'The lobby', 'kind' => 'private', 'x' => 4, 'y' => 14, 'w' => 7, 'h' => 6],
+                ['id' => 'park', 'name' => 'The park', 'kind' => 'private', 'x' => 16, 'y' => 14, 'w' => 12, 'h' => 7],
+            ],
+            'objects' => self::objects([
+                // The diner: a counter of stools, booths against the window, a jukebox.
+                ['desk', 4, 3], ['desk', 6, 3], ['desk', 8, 3],
+                ['stool', 4, 4], ['stool', 6, 4], ['stool', 8, 4], ['stool', 10, 4],
+                ['bench', 4, 6], ['bench', 8, 6], ['fridge', 10, 2], ['speaker', 3, 7],
+                ['painting', 5, 1], ['window', 8, 1], ['clock', 3, 1],
+                ['door', 6, 8],
+                // The bodega: shelves, a counter, and the telly nobody is watching.
+                ['bookshelf', 16, 2], ['cabinet', 17, 2], ['bookshelf', 18, 2],
+                ['fridge', 22, 2], ['fridge', 22, 3],
+                ['desk', 16, 6], ['computer', 18, 6], ['crate', 21, 6], ['barrel', 22, 7],
+                ['tv', 20, 2], ['poster', 17, 1], ['window', 21, 1],
+                ['door', 19, 8],
+                // The street itself: what makes it a street rather than a corridor.
+                ['lamp', 13, 8], ['lamp', 13, 13], ['lamp', 26, 8],
+                ['noticeboard', 24, 0], ['plant', 2, 10], ['plant', 27, 11],
+                ['crate', 25, 10], ['barrel', 26, 10], ['watercooler', 14, 8],
+                // The lobby: post, a sofa nobody sits on, and the board by the door.
+                ['couch', 5, 15], ['rug', 5, 17], ['filecabinet', 4, 19], ['lectern', 9, 15],
+                ['plant', 10, 19], ['lamp', 4, 14], ['whiteboard', 8, 19],
+                ['door', 7, 13],
+                // The park.
+                ['bench', 18, 17], ['bench', 24, 17], ['bench', 21, 20],
+                ['statue', 22, 14], ['plant', 19, 19], ['campfire', 25, 19],
+                ['mat', 12, 11], ['mat', 12, 10],
+            ]),
+            'spawn' => ['x' => 12, 'y' => 11],
         ];
     }
 

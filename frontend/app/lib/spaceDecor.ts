@@ -36,7 +36,9 @@
  */
 
 import type { SideDeskAppId } from '~/types'
+import type { SheetSpec, StillSpec } from './spriteSheet'
 import { blit, sprite, tileNoise } from './pixelSprite'
+import { drawSheetFrame, drawStill, sheetReady, sheetRow } from './spriteSheet'
 
 export type DecorMount = 'floor' | 'wall'
 
@@ -93,6 +95,43 @@ export interface DecorKind {
    * what pressing E opens) stays with the server, exactly as before.
    */
   seat: boolean
+  /**
+   * Is the whole piece **one** seat, rather than a row of them?
+   *
+   * The distinction a footprint can't make on its own. A two-tile bench is two places to sit and
+   * a three-tile couch is three, which is why {@link seatOn} normally puts you on the tile you
+   * walked up to — walk to the far end of a couch and you sit at the far end of it, and two
+   * people on one couch sit side by side.
+   *
+   * A throne is two tiles across and is emphatically not two seats. Sitting on the left half of
+   * a throne is not a thing anybody has ever done, so a piece that says so is centred instead:
+   * you end up in the middle of it however you arrived, which is the only place there is.
+   */
+  oneSeat: boolean
+  /**
+   * Real artwork from a sprite sheet, drawn instead of the character grid when it's on disk.
+   *
+   * The same escape hatch the pets have ({@link file://./spacePets.ts}) and for the same reason:
+   * a sixteen-pixel grid is a good way to draw a bookshelf and a poor way to draw a creature.
+   * The grid stays as the fallback, so a kind with a sheet still looks finished on a deploy
+   * where the PNG never made it — and `sheetReady` is checked per frame, which costs nothing
+   * and means the artwork simply appears when it arrives.
+   *
+   * `facing` picks the row, so a piece drawn from a sheet still turns like everything else.
+   */
+  sheet: SheetSpec | null
+  /**
+   * A single hand-drawn picture, for a piece that has one view and doesn't move.
+   *
+   * The other half of the same escape hatch as {@link sheet}, and the one most furniture wants:
+   * a throne is not an animation and has no eight directions, so asking it to be a sheet would
+   * mean a PNG that is seven-eighths empty. Drawn at `scale` tiles tall, anchored at the bottom
+   * centre of the footprint — so a piece taller than its floor space rises out of it exactly as
+   * a `lift`ed grid sprite does, and the same thing is true of a person standing in front of it.
+   *
+   * The character grid stays as the fallback, so the room is finished either way.
+   */
+  still: StillSpec | null
 }
 
 /** A decoration as it's stored: a kind, a place, and which way it's turned. */
@@ -143,6 +182,14 @@ const P: Record<string, string> = {
   e: '#6f6a60', // stone, shadowed (gym set)
   E: '#a8a29a', // stone, lit
   h: '#4a4640', // stone, deep shadow
+  i: '#3c4049', // black iron (the throne)
+  I: '#6d7482', // black iron, lit — an edge catching the light
+  l: '#b9b6c4', // espurr fur
+  L: '#d3d1dc', // espurr fur, lit
+  u: '#8f8b9e', // espurr fur, shadowed
+  v: '#a982c9', // espurr eye
+  V: '#f3e6ff', // espurr eye, glint
+  a: '#e6dfc9', // cream — ear linings
 }
 
 /*
@@ -629,6 +676,164 @@ const BOULDER = [
   '................',
   '................',
   '................',
+]
+
+/**
+ * The Iron Throne: a seat welded out of surrendered swords.
+ *
+ * **Two tiles by two**, unlike every other seat, and that size is the feature rather than a
+ * flourish. A one-tile throne is a chair: sitting on it puts a sprite over the whole sprite, and
+ * the thing you climbed onto disappears underneath you at the moment it matters. At 2×2 you sit
+ * on the front row while the back row and the crown of blades — eight of them, rising a third of
+ * the footprint again above it on the `lift` — stay standing behind your head.
+ *
+ * No `side` view: a square standing piece falls through to {@link pose}, which mirrors rather
+ * than rotating, so a throne turned sideways is still a throne facing you rather than a throne
+ * lying down. The `back` is worth having, because a throne is the one piece of furniture in a
+ * room that people deliberately walk round.
+ */
+const THRONE = [
+  '..o...o...o...o...o...o...o...o.',
+  '..I...I...I...I...I...I...I...I.',
+  '.oIo.oIo.oIo.oIo.oIo.oIo.oIo.oIo',
+  '.oio.oio.oio.oio.oio.oio.oio.oio',
+  '.oio.oio.oio.oio.oio.oio.oio.oio',
+  '.........oio.oio.oio.oio........',
+  '.........oio.oio.oio.oio........',
+  '.........oio.oio.oio.oio........',
+  '.oooooooooooooooooooooooooooooo.',
+  'ooiiiiiiiiiiiiiiiiiiiiiiiiiiiioo',
+  '.oiiiIiiiiiiiiiiiiiiiiiiiiIiiio.',
+  '.oiiiiiiiiiiiiiiiiiiiiiiiiiiiio.',
+  '.oiiiiiiIiiiiiiiiiiiiiiIiiiiiio.',
+  '.oiiiiiiiiiiiiiiiiiiiiiiiiiiiio.',
+  '.oiiiiiiiiiiiiiiiiiiiiiiiiiiiio.',
+  '.oiiiiiiIiiiiiiiiiiiiiiIiiiiiio.',
+  '.oiiiiiiiiiiiiiiiiiiiiiiiiiiiio.',
+  '.oiiiIiiiiiiiiiiiiiiiiiiiiIiiio.',
+  '.oiiiiiiiiiiiiiiiiiiiiiiiiiiiio.',
+  '.oooooooooooooooooooooooooooooo.',
+  'ooiiiiiiiiiiiiiiiiiiiiiiiiiiiioo',
+  'oiIIIIIIIIIIIIIIIIIIIIIIIIIIIIio',
+  'oiiiiiiiiiiiiiiiiiiiiiiiiiiiiiio',
+  '.oooooooooooooooooooooooooooooo.',
+  '.oii........................iio.',
+  '.oii........................iio.',
+  '.oii........................iio.',
+  '.oii........................iio.',
+  '.oii........................iio.',
+  '.oii........................iio.',
+  '.ooo........................ooo.',
+  '................................',
+]
+
+/** The throne from behind: a wall of welded steel with the blades still showing over the top. */
+const THRONE_BACK = [
+  '..o...o...o...o...o...o...o...o.',
+  '..I...I...I...I...I...I...I...I.',
+  '.oIo.oIo.oIo.oIo.oIo.oIo.oIo.oIo',
+  '.oio.oio.oio.oio.oio.oio.oio.oio',
+  '.oio.oio.oio.oio.oio.oio.oio.oio',
+  '.........oio.oio.oio.oio........',
+  '.........oio.oio.oio.oio........',
+  '.........oio.oio.oio.oio........',
+  '.oooooooooooooooooooooooooooooo.',
+  'ooiiiiiiiiiiiiiiiiiiiiiiiiiiiioo',
+  '.oiiiiiiiiiiiiiiiiiiiiiiiiiiiio.',
+  '.oiiiiiIiiiiiiiiiiiiiiiiIiiiiio.',
+  '.oiiiiiiiiiiiiiiiiiiiiiiiiiiiio.',
+  '.oiiiiiiiiiiiiiiiiiiiiiiiiiiiio.',
+  '.oiiiiiiiiiiiiIIiiiiiiiiiiiiiio.',
+  '.oiiiiiiiiiiiiiiiiiiiiiiiiiiiio.',
+  '.oiiiiiiiiiiiiiiiiiiiiiiiiiiiio.',
+  '.oiiiiiIiiiiiiiiiiiiiiiiIiiiiio.',
+  '.oiiiiiiiiiiiiiiiiiiiiiiiiiiiio.',
+  '.oooooooooooooooooooooooooooooo.',
+  'ooiiiiiiiiiiiiiiiiiiiiiiiiiiiioo',
+  'oiiiiiiiiiiiiiiiiiiiiiiiiiiiiiio',
+  'oiiiiiiiiiiiiiiiiiiiiiiiiiiiiiio',
+  '.oooooooooooooooooooooooooooooo.',
+  '.oii........................iio.',
+  '.oii........................iio.',
+  '.oii........................iio.',
+  '.oii........................iio.',
+  '.oii........................iio.',
+  '.oii........................iio.',
+  '.ooo........................ooo.',
+  '................................',
+]
+
+/**
+ * An Espurr plush: the pet, sewn shut and sat on the floor.
+ *
+ * Deliberately the pet's own front view rather than a new drawing of the same creature — a plush
+ * of something is supposed to read as *that thing*, and the two sitting side by side (one
+ * trotting after you, one on a shelf) is the joke. Only the seams differ.
+ */
+const ESPURR_PLUSH = [
+  '................',
+  '..o..........o..',
+  '..oa........ao..',
+  '..oaao....oaao..',
+  '..oaaao..oaaao..',
+  '..ollllllllllo..',
+  '.ollllllllllllo.',
+  '.olvvvvvvvvvvlo.',
+  '.olvVvllllvVvlo.',
+  '.olvvvllllvvvlo.',
+  '.ollllluulllllo.',
+  '.olLLLLLLLLLLlo.',
+  '..ollllllllllo..',
+  '...ouo....ouo...',
+  '...ouo....ouo...',
+  '...ooo....ooo...',
+]
+
+/**
+ * The Vessel plush: the same toy in its hooded robe and painted mask.
+ *
+ * Drawn from the palette already here rather than adding slots for it — the robe is the black
+ * every outline is drawn in, the trim is the gold the bookshelf's spines use, and the mask is
+ * the paper white. Which is the point of a shared palette: a third of these sprites are the
+ * same eight colours in a different arrangement.
+ */
+const ESPURR_PLUSH_VESSEL = [
+  '................',
+  '..o..........o..',
+  '..ok........ko..',
+  '..okko....okko..',
+  '..okkko..okkko..',
+  '..okkkkkkkkkko..',
+  '.okkkkkkkkkkkko.',
+  '.okkppppppppkko.',
+  '.okkpkppppkpkko.',
+  '.okkppppppppkko.',
+  '.okkyyyyyyyykko.',
+  '.okkkkkkkkkkkko.',
+  '..okkkkkkkkkko..',
+  '...oko....oko...',
+  '...oko....oko...',
+  '...ooo....ooo...',
+]
+
+/** The Pikachu plush: the same silhouette in yellow, with dark ear-tips and a red cheek. */
+const ESPURR_PLUSH_PICKACHU = [
+  '................',
+  '..o..........o..',
+  '..ok........ko..',
+  '..okko....okko..',
+  '..oyyyo..oyyyo..',
+  '..oyyyyyyyyyyo..',
+  '.oyyyyyyyyyyyyo.',
+  '.oykkkkkkkkkkyo.',
+  '.oykkkkkkkkkkyo.',
+  '.oryyyyyyyyyyro.',
+  '.oyyyyyyyyyyyyo.',
+  '.oyttttttttttyo.',
+  '..oyyyyyyyyyyo..',
+  '...oko....oko...',
+  '...oko....oko...',
+  '...ooo....ooo...',
 ]
 
 // --- things that hang on a wall ---
@@ -1598,12 +1803,60 @@ export const DECOR: Record<string, DecorKind & { art: string[] | string[][] | nu
   bench: kind('Bench', { w: 2, seat: true, art: BENCH, side: BENCH_SIDE, back: BENCH_BACK }),
   chair: kind('Office chair', { solid: false, seat: true, art: CHAIR, side: CHAIR_SIDE, back: CHAIR_BACK }),
   stool: kind('Stool', { solid: false, seat: true, art: STOOL }),
+  // Walk-on-able like the other single seats, for the same reason: a throne you had to stand
+  // *beside* to sit on would put you next to the crown rather than on it. Two tiles square, so
+  // that sitting on it doesn't hide it — see the note on the artwork.
+  throne: kind('Iron throne', {
+    w: 2,
+    h: 2,
+    solid: false,
+    seat: true,
+    oneSeat: true,
+    /*
+     * Drawn from the real artwork when it's there — a throne of a thousand swords is exactly
+     * the sort of thing a 32×32 grid of letters can only gesture at.
+     *
+     * 2.8 tiles tall against a two-tile footprint. The height is picked so the *width* that
+     * follows from the artwork's own 458×623 comes out at almost exactly two tiles — it fills
+     * its floor space rather than overhanging it — and the extra 0.8 goes up, which puts the
+     * crown of blades above the back of the seat and over the head of whoever is sitting there.
+     */
+    still: { src: 'decor/iron-throne.png', scale: 2.8 },
+    art: THRONE,
+    back: THRONE_BACK,
+  }),
   bookshelf: kind('Bookshelf', { art: BOOKSHELF, side: BOOKSHELF_SIDE, back: BOOKSHELF_BACK }),
   cabinet: kind('Cabinet', { art: CABINET, side: CABINET_SIDE, back: CABINET_BACK }),
   fridge: kind('Fridge', { art: FRIDGE, side: FRIDGE_SIDE, back: FRIDGE_BACK }),
   watercooler: kind('Water cooler', { art: WATERCOOLER }),
   lamp: kind('Floor lamp', { art: LAMP }),
   plant: kind('Potted plant', { art: PLANT }),
+  /*
+   * Soft, and therefore not solid: a toy on the floor is something you step over, not a bollard.
+   *
+   * Drawn from the pet's own Idle sheet, so the plush on the shelf and the creature trotting
+   * after you are the *same artwork* — which is the whole joke, and something no second drawing
+   * of the same character could pull off. It keeps breathing where a toy wouldn't, and that is
+   * the better answer at this size: a plush that never moves is indistinguishable from a bug.
+   */
+  plush: kind('Espurr plush', {
+    solid: false,
+    sheet: { name: 'espurr/Idle', columns: 4, scale: 1.5 },
+    art: ESPURR_PLUSH,
+  }),
+  // The other two outfits, as toys. Three kinds rather than one kind with a variant, because
+  // that's how every other piece of furniture in here works and a room's objects store nothing
+  // but a kind and a place — a variant field would be a second way to say the same thing.
+  plush_vessel: kind('Espurr Vessel plush', {
+    solid: false,
+    sheet: { name: 'espurr-vessel/Idle', columns: 4, scale: 1.5 },
+    art: ESPURR_PLUSH_VESSEL,
+  }),
+  plush_pickachu: kind('Espurr Pikachu plush', {
+    solid: false,
+    sheet: { name: 'espurr-pickachu/Idle', columns: 4, scale: 1.5 },
+    art: ESPURR_PLUSH_PICKACHU,
+  }),
   crate: kind('Crate', { art: CRATE }),
   barrel: kind('Barrel', { art: BARREL }),
   campfire: kind('Campfire', { art: CAMPFIRE }),
@@ -1647,6 +1900,9 @@ function kind(
     interact: over.interact ?? null,
     verb: over.verb ?? null,
     seat: over.seat ?? false,
+    oneSeat: over.oneSeat ?? false,
+    sheet: over.sheet ?? null,
+    still: over.still ?? null,
     art: over.art,
   }
 }
@@ -1838,12 +2094,19 @@ export function seatInFront(
 }
 
 /**
- * Which tile of a seat to sit on, and which way you end up facing.
+ * Where on a seat to sit, and which way you end up facing.
  *
  * A bench is two or three seats, not one, so the tile chosen is the one nearest whoever is
  * sitting down — walk to the far end of a couch and you sit at the far end of it. Facing comes
  * from the *piece*, not from the sitter: furniture is drawn with a front, and somebody sitting
  * on a couch faces the way the couch does, whatever direction they happened to approach from.
+ *
+ * A {@link DecorKind.oneSeat} piece breaks the first half of that rule and not the second. It's
+ * one seat however many tiles it covers, so you're centred **across** it — on the half-tile, if
+ * it's an even number of tiles wide, which positions allow for because they were always
+ * fractional — and put on its **front** row along the depth, so you're sitting in the seat with
+ * the back of it behind you rather than buried in the middle of the piece. Both axes are read
+ * off the facing, so a throne turned to face left seats you on its left-hand column.
  */
 export function seatOn(
   object: SpaceObject,
@@ -1851,11 +2114,26 @@ export function seatOn(
   from: { x: number, y: number },
 ): { x: number, y: number, facing: DecorFacing } {
   const { w, h } = decorSize(object, kind)
+  const facing = object.facing ?? 'down'
+
+  if (kind.oneSeat) {
+    // The middle of each axis, and then the front edge of whichever one is the depth. On an
+    // odd-sized piece the two agree and this is simply the centre tile.
+    const mid = { x: object.x + (w - 1) / 2, y: object.y + (h - 1) / 2 }
+    const front = {
+      down: { y: object.y + h - 1 },
+      up: { y: object.y },
+      right: { x: object.x + w - 1 },
+      left: { x: object.x },
+    }[facing]
+
+    return { ...mid, ...front, facing }
+  }
 
   const x = Math.min(object.x + w - 1, Math.max(object.x, Math.round(from.x)))
   const y = Math.min(object.y + h - 1, Math.max(object.y, Math.round(from.y)))
 
-  return { x, y, facing: object.facing ?? 'down' }
+  return { x, y, facing }
 }
 
 // --- drawing ---
@@ -1886,6 +2164,38 @@ export function drawDecor(
   const placed = decorSize(object, kind)
   const pw = placed.w * size
   const ph = placed.h * size
+
+  /*
+   * A hand-drawn still wins over everything: one picture, no frames, no facing.
+   *
+   * It ignores the turn deliberately. A throne drawn from the front and mirrored for its side
+   * would be a throne facing you from every angle, which is what {@link pose} does for square
+   * standing pieces anyway — and for a piece this symmetrical it's the right answer rather than
+   * a compromise. If a still ever needs four views it becomes a sheet, which is what sheets are.
+   */
+  if (kind.still && drawStill(ctx, kind.still, px + pw / 2, py + ph, size)) return
+
+  /*
+   * Real artwork wins, when there is any.
+   *
+   * Anchored at the bottom centre of the footprint, exactly as a person and a pet are, so a
+   * piece drawn from a sheet stands on its tiles rather than floating over them. The frame
+   * clock is the shared one every other animation in the room runs on, at the pets' own rate —
+   * a shelf of plushes should breathe together rather than each on its own phase.
+   */
+  if (kind.sheet && sheetReady(kind.sheet)) {
+    drawSheetFrame(
+      ctx,
+      kind.sheet,
+      Math.floor(t * 6),
+      sheetRow(object.facing ?? 'down'),
+      px + pw / 2,
+      py + ph,
+      size,
+    )
+
+    return
+  }
 
   if (kind.art === null) return flat(ctx, object, px, py, size, pw, ph)
 

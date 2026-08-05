@@ -12,6 +12,8 @@ export interface MapPreset {
   key: string
   label: string
   description: string
+  /** The heading it's filed under in the picker — "Rooms", "Themed", "Gyms". Server-decided. */
+  group: string
   width: number
   height: number
   tiles: string[]
@@ -54,5 +56,24 @@ export function useSpacePresets() {
     return presets.value
   }
 
-  return { presets, loading, error, load }
+  /**
+   * The same list, under its headings, in the order the server sent them.
+   *
+   * Grouped here rather than in the two pickers, so the creation page and the editor's "load a
+   * layout" sheet can't end up disagreeing about what's themed and what isn't. A `Map` because
+   * it keeps insertion order, which *is* the ordering — the server's list is already sorted.
+   */
+  const grouped = computed(() => {
+    const groups = new Map<string, MapPreset[]>()
+
+    for (const p of presets.value) {
+      const list = groups.get(p.group)
+      if (list) list.push(p)
+      else groups.set(p.group, [p])
+    }
+
+    return [...groups].map(([title, items]) => ({ title, items }))
+  })
+
+  return { presets, grouped, loading, error, load }
 }

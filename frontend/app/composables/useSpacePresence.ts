@@ -43,6 +43,29 @@ const PET_SPEED = SPEED * 1.15
 const PET_LOST = 5
 
 /**
+ * Holding hands: how close it holds you, how far you may drift, and when it lets go.
+ *
+ * The whole thing is a *pull towards each other* rather than one person driving the other,
+ * which is what makes it work over a wire where every client owns exactly one avatar. Both ends
+ * run {@link holdHands} against the same two positions: whoever walks away is the one closing
+ * the gap for the other, and the other is dragged because their own client noticed the stretch.
+ * Nobody's position is ever written by anybody else, so there's no authority to argue over and
+ * nothing to reconcile when a whisper is dropped.
+ *
+ * `REACH` is the slack — under it you're standing together and nothing moves, which is what
+ * stops two people jittering against each other while stood still. `BREAK` is the point where
+ * being pulled stops being plausible: a wall between you, somebody warped to spawn, a room
+ * reloaded. Letting go there is better than towing a person through a pond.
+ */
+const HAND_GAP = 0.9
+const HAND_REACH = 1.25
+const HAND_BREAK = 6
+/** An unanswered offer to hold hands expires, so nobody is left with a prompt from a ghost. */
+const OFFER_TTL = 12_000
+/** How close you have to get before "go to them" counts as having got there. */
+const APPROACH_WITHIN = 1.3
+
+/**
  * A position as it goes over the wire. Tiles, fractional, plus which way they're facing — and
  * what they look like, which rides along for the same reason the name does: somebody who has
  * just arrived has to be able to draw you from your very first whisper, without a lookup.
@@ -60,6 +83,30 @@ interface MovePayload {
   seat?: string | null
   /** The line over their head, if any — see Occupant.shout. */
   shout?: string | null
+  /** Whose hand they're holding, if anyone — see Occupant.handWith. */
+  hand?: number | null
+}
+
+/**
+ * Reaching for somebody, taking the offered hand, or letting go.
+ *
+ * A separate whisper from the position, because it's a *transition* rather than a state: an
+ * offer happens once and is either taken or isn't, and folding it into the sixty-times-a-second
+ * stream would mean the same offer arriving twelve times a second until it was answered. What
+ * comes *of* it — that the two of you are now holding hands — does ride on the position, in
+ * `hand`, because that is a state and everybody drawing the room needs it.
+ */
+interface HandPayload {
+  kind: 'offer' | 'accept' | 'let-go'
+  from: number
+  fromName: string
+  to: number
+}
+
+/** Somebody pulled a face. Nothing but who and what — see lib/spaceEmotes.ts. */
+interface EmotePayload {
+  id: number
+  glyph: string
 }
 
 type RemoteOccupant = Occupant & { tx: number, ty: number, at: number }
@@ -155,6 +202,29 @@ const held = new Set<string>()
  * room, not part of the canvas that happens to be showing it.
  */
 let steer: { x: number, y: number } | null = null
+
+/**
+ * Somebody you're walking over to, or null.
+ *
+ * Not the same as a steer, and that's the point: a person moves. A steer is a spot on the floor
+ * and would leave you marching to where they were standing when you tapped them, arriving at an
+ * empty tile a beat after they wandered off. So this is held as an *id*, and {@link moveSelf}
+ * rewrites the steer from wherever they are each frame — which is what "go to them" means and
+ * what a tap on a person should obviously do.
+ *
+ * Cleared by arriving, by touching a movement key, by tapping the floor, and by them leaving.
+ */
+let approaching: number | null = null
+
+/**
+ * An offer to hold hands that's waiting on you, or null.
+ *
+ * A `ref`, unlike the movement state next to it, because this one genuinely is something the UI
+ * renders — a prompt with a name in it and two buttons. Held at module scope with everything
+ * else about standing in a room, so an offer made while you're reading another channel is still
+ * there when you look back at the room rather than having been torn down with the canvas.
+ */
+const handOffer = shallowRef<{ id: number, name: string, at: number } | null>(null)
 
 /**
  * How close counts as arrived, in tiles, and how little progress in one frame counts as stuck.
@@ -442,12 +512,15 @@ export function useSpacePresence(channelId: number, map: Ref<SpaceMap | null>) {
    */
   function walkTo(x: number, y: number) {
     if (!me.value) return
+    // Pointing at the floor is choosing the floor over whoever you were walking towards.
+    approaching = null
     steer = { x, y }
   }
 
   /** Stop wherever we are, abandoning a pointer target. For the buttons that take movement away. */
   function stopWalking() {
     steer = null
+    approaching = null
   }
 
   function onKeyUp(e: KeyboardEvent) {
@@ -481,8 +554,57 @@ export function useSpacePresence(channelId: number, map: Ref<SpaceMap | null>) {
     if (!m) return
 
     moveSelf(m, dt)
+    // After your own step and before the pets': being towed by a hand is movement of the same
+    // kind walking is, and the pet behind you should trail the place you ended up.
+    holdHands(m, dt)
     interpolate(dt)
     movePets(m, dt)
+    expireOffer()
+  }
+
+  /**
+   * Keep up with whoever's hand you're holding.
+   *
+   * Runs on *your* avatar only — the partner's is theirs to move, and they're running the
+   * mirror image of this against you. Which means the pair converges from both ends: walk off
+   * and your own client leaves them behind for a fraction of a second, until their client
+   * notices the stretch and closes it. That fraction is what makes it read as being *pulled*
+   * rather than as two sprites glued together.
+   *
+   * Uses the same `step` the walk loop does, so a hand is no way through a wall. If the room
+   * won't let you follow — a door shut between you, a couch in the way — the gap opens until it
+   * passes {@link HAND_BREAK} and the link simply ends, which is the honest outcome and needs no
+   * agreement from the other end: they'll watch it break for the same reason a moment later.
+   */
+  function holdHands(m: SpaceMap, dt: number) {
+    const self = me.value
+    if (!self?.handWith) return
+
+    const partner = others.value[self.handWith]
+
+    // They walked out, or their tab died and the sweep took them. Nothing left to hold.
+    if (!partner) return letGo()
+
+    const dx = partner.x - self.x
+    const dy = partner.y - self.y
+    const d = Math.hypot(dx, dy)
+
+    if (d > HAND_BREAK) return letGo()
+    if (d <= HAND_REACH) return
+
+    // Getting dragged off a seat is standing up, exactly as walking off one is.
+    if (self.seatedOn) stand()
+
+    const travel = Math.min(SPEED * dt, d - HAND_GAP)
+    const next = step(m, me.value!, (dx / d) * travel, (dy / d) * travel)
+
+    me.value = { ...me.value!, ...next, facing: facingOf(next.x - self.x, next.y - self.y, self.facing) }
+    whisperMove()
+  }
+
+  /** An offer nobody answered. Dropped quietly — there's nothing to tell either party. */
+  function expireOffer() {
+    if (handOffer.value && Date.now() - handOffer.value.at > OFFER_TTL) handOffer.value = null
   }
 
   /**
@@ -541,6 +663,36 @@ export function useSpacePresence(channelId: number, map: Ref<SpaceMap | null>) {
     let dx = (held.has('arrowright') || held.has('d') ? 1 : 0) - (held.has('arrowleft') || held.has('a') ? 1 : 0)
     let dy = (held.has('arrowdown') || held.has('s') ? 1 : 0) - (held.has('arrowup') || held.has('w') ? 1 : 0)
     let pointed = false
+
+    // Reaching for the keyboard is taking the wheel back — you've stopped following them.
+    if ((dx !== 0 || dy !== 0) && approaching !== null) {
+      approaching = null
+      steer = null
+    }
+
+    // Walking over to somebody. Recomputed here, every frame, from where they *now* are: the
+    // target is a person, and a person you tapped ten strides ago has moved. Stopping short by
+    // HAND_GAP is what stops "go to them" from ending with you standing inside them.
+    if (approaching !== null) {
+      const them = others.value[approaching]
+
+      if (!them) approaching = null
+      else {
+        const gap = Math.hypot(them.x - me.value.x, them.y - me.value.y)
+
+        if (gap <= APPROACH_WITHIN) {
+          // Arrived: stop, and turn to face them. Anything else leaves you standing beside
+          // somebody with your back to them, which is not what tapping them asked for.
+          approaching = null
+          steer = null
+          me.value = { ...me.value, facing: facingOf(them.x - me.value.x, them.y - me.value.y, me.value.facing) }
+          whisperMove(true)
+        }
+        else {
+          steer = { x: them.x - ((them.x - me.value.x) / gap) * HAND_GAP, y: them.y - ((them.y - me.value.y) / gap) * HAND_GAP }
+        }
+      }
+    }
 
     /*
      * Sitting is a state you leave by trying to move, which is the rule every game with a chair
@@ -646,6 +798,7 @@ export function useSpacePresence(channelId: number, map: Ref<SpaceMap | null>) {
       pet: me.value.pet ?? null,
       seat: me.value.seatedOn ?? null,
       shout: me.value.shout ?? null,
+      hand: me.value.handWith ?? null,
     } satisfies MovePayload)
   }
 
@@ -670,6 +823,7 @@ export function useSpacePresence(channelId: number, map: Ref<SpaceMap | null>) {
       // Same in-place treatment as the look: somebody who has just changed what they're
       // shouting shouldn't have to walk out and back in for anyone to read it.
       existing.shout = payload.shout ?? null
+      existing.handWith = payload.hand ?? null
       if (existing.pet && !existing.petAt) {
         existing.petAt = { x: payload.x, y: payload.y, facing: payload.facing }
       }
@@ -702,6 +856,7 @@ export function useSpacePresence(channelId: number, map: Ref<SpaceMap | null>) {
         petAt: { x: payload.x - 0.6, y: payload.y + 0.3, facing: payload.facing },
         seatedOn: payload.seat ?? null,
         shout: payload.shout ?? null,
+        handWith: payload.hand ?? null,
         at: Date.now(),
       },
     }
@@ -858,7 +1013,13 @@ export function useSpacePresence(channelId: number, map: Ref<SpaceMap | null>) {
     // The call already joined this presence channel (see useVoice.connect); asking Echo for it
     // again returns that same subscription rather than opening a second one. Which is the
     // point — movement and the WebRTC handshake are two conversations on one channel.
-    channel = echo.join(`voice.${channelId}`).listenForWhisper('sp-move', onMove)
+    channel = echo.join(`voice.${channelId}`)
+      .listenForWhisper('sp-move', onMove)
+      // The two things people do *to each other* in a room, on the same channel and for the
+      // same reason: membership of it is exactly what "is in this room" means, so neither needs
+      // an authorisation rule of its own.
+      .listenForWhisper('sp-hand', onHand)
+      .listenForWhisper('sp-emote', onEmote)
 
     // Presence is what actually says somebody left; the sweep below is only for a tab that died
     // without the socket noticing.
@@ -910,6 +1071,8 @@ export function useSpacePresence(channelId: number, map: Ref<SpaceMap | null>) {
     // Only our own whisper handler. useVoice owns this channel and will `leave()` it when the
     // call ends — pulling it out from under the handshake here would kill the audio.
     channel?.stopListeningForWhisper?.('sp-move')
+    channel?.stopListeningForWhisper?.('sp-hand')
+    channel?.stopListeningForWhisper?.('sp-emote')
     channel = null
     attachedTo = null
 
@@ -931,6 +1094,10 @@ export function useSpacePresence(channelId: number, map: Ref<SpaceMap | null>) {
     persist()
 
     held.clear()
+    // Nobody's hand is held on the way out, and nothing is whispered about it: the room you're
+    // letting go of is a room you have already stopped whispering into.
+    approaching = null
+    handOffer.value = null
     // Cleared directly rather than through `keepOnly`: walking out of a room is not everybody
     // in it vanishing, and seeing it off with twelve puffs of light would be a firework display
     // for an empty stage. Nobody is drawing this room a frame from now anyway.
@@ -997,6 +1164,147 @@ export function useSpacePresence(channelId: number, map: Ref<SpaceMap | null>) {
     whisperMove(true)
   }
 
+  // --- other people ---
+
+  /**
+   * Walk over to somebody, and end up facing them.
+   *
+   * The pointer equivalent of "go to them": you tapped a person rather than the floor, and the
+   * only sensible reading of that is that you want to be standing in front of them. Follows
+   * them if they move — see {@link approaching} — and is abandoned by any of the ordinary ways
+   * you take control back (a key, a tap on the floor, them leaving).
+   */
+  function approach(id: number) {
+    if (!me.value || id === me.value.id || !others.value[id]) return
+
+    if (me.value.seatedOn) stand()
+    approaching = id
+  }
+
+  /**
+   * The person on the other end of somebody's hand, or null.
+   *
+   * Only answers when **both** ends claim the link, which is what makes a dropped whisper draw
+   * nothing rather than draw an arm reaching to somebody who has let go. It also means the
+   * stage can ask this of anybody — you or a stranger — and get the same answer everyone else's
+   * screen is getting, because both halves are on the wire.
+   */
+  function handPartnerOf(o: Occupant): Occupant | null {
+    if (!o.handWith) return null
+
+    const partner = o.handWith === me.value?.id ? me.value : others.value[o.handWith]
+
+    return partner && partner.handWith === o.id ? partner : null
+  }
+
+  /** Whether you're currently walking over to somebody, and to whom. Drives the "stop" affordance. */
+  function approachingId(): number | null {
+    return approaching
+  }
+
+  /**
+   * Ask to hold somebody's hand.
+   *
+   * An offer rather than an act, and that isn't politeness for its own sake: holding hands
+   * *moves* the other person — it tows them round the room — and nothing in here should let one
+   * client pull another about without being asked. So the offer goes out, their end decides,
+   * and only their `accept` puts the link on either avatar.
+   */
+  function offerHand(id: number) {
+    if (!channel || !me.value || id === me.value.id) return
+
+    // Already holding somebody's hand. One at a time, which is what hands are.
+    if (me.value.handWith) letGo()
+
+    channel.whisper('sp-hand', { kind: 'offer', from: me.value.id, fromName: me.value.name, to: id } satisfies HandPayload)
+  }
+
+  /** Take the offered hand. Both ends set their own half of the link; see Occupant.handWith. */
+  function acceptHand() {
+    const offer = handOffer.value
+    if (!channel || !me.value || !offer) return
+
+    handOffer.value = null
+
+    // The other end may have walked out in the seconds the offer sat there.
+    if (!others.value[offer.id]) return
+
+    me.value = { ...me.value, handWith: offer.id }
+    channel.whisper('sp-hand', { kind: 'accept', from: me.value.id, fromName: me.value.name, to: offer.id } satisfies HandPayload)
+    whisperMove(true)
+  }
+
+  /** Turn the offer down. Nothing is sent: a refusal nobody is told about is a refusal that costs nothing. */
+  function declineHand() {
+    handOffer.value = null
+  }
+
+  /**
+   * Let go.
+   *
+   * Both halves are dropped: ours locally, theirs by the whisper. If the whisper is lost their
+   * client will notice the gap opening past {@link HAND_BREAK} soon enough — which is why the
+   * break rule exists at all, and why this needs no acknowledgement.
+   */
+  function letGo() {
+    const partner = me.value?.handWith
+    if (!me.value || !partner) return
+
+    me.value = { ...me.value, handWith: null }
+    channel?.whisper('sp-hand', { kind: 'let-go', from: me.value.id, fromName: me.value.name, to: partner } satisfies HandPayload)
+    whisperMove(true)
+  }
+
+  function onHand(payload: HandPayload) {
+    if (!me.value || payload.to !== me.value.id) return
+
+    if (payload.kind === 'offer') {
+      // An offer from the person whose hand you're already holding is noise, not an offer.
+      if (me.value.handWith === payload.from) return
+
+      handOffer.value = { id: payload.from, name: payload.fromName, at: Date.now() }
+
+      return
+    }
+
+    if (payload.kind === 'accept') {
+      handOffer.value = null
+      me.value = { ...me.value, handWith: payload.from }
+      whisperMove(true)
+
+      return
+    }
+
+    // They let go. Only drop the link if it's *theirs* — a stale "let go" from somebody whose
+    // hand you took up again since shouldn't undo the newer one.
+    if (me.value.handWith === payload.from) {
+      me.value = { ...me.value, handWith: null }
+      whisperMove(true)
+    }
+  }
+
+  /**
+   * Pull a face.
+   *
+   * Fire-and-forget, and shown on your own screen first rather than waiting to hear your own
+   * whisper come back — which it never would, since a whisper doesn't echo to its sender. The
+   * *reason* this exists as its own whisper rather than a field on the position is in
+   * {@link file://../lib/spaceEmotes.ts}: an emote is an event, and a field would have it
+   * arriving twelve times a second for as long as it lasted.
+   */
+  function emote(glyph: string) {
+    if (!me.value) return
+
+    useSpaceChatBubbles().noteEmote(me.value.id, glyph)
+    channel?.whisper('sp-emote', { id: me.value.id, glyph } satisfies EmotePayload)
+  }
+
+  function onEmote(payload: EmotePayload) {
+    if (payload.id === user.value?.id) return
+
+    useSpaceChatBubbles().noteEmote(payload.id, payload.glyph)
+  }
+
   /**
    * Watch people come and go. Returns its own undo — call it when you stop drawing the room.
    *
@@ -1028,6 +1336,15 @@ export function useSpacePresence(channelId: number, map: Ref<SpaceMap | null>) {
     stand,
     seated,
     isWalking,
+    approach,
+    approachingId,
+    handPartnerOf,
+    handOffer,
+    offerHand,
+    acceptHand,
+    declineHand,
+    letGo,
+    emote,
     subscribe,
     unsubscribe,
     onRoomEvent,

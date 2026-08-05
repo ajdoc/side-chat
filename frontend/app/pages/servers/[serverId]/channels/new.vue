@@ -20,7 +20,7 @@ const serverId = computed(() => Number(route.params.serverId))
 
 // The rooms a Side Space can start as — shared with the editor, which loads the same list to
 // swap an existing room's layout. See useSpacePresets.
-const { presets, load: fetchPresets, error: presetError } = useSpacePresets()
+const { grouped: groupedPresets, load: fetchPresets, error: presetError } = useSpacePresets()
 
 const type = ref<ChannelType>('text')
 const name = ref('')
@@ -118,19 +118,26 @@ function cancel() {
                the tiles come from the same preset the server will seed the map with. -->
           <div v-if="type === 'space'" class="space-y-2">
             <Label>Starting layout</Label>
-            <div class="grid grid-cols-2 gap-2">
-              <button
-                v-for="p in presets"
-                :key="p.key"
-                type="button"
-                class="space-y-1.5 rounded-lg border p-2 text-left transition-colors"
-                :class="preset === p.key ? 'border-primary bg-muted' : 'hover:bg-muted/50'"
-                @click="preset = p.key"
-              >
-                <SideSpaceMapThumbnail :tiles="p.tiles" :width="p.width" :height="p.height" />
-                <span class="block text-xs font-medium">{{ p.label }}</span>
-                <span class="block text-[11px] leading-snug text-muted-foreground">{{ p.description }}</span>
-              </button>
+            <!-- Under headings, because there are enough of these now that one flat grid is a
+                 scroll rather than a choice. Grouping comes from the server — see MapPresets. -->
+            <div v-for="group in groupedPresets" :key="group.title" class="space-y-1.5">
+              <p class="text-[11px] font-medium uppercase tracking-wide text-muted-foreground/70">
+                {{ group.title }}
+              </p>
+              <div class="grid grid-cols-2 gap-2">
+                <button
+                  v-for="p in group.items"
+                  :key="p.key"
+                  type="button"
+                  class="space-y-1.5 rounded-lg border p-2 text-left transition-colors"
+                  :class="preset === p.key ? 'border-primary bg-muted' : 'hover:bg-muted/50'"
+                  @click="preset = p.key"
+                >
+                  <SideSpaceMapThumbnail :tiles="p.tiles" :width="p.width" :height="p.height" />
+                  <span class="block text-xs font-medium">{{ p.label }}</span>
+                  <span class="block text-[11px] leading-snug text-muted-foreground">{{ p.description }}</span>
+                </button>
+              </div>
             </div>
             <p class="text-[11px] text-muted-foreground">
               You can rebuild the room later — walls, rooms and all.
