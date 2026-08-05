@@ -50,7 +50,7 @@ final class Avatars
     public const COSTUMES = [
         'none', 'cantor', 'sentinel', 'merc', 'cactus', 'guard', 'colossus',
         'plush', 'bunny', 'faceless', 'mummy', 'jackoghost', 'pirate', 'robot',
-        'witch', 'devil', 'espurr', 'espurr_vessel',
+        'witch', 'devil', 'espurr', 'espurr_vessel', 'espurr_pickachu',
     ];
 
     /**
@@ -73,6 +73,8 @@ final class Avatars
             'espurr' => ['label' => 'Espurr', 'element' => 'psychic', 'region' => 'guest'],
             // The same visitor, robed and masked — a separate key so a room can have both.
             'espurr_vessel' => ['label' => 'Espurr Vessel', 'element' => 'psychic', 'region' => 'guest'],
+            // And once more in a yellow hood — a third key for a third outfit, same reason.
+            'espurr_pickachu' => ['label' => 'Espurr Pikachu', 'element' => 'psychic', 'region' => 'guest'],
         ];
     }
 

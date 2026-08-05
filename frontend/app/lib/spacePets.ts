@@ -21,7 +21,7 @@ import type { SheetSpec } from './spriteSheet'
 import { blit, sprite } from './pixelSprite'
 import { drawSheetFrame, sheetReady, sheetRow } from './spriteSheet'
 
-export type PetKind = 'leafling' | 'emberpup' | 'shellow' | 'sprigling' | 'cinderkit' | 'snapling' | 'espurr' | 'espurr_vessel'
+export type PetKind = 'leafling' | 'emberpup' | 'shellow' | 'sprigling' | 'cinderkit' | 'snapling' | 'espurr' | 'espurr_vessel' | 'espurr_pickachu'
 
 export interface PetInfo {
   label: string
@@ -73,6 +73,19 @@ export const PETS: Record<PetKind, PetInfo> = {
     sheets: {
       idle: { name: 'espurr-vessel/Idle', columns: 4, scale: 1.35 },
       walk: { name: 'espurr-vessel/Walk', columns: 4, scale: 1.35 },
+    },
+  },
+  // The third of the visitor's outfits: the same creature in a yellow hood with round black
+  // ear-tips. A costume rather than a species, which is why the ears and the stare are still
+  // the ones above.
+  espurr_pickachu: {
+    label: 'Espurr Pikachu',
+    element: 'psychic',
+    region: 'guest',
+    blurb: 'Yellow hood, red cheeks, same unblinking stare.',
+    sheets: {
+      idle: { name: 'espurr-pickachu/Idle', columns: 4, scale: 1.35 },
+      walk: { name: 'espurr-pickachu/Walk', columns: 4, scale: 1.35 },
     },
   },
 }
@@ -562,6 +575,68 @@ const ESPURR_VESSEL: Record<PetDir, string[]> = {
   ],
 }
 
+/**
+ * Espurr Pikachu: the same creature in a yellow hood, with the ear-tips blacked out and a red
+ * cheek either side. Extra slot on top of the shared six: `C`, the cheek. It is the cheeks that
+ * do the work here — a yellow recolour on its own just reads as a differently-lit Espurr.
+ */
+const ESPURR_PICKACHU: Record<PetDir, string[]> = {
+  down: [
+    '................',
+    '..o..........o..',
+    '..oA........Ao..',
+    '..oAAo....oAAo..',
+    '..oAAAo..oAAAo..',
+    '..oBBBBBBBBBBo..',
+    '.oBBBBBBBBBBBBo.',
+    '.oBLLLLLLLLLLBo.',
+    '.oBIIPBBBBPIIBo.',
+    '.oBIIIBBBBIIIBo.',
+    '.oCBBBBmmBBBBCo.',
+    '.oCWWWWWWWWWWCo.',
+    '..oBBBBBBBBBBo..',
+    '...oDo....oDo...',
+    '...oDo....oDo...',
+    '...ooo....ooo...',
+  ],
+  up: [
+    '................',
+    '..o..........o..',
+    '..oA........Ao..',
+    '..oAAo....oAAo..',
+    '..oAAAo..oAAAo..',
+    '..oBBBBBBBBBBo..',
+    '.oBBBBBBBBBBBBo.',
+    '.oBLLLLLLLLLLBo.',
+    '.oBLLLLLLLLLLBo.',
+    '.oBBBBBBBBBBBBo.',
+    '.oBBBBBBBBBBBBo.',
+    '.oBBBBBBBBBBBBo.',
+    '..oBBBBBBBBBBo..',
+    '...oDo....oDo...',
+    '...oDo....oDo...',
+    '...ooo....ooo...',
+  ],
+  right: [
+    '................',
+    '....o......o....',
+    '....oAo...oAo...',
+    '....oAAo.oAAo...',
+    '...oAAAoAAAo....',
+    '...oBBBBBBBo....',
+    '..oBBBBBBBBBo...',
+    '..oBLLLLLLLBo...',
+    '..oBIIPBBBBBo...',
+    '..oBIIIBBBBBo...',
+    '..omBBBBBBBCo...',
+    '..oBWWWWWWWCo...',
+    '...oBBBBBBBo....',
+    '...oDo..oDo.....',
+    '...oDo..oDo.....',
+    '...ooo..ooo.....',
+  ],
+}
+
 const ART: Record<PetKind, Record<PetDir, string[]>> = {
   leafling: LEAFLING,
   emberpup: EMBERPUP,
@@ -571,6 +646,7 @@ const ART: Record<PetKind, Record<PetDir, string[]>> = {
   snapling: SNAPLING,
   espurr: ESPURR,
   espurr_vessel: ESPURR_VESSEL,
+  espurr_pickachu: ESPURR_PICKACHU,
 }
 
 /** Body, lit, shaded, belly, accent, accent-lit — six colours is the whole look of a creature. */
@@ -592,6 +668,15 @@ const PALETTE: Record<PetKind, Record<string, string>> = {
     g: '#b98f4c',
     M: '#efe7d2',
     k: '#1a1620',
+  },
+  // Yellow all the way through, with the ear-tips dark enough to read as a silhouette against
+  // it. The cheek is the only saturated red on the creature, which is what makes it the thing
+  // you see first.
+  espurr_pickachu: {
+    ...paint('#f2c53d', '#ffdd6b', '#c1912a', '#fdefc0', '#3a3330', '#5a4f45'),
+    I: '#2a2320',
+    P: '#fff6da',
+    C: '#e0503c',
   },
 }
 

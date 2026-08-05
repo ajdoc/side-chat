@@ -555,8 +555,8 @@ const HAIR_ART: Record<HairKind, Record<SpriteDir, string[]>> = {
  * its chunky outline, without reproducing anyone's particular design.
  */
 
-export type CostumeKind = 'none' | 'cantor' | 'sentinel' | 'merc' | 'cactus' | 'guard' | 'colossus' | 'plush' | 'bunny' | 'faceless' | 'mummy' | 'jackoghost' | 'pirate' | 'robot' | 'witch' | 'devil' | 'espurr' | 'espurr_vessel'
-export const COSTUMES: CostumeKind[] = ['none', 'cantor', 'sentinel', 'merc', 'cactus', 'guard', 'colossus', 'plush', 'bunny', 'faceless', 'mummy', 'jackoghost', 'pirate', 'robot', 'witch', 'devil', 'espurr', 'espurr_vessel']
+export type CostumeKind = 'none' | 'cantor' | 'sentinel' | 'merc' | 'cactus' | 'guard' | 'colossus' | 'plush' | 'bunny' | 'faceless' | 'mummy' | 'jackoghost' | 'pirate' | 'robot' | 'witch' | 'devil' | 'espurr' | 'espurr_vessel' | 'espurr_pickachu'
+export const COSTUMES: CostumeKind[] = ['none', 'cantor', 'sentinel', 'merc', 'cactus', 'guard', 'colossus', 'plush', 'bunny', 'faceless', 'mummy', 'jackoghost', 'pirate', 'robot', 'witch', 'devil', 'espurr', 'espurr_vessel', 'espurr_pickachu']
 
 interface Costume {
   label: string
@@ -1318,6 +1318,35 @@ const ESPURR_VESSEL: Costume = {
   },
 }
 
+/**
+ * Espurr Pikachu: the grey onesie above in yellow, with blacked-out ear-tips and a red cheek
+ * either side of the stare.
+ *
+ * Slots: `G` the yellow, `C` the cheek, `t` the ear-tips, `I`/`P` the eye and its highlight,
+ * `d` the dark paws. Same silhouette as the Espurr Suit on purpose — it is the same costume
+ * shop, and the colour is the joke.
+ */
+const ESPURR_PICKACHU: Costume = {
+  label: 'Espurr Pikachu',
+  blurb: 'The same onesie in yellow, with red cheeks',
+  covered: true,
+  paint: { G: '#f2c53d', C: '#e0503c', t: '#3a3330', I: '#2a2320', P: '#fff6da', d: '#8a6a1e' },
+  sheets: {
+    idle: { name: 'espurr-pickachu/Idle', columns: 4, scale: 1.7 },
+    walk: { name: 'espurr-pickachu/Walk', columns: 4, scale: 1.7 },
+  },
+  body: {
+    down: ['.....t....t.....', '....tto..ott....', '....oGGGGGGo....', '...oGGGGGGGGo...', '...oGIIGGIIGo...', '...oGIPGGPIGo...', '...oCGGGGGGCo...', '....oGGGGGGo....', '.....oGGGGo.....', '...oGGGGGGGGo...', '..oGGGGGGGGGGo..', '..oGGGGGGGGGGo..', '..oGGGGGGGGGGo..', '...oGGGGGGGGo...'],
+    up: ['.....t....t.....', '....tto..ott....', '....oGGGGGGo....', '...oGGGGGGGGo...', '...oGGGGGGGGo...', '...oGGGGGGGGo...', '...oGGGGGGGGo...', '....oGGGGGGo....', '.....oGGGGo.....', '...oGGGGGGGGo...', '..oGGGGGGGGGGo..', '..oGGGGGGGGGGo..', '..oGGGGGGGGGGo..', '...oGGGGGGGGo...'],
+    right: ['.......t........', '......tto.......', '....oGGGGGGo....', '...oGGGGGGGGo...', '...oGIIGGGGo....', '...oGIPGGGGo....', '...oCGGGGGGo....', '....oGGGGGo.....', '.....oGGGGo.....', '....oGGGGGGo....', '...oGGGGGGGGo...', '...oGGGGGGGGo...', '...oGGGGGGGGo...', '....oGGGGGGo....'],
+  },
+  legs: {
+    down: [['...oGGGooGGGo...', '....odd..ddo....'], ['...oGGGGGGGGo...', '...odd....ddo...']],
+    up: [['...oGGGooGGGo...', '....odd..ddo....'], ['...oGGGGGGGGo...', '...odd....ddo...']],
+    right: [['....oGGGGGo.....', '.....oddo.......'], ['...oGGGGGo......', '...odd..ddo.....']],
+  },
+}
+
 const COSTUME_ART: Record<Exclude<CostumeKind, 'none'>, Costume> = {
   cantor: CANTOR,
   sentinel: SENTINEL,
@@ -1336,6 +1365,7 @@ const COSTUME_ART: Record<Exclude<CostumeKind, 'none'>, Costume> = {
   devil: DEVIL,
   espurr: ESPURR_SUIT,
   espurr_vessel: ESPURR_VESSEL,
+  espurr_pickachu: ESPURR_PICKACHU,
 }
 
 /** Names and one-liners for the picker, including the one for wearing nothing. */
@@ -1358,6 +1388,7 @@ export const COSTUME_META: Record<CostumeKind, { label: string, blurb: string }>
   devil: { label: DEVIL.label, blurb: DEVIL.blurb },
   espurr: { label: ESPURR_SUIT.label, blurb: ESPURR_SUIT.blurb },
   espurr_vessel: { label: ESPURR_VESSEL.label, blurb: ESPURR_VESSEL.blurb },
+  espurr_pickachu: { label: ESPURR_PICKACHU.label, blurb: ESPURR_PICKACHU.blurb },
 }
 
 /** The costume being worn, or null for none — the one place the `none` string is unpacked. */

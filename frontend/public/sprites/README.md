@@ -40,6 +40,33 @@ Used by both the Espurr pet (`app/lib/spacePets.ts`) and the Espurr Suit costume
 The robed and masked version, shared the same way by the `espurr_vessel` pet and costume. Same
 layout as above: 4 frames per direction, eight directions top to bottom.
 
+## Espurr Pikachu
+
+    sprites/espurr-pickachu/Idle-Anim.png
+    sprites/espurr-pickachu/Walk-Anim.png
+
+The yellow-hooded version, shared the same way by the `espurr_pickachu` pet and costume.
+
+## Preparing a generated sheet
+
+Sheets that come out of an image generator need two passes before they're committed, and neither
+of them is a resize — **leave the resolution alone.** These are drawn at 624×1664 and scaled down
+by the browser at draw time; downscaling the file instead throws away the detail that survives
+that and the sprite goes soft.
+
+1. **Key out the background.** The generator paints its own transparency checkerboard *into* the
+   pixels, so the file arrives fully opaque and the room draws a grey-and-white card behind the
+   character. Flood-fill the light greyscale background in from the borders rather than testing
+   every pixel for it — that keeps the white *inside* the sprite (eye highlights, the cream ear
+   linings) from being punched out too — and take one or two passes of the blended edge pixels
+   with it, or the sprite keeps a pale halo.
+2. **Quantise to a small palette and save indexed.** The upscale is noisy — 80,000 distinct
+   colours for artwork that is really about two dozen. Median-cut to ~40 and write a colour-type-3
+   PNG. This is a quality win as much as a size one: flat colour reads as pixel art where the
+   noise reads as a JPEG of pixel art.
+
+Together those took the Espurr Pikachu sheet from 1.87 MB to 112 KB at full resolution.
+
 ## Backgrounds must be transparent
 
 A sheet is drawn straight onto the room, so whatever is behind the sprite is drawn too: a frame
