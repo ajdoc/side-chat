@@ -41,6 +41,7 @@ import {
   FAR_TILES,
   MAX_ZOOM,
   MIN_ZOOM,
+  STAGE_SPEAKERS,
   TILE,
   ZOOM_STEP,
   audibility,
@@ -183,7 +184,7 @@ const {
   unsubscribe: unsubscribeGame,
 } = useSpaceGame(props.channel.id)
 
-const { audibleIds, startProximity, stopProximity } = useSpaceProximity()
+const { audibleIds, liveIds, startProximity, stopProximity } = useSpaceProximity()
 
 const canvas = ref<HTMLCanvasElement | null>(null)
 const wrap = ref<HTMLElement | null>(null)
@@ -313,6 +314,7 @@ const roster = computed(() => {
       zone: map.value ? zoneAt(map.value, o.x, o.y)?.name ?? null : null,
       distance: self ? Math.hypot(o.x - self.x, o.y - self.y) : 0,
       audible: audibleIds.value.includes(o.id),
+      live: liveIds.value.includes(o.id),
       sitting: !!o.seatedOn,
     }))
     .sort((a, b) => a.distance - b.distance)
@@ -1552,6 +1554,10 @@ function theme(): MapTheme {
   palette = {
     zone: 'rgb(99 102 241 / 0.10)',
     zoneBorder: 'rgb(99 102 241 / 0.45)',
+    // Amber against the room's indigo: a stage is the one rectangle you can step into by
+    // accident and start broadcasting, so it doesn't share a colour with anything else.
+    stage: 'rgb(245 158 11 / 0.14)',
+    stageBorder: 'rgb(217 119 6 / 0.75)',
     text: resolve('var(--foreground)', '#0f172a'),
     muted: resolve('var(--muted-foreground)', '#64748b'),
   }
@@ -1944,10 +1950,12 @@ function drawPerson(
 
   const peer = peers.value.find(x => x.id === o.id)
   const speaking = self ? selfSpeaking.value && micOpen.value : !!peer?.speaking
-  const gain = self ? 1 : (map.value && me.value ? audibility(map.value, me.value, o) : 0)
+  const live = liveIds.value.includes(o.id)
+  const gain = self ? 1 : (map.value && me.value ? audibility(map.value, me.value, o, live) : 0)
 
   ctx.save()
-  // Fade with earshot, floored so a distant figure is still visibly a person.
+  // Fade with earshot, floored so a distant figure is still visibly a person. A live speaker
+  // never fades: `gain` is already 1 for them from anywhere on the map, which is the point.
   ctx.globalAlpha = self ? 1 : 0.4 + gain * 0.6
 
   // A shadow, because a sprite anchored at its feet needs something to stand on or it reads
@@ -2009,6 +2017,32 @@ function drawPerson(
   else if (bubble?.kind === 'emote') drawEmote(ctx, bubble.text, p.x, p.y, size, bubble.until)
   else if (bubble) drawSpeech(ctx, bubble.text, p.x, p.y, size, bubble.until)
   else if (o.shout) drawShout(ctx, o.shout, p.x, p.y, size)
+
+  /*
+   * Live on a stage: a badge over the head, in the stage's own amber.
+   *
+   * Drawn rather than left to the nameplate because being live is the one state where a person
+   * across the map is *doing something to you* — they're in your ears — and the figure you can
+   * hear from sixty tiles away should be visibly the reason. It sits opposite the mute dot so
+   * the two never overlap on somebody who is live with their mic shut.
+   */
+  if (live) {
+    const bx = p.x - size * 0.42
+    const by = p.y - size * 0.55
+    ctx.beginPath()
+    ctx.arc(bx, by, size * 0.2, 0, Math.PI * 2)
+    ctx.fillStyle = 'rgb(217 119 6)'
+    ctx.fill()
+    // A cone, not a letter: at this size a glyph is a smudge, and the shape reads as a speaker
+    // pointed at the room.
+    ctx.beginPath()
+    ctx.moveTo(bx - size * 0.09, by)
+    ctx.lineTo(bx + size * 0.02, by - size * 0.09)
+    ctx.lineTo(bx + size * 0.02, by + size * 0.09)
+    ctx.closePath()
+    ctx.fillStyle = '#ffffff'
+    ctx.fill()
+  }
 
   // The name goes *under* the feet, on a plate — over a patterned floor, plain text at this
   // size is unreadable about half the time.
@@ -2281,6 +2315,26 @@ function drawTyping(ctx: CanvasRenderingContext2D, x: number, y: number, size: n
 
 const audiblePeople = computed(() =>
   audibleIds.value.map(id => others.value[id]).filter((o): o is NonNullable<typeof o> => !!o))
+
+/**
+ * Standing on a stage, and whether the room can actually hear you.
+ *
+ * Two facts rather than one, because the difference between them is the whole of what somebody
+ * needs told: stepping onto a full platform *looks* exactly like stepping onto an empty one, and
+ * the only honest moment to say "you are in the wings" is while they're stood there wondering
+ * why nobody reacted. `live` is read from the same set the gains were computed from, so the
+ * banner cannot disagree with what the room is hearing.
+ */
+const myStage = computed(() => {
+  const m = map.value
+  const self = me.value
+  if (!m || !self) return null
+
+  const zone = zoneAt(m, self.x, self.y)
+  if (zone?.kind !== 'stage') return null
+
+  return { name: zone.name, live: liveIds.value.includes(self.id) }
+})
 
 async function onMapSaved() {
   editing.value = null
@@ -2902,7 +2956,10 @@ watch(inThisRoom, (now) => {
                   <span class="block truncate text-[10px] text-muted-foreground">
                     {{ p.zone ?? `${Math.round(p.distance)} tiles away` }}
                     <template v-if="p.sitting"> · sitting</template>
-                    <template v-if="!p.audible"> · out of earshot</template>
+                    <!-- Before the earshot note, and instead of it: somebody live is audible by
+                         definition, and "on stage" is the more useful half of why. -->
+                    <template v-if="p.live"> · <span class="font-medium text-amber-600">on stage</span></template>
+                    <template v-else-if="!p.audible"> · out of earshot</template>
                   </span>
                 </span>
                 <button
@@ -2985,6 +3042,25 @@ watch(inThisRoom, (now) => {
           >
             1×
           </button>
+        </div>
+
+        <!--
+          You, on a stage. Sits above the earshot line rather than replacing it, because the two
+          say different things: this is who can hear you *because of where you're standing*, and
+          that is who you can hear.
+        -->
+        <div
+          v-if="inThisRoom && myStage && !gameRunning"
+          class="pointer-events-none absolute left-1/2 top-3 flex -translate-x-1/2 items-center gap-1.5 rounded-full px-3 py-1.5 text-xs font-medium shadow-lg"
+          :class="myStage.live ? 'bg-amber-500 text-white' : 'bg-background/95 text-muted-foreground border'"
+        >
+          <Megaphone class="h-3.5 w-3.5" />
+          <template v-if="myStage.live">
+            You're live on {{ myStage.name }} — the whole room can hear and see you.
+          </template>
+          <template v-else>
+            {{ myStage.name }} is full ({{ STAGE_SPEAKERS }} speakers). You're in the wings.
+          </template>
         </div>
 
         <!-- Who can hear you right now. The rule is invisible otherwise. Stood down during a

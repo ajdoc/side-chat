@@ -836,6 +836,33 @@ const ESPURR_PLUSH_PICKACHU = [
   '...ooo....ooo...',
 ]
 
+/**
+ * The Wing plush: the toy in its winged armour, and the widest of the four.
+ *
+ * Same trick as the Vessel — no new palette slots. The armour is the lit metal the speaker and
+ * the fridge are made of, the torso is the blue, the vents are the red, the fin is the yellow,
+ * and the visor is the lit leaf green, which is the only green in the whole set and therefore
+ * reads as a light rather than as foliage.
+ */
+const ESPURR_PLUSH_GUNDAM = [
+  '................',
+  '..o..........o..',
+  '..op........po..',
+  '..oppo....oppo..',
+  '..opppo..opppo..',
+  '..oMMMyyyyMMMo..',
+  '.oMMMMMMMMMMMMo.',
+  '.oMMpGGMMGGpMMo.',
+  '.oMMMMMMMMMMMMo.',
+  '.orbbbbbbbbbbro.',
+  '.obbbbbbbbbbbbo.',
+  '.oMbbbbbbbbbbMo.',
+  '..oMMMMMMMMMMo..',
+  '...oMo....oMo...',
+  '...oMo....oMo...',
+  '...ooo....ooo...',
+]
+
 // --- things that hang on a wall ---
 
 const PAINTING = [
@@ -1856,6 +1883,13 @@ export const DECOR: Record<string, DecorKind & { art: string[] | string[][] | nu
     solid: false,
     sheet: { name: 'espurr-pickachu/Idle', columns: 4, scale: 1.5 },
     art: ESPURR_PLUSH_PICKACHU,
+  }),
+  // Taller than the other three at the same footprint: that sheet's frames carry a lot of empty
+  // air above and below the artwork, so 1.5 would draw a model kit the size of a keyring.
+  plush_gundam: kind('Espurr Wing plush', {
+    solid: false,
+    sheet: { name: 'espurr-winged-gundam/Idle', columns: 4, scale: 1.9 },
+    art: ESPURR_PLUSH_GUNDAM,
   }),
   crate: kind('Crate', { art: CRATE }),
   barrel: kind('Barrel', { art: BARREL }),

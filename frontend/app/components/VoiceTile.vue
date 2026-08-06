@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { AudioLines, HeadphoneOff, Loader2, MessageCircle, MessageCircleOff, Mic, MicOff, PhoneOff, ScreenShare, Volume2, VolumeX, WifiOff } from 'lucide-vue-next'
+import { AudioLines, HeadphoneOff, Loader2, MessageCircle, MessageCircleOff, Mic, MicOff, PhoneOff, Pin, PinOff, ScreenShare, Volume2, VolumeX, WifiOff } from 'lucide-vue-next'
 import type { Peer } from '~/types'
 
 /**
@@ -20,6 +20,14 @@ const props = defineProps<{
   /** Set when this tile's screen is the one on the stage. */
   watching?: boolean
   /**
+   * Set when this tile's *camera* is the one on the stage.
+   *
+   * Separate from `watching` rather than folded into it, because a person can be showing you
+   * two things and the tile has to be able to say which of them you're looking at — "Watching"
+   * on somebody whose screen is up but whose face is on the main screen would be a lie.
+   */
+  pinned?: boolean
+  /**
    * You own the place this call is in, so you may move this person's microphone — the one
    * control here that changes what somebody *else* hears, rather than what you do.
    */
@@ -39,6 +47,8 @@ const emit = defineEmits<{
   setScreenVolume: [value: number]
   toggleScreenMute: []
   watch: []
+  /** Put this person's face on the main screen, or take it off. Only offered when there is one. */
+  pin: []
   disconnect: []
   forceMute: [muted: boolean]
   toggleBubbles: []
@@ -193,16 +203,41 @@ const shareLabel = computed(() => `${Math.round(props.peer.screenVolume * 100)}%
       </div>
     </div>
 
-    <button
-      v-if="sharing"
-      type="button"
-      class="flex items-center gap-1.5 rounded-full px-2 py-0.5 text-xs font-medium transition"
-      :class="watching ? 'bg-primary text-primary-foreground' : 'bg-muted text-muted-foreground hover:bg-muted/70'"
-      @click="emit('watch')"
-    >
-      <ScreenShare class="h-3.5 w-3.5" />
-      {{ watching ? 'Watching' : 'Watch screen' }}
-    </button>
+    <div v-if="sharing || onCamera" class="flex flex-wrap items-center justify-center gap-1.5">
+      <button
+        v-if="sharing"
+        type="button"
+        class="flex items-center gap-1.5 rounded-full px-2 py-0.5 text-xs font-medium transition"
+        :class="watching ? 'bg-primary text-primary-foreground' : 'bg-muted text-muted-foreground hover:bg-muted/70'"
+        @click="emit('watch')"
+      >
+        <ScreenShare class="h-3.5 w-3.5" />
+        {{ watching ? 'Watching' : 'Watch screen' }}
+      </button>
+
+      <!--
+        Their face on the main screen — the same act as watching their screen, pointed at the
+        other thing they might be showing you, so it sits beside it and looks like it.
+
+        Only while there's actually a picture (`onCamera` waits for the stream, not just for
+        them to say they turned it on), for the same reason the Watch button waits for a share:
+        a control that puts a black rectangle on the main screen is a control that looks broken.
+      -->
+      <button
+        v-if="onCamera"
+        type="button"
+        class="flex items-center gap-1.5 rounded-full px-2 py-0.5 text-xs font-medium transition"
+        :class="pinned ? 'bg-primary text-primary-foreground' : 'bg-muted text-muted-foreground hover:bg-muted/70'"
+        :title="pinned
+          ? `Take ${self ? 'yourself' : peerName} off the main screen`
+          : `Put ${self ? 'yourself' : peerName} on the main screen`"
+        @click="emit('pin')"
+      >
+        <PinOff v-if="pinned" class="h-3.5 w-3.5" />
+        <Pin v-else class="h-3.5 w-3.5" />
+        {{ pinned ? 'On the main screen' : 'Main screen' }}
+      </button>
+    </div>
 
     <!--
       Yours alone. Muting Bob here silences him on your speakers and nowhere else — he is

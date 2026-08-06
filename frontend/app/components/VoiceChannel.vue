@@ -22,6 +22,7 @@ import {
   X,
 } from 'lucide-vue-next'
 import type { Channel, Peer, VoiceParticipant } from '~/types'
+import { watchKey } from '~/composables/useCallStage'
 import { Button } from '~/components/ui/button'
 import {
   AlertDialog,
@@ -87,7 +88,6 @@ const {
   setPeerVolume,
   setPeerScreenVolume,
   togglePeerScreenMute,
-  setWatchedScreen,
   toggleScreenShare,
   toggleAudioShare,
   canShareScreen,
@@ -201,54 +201,30 @@ const selfPeer = computed<Peer>(() => ({
 
 // --- the screen-share stage ---
 
-const watching = ref<number | 'self' | null>(null)
-
-const sharers = computed(() => {
-  const list: { key: number | 'self', name: string, stream: MediaStream | null }[] = []
-
-  if (isSharing.value) list.push({ key: 'self', name: 'Your screen', stream: screenStream.value })
-  for (const peer of peers.value) {
-    if (peer.screenSharing && peer.screen) list.push({ key: peer.id, name: peer.name, stream: peer.screen })
-  }
-
-  return list
-})
-
-const stage = computed(() => sharers.value.find(s => s.key === watching.value) ?? null)
-
-// Keep the audio layer in step with the stage: only the screen you're actually watching
-// gets to make a sound, so "Stop watching" (watching → null) silences it too.
-watch(watching, key => setWatchedScreen(key), { immediate: true })
-
-/** Your own screen is never put on the stage — see the template — so this is only ever a
- *  real peer, which is exactly who the shared-screen volume slider needs to address. */
-const stagePeer = computed(() =>
-  typeof watching.value === 'number' ? peers.value.find(p => p.id === watching.value) ?? null : null,
-)
-
 /**
- * The set of people sharing, as a stable string.
+ * The stage: which screen, or whose face, is on the big rectangle.
  *
- * `sharers` is rebuilt from `peers` on every roster tick — and `peers` is patched
- * constantly (the speaking rings alone repaint it many times a second). Watching `sharers`
- * directly therefore fires continuously, which is what made "Hide" spring straight back
- * open: the watcher kept re-running and kept forcing the pane visible. Reducing it to the
- * keys means the watcher only wakes when someone actually starts or stops sharing.
+ * Shared with the Side Space dock, which had grown its own near-identical copy of this — see
+ * useCallStage, which is also where cameras being stageable at all is explained.
+ *
+ * **One behaviour changed in the move.** This used to fall through to the first screen still up
+ * whenever the watched one became invalid, `watching = null` included — so closing a screen in a
+ * voice channel sprang it straight back, and there was no way to dismiss the last one at all.
+ * Now closing means closed, and a *newly* started share is what claims the stage again.
  */
-const sharerKeys = computed(() => sharers.value.map(s => String(s.key)).join('|'))
-
-watch(sharerKeys, (keys, prev) => {
-  const current = keys ? keys.split('|') : []
-  const previous = prev ? prev.split('|') : []
-
-  // Auto-expand only for a *newly* started screen, so you can hide the pane afterwards and
-  // it stays hidden. A screen going up is the one moment the call earns room over the chat.
-  if (current.some(k => !previous.includes(k))) collapsed.value = false
-
-  // Keep the stage on a screen that's still up; otherwise follow the first, or clear it.
-  if (watching.value !== null && current.includes(String(watching.value))) return
-  watching.value = sharers.value[0]?.key ?? null
-}, { immediate: true })
+const { watchables, watching, stage, stageScreenPeer, toggleWatch } = useCallStage({
+  peers: () => peers.value,
+  self: () => ({
+    sharing: isSharing.value,
+    screen: screenStream.value,
+    cameraOn: isCameraOn.value,
+    camera: cameraStream.value,
+  }),
+  // A screen going up is the one moment the call earns room over the chat. Cameras don't get
+  // this: people leave them on for the whole call, and it would mean the pane could never
+  // usefully be hidden.
+  onScreenStarted: () => { collapsed.value = false },
+})
 
 // Whether this machine could hand over the mouse at all — shown on your own share, so the
 // answer arrives before someone asks rather than after. See useRemoteControl.
@@ -272,9 +248,9 @@ const stageEl = ref<HTMLElement | null>(null)
 const isFullscreen = ref(false)
 
 function toggleFullscreen() {
-  // Only a peer's screen is ever on the stage (your own shows a placeholder, never live
-  // video — fullscreening your own capture is the hall-of-mirrors that flickered the app).
-  if (watching.value === 'self') return
+  // Your own *screen* is a placeholder, never live video — fullscreening your own capture is
+  // the hall-of-mirrors that flickered the app. Your own camera is fine: it's a plain stream.
+  if (stage.value?.owner === 'self' && stage.value.kind === 'screen') return
   if (document.fullscreenElement) void document.exitFullscreen().catch(() => {})
   else void stageEl.value?.requestFullscreen().catch(() => {})
 }
@@ -408,7 +384,7 @@ const deafenedCount = computed(() => waiting.value.filter(p => p.deafened).lengt
               mirrors, and fullscreen made it fill the display and flicker. You know what's on
               your screen — everyone else sees the real thing on their stage.
             -->
-            <div v-if="stage.key === 'self'" class="grid h-full w-full place-items-center gap-2 text-center text-white/70">
+            <div v-if="stage.owner === 'self' && stage.kind === 'screen'" class="grid h-full w-full place-items-center gap-2 text-center text-white/70">
               <div class="flex flex-col items-center gap-2">
                 <ScreenShare class="h-8 w-8" />
                 <p class="text-sm font-medium text-white">You're sharing your screen</p>
@@ -420,14 +396,20 @@ const deafenedCount = computed(() => waiting.value.filter(p => p.deafened).lengt
                 </p>
               </div>
             </div>
-            <VoiceVideo v-else :stream="stage.stream" @dimensions="onStageDimensions" />
+            <!-- Your own face is mirrored, like every self-view; nobody else's is. -->
+            <VoiceVideo
+              v-else
+              :stream="stage.stream"
+              :class="stage.owner === 'self' ? '-scale-x-100' : ''"
+              @dimensions="onStageDimensions"
+            />
 
             <!-- The remote-control input layer. Renders only while you actually hold control of
                  *this* peer's screen, and sits above the hover controls so a click meant for
                  their desktop can't land on our own fullscreen button. -->
             <RemoteControlSurface
-              v-if="stagePeer"
-              :peer-id="stagePeer.id"
+              v-if="stageScreenPeer"
+              :peer-id="stageScreenPeer.id"
               :video-width="stageDimensions.width"
               :video-height="stageDimensions.height"
             />
@@ -437,7 +419,7 @@ const deafenedCount = computed(() => waiting.value.filter(p => p.deafened).lengt
             <button
               type="button"
               class="absolute left-2 top-2 grid h-8 w-8 place-items-center rounded-md bg-black/50 text-white opacity-0 reveal-touch transition hover:bg-black/70 focus:opacity-100 group-hover:opacity-100"
-              title="Stop watching this screen"
+              :title="stage.kind === 'camera' ? 'Take them off the main screen' : 'Stop watching this screen'"
               @click="watching = null"
             >
               <X class="h-4 w-4" />
@@ -446,7 +428,7 @@ const deafenedCount = computed(() => waiting.value.filter(p => p.deafened).lengt
             <!-- Fullscreen toggle: peers' screens only (your own is a placeholder). Appears on
                  hover, and works while fullscreen too. -->
             <button
-              v-if="stage.key !== 'self'"
+              v-if="!(stage.owner === 'self' && stage.kind === 'screen')"
               type="button"
               class="absolute right-2 top-2 grid h-8 w-8 place-items-center rounded-md bg-black/50 text-white opacity-0 reveal-touch transition hover:bg-black/70 focus:opacity-100 group-hover:opacity-100"
               :title="isFullscreen ? 'Exit fullscreen' : 'Fullscreen'"
@@ -460,21 +442,21 @@ const deafenedCount = computed(() => waiting.value.filter(p => p.deafened).lengt
             <span class="shrink-0 text-xs text-muted-foreground">{{ stage.name }}</span>
 
             <!-- Ask to drive it. Only ever a peer's screen — controlling your own is nothing. -->
-            <RemoteControlButton v-if="stagePeer" :peer-id="stagePeer.id" />
+            <RemoteControlButton v-if="stageScreenPeer" :peer-id="stageScreenPeer.id" />
 
             <!-- How loud their shared screen plays, for you alone — separate from their voice,
                  and with its own switch for turning the sound off while you keep watching. -->
-            <div v-if="stagePeer" class="flex min-w-0 items-center gap-1.5">
+            <div v-if="stageScreenPeer" class="flex min-w-0 items-center gap-1.5">
               <button
                 type="button"
                 class="shrink-0 rounded p-0.5 transition"
-                :class="stagePeer.screenMuted ? 'text-destructive' : 'text-muted-foreground hover:text-foreground'"
-                :title="stagePeer.screenMuted
+                :class="stageScreenPeer.screenMuted ? 'text-destructive' : 'text-muted-foreground hover:text-foreground'"
+                :title="stageScreenPeer.screenMuted
                   ? 'Hear this screen again'
                   : 'Mute this screen\'s sound — you\'ll still hear everyone talking'"
-                @click="togglePeerScreenMute(stagePeer.id)"
+                @click="togglePeerScreenMute(stageScreenPeer.id)"
               >
-                <VolumeX v-if="stagePeer.screenMuted" class="h-3.5 w-3.5" />
+                <VolumeX v-if="stageScreenPeer.screenMuted" class="h-3.5 w-3.5" />
                 <Volume2 v-else class="h-3.5 w-3.5" />
               </button>
               <input
@@ -482,26 +464,28 @@ const deafenedCount = computed(() => waiting.value.filter(p => p.deafened).lengt
                 min="0"
                 max="1"
                 step="0.01"
-                :value="stagePeer.screenVolume"
-                :disabled="stagePeer.screenMuted"
+                :value="stageScreenPeer.screenVolume"
+                :disabled="stageScreenPeer.screenMuted"
                 class="h-1 w-24 cursor-pointer appearance-none rounded-full bg-muted accent-primary disabled:cursor-not-allowed disabled:opacity-40"
-                :aria-label="`Shared screen volume for ${stagePeer.name}`"
-                :title="stagePeer.screenMuted ? 'Screen sound: off' : `Screen sound: ${Math.round(stagePeer.screenVolume * 100)}%`"
-                @input="setPeerScreenVolume(stagePeer.id, Number(($event.target as HTMLInputElement).value))"
+                :aria-label="`Shared screen volume for ${stageScreenPeer.name}`"
+                :title="stageScreenPeer.screenMuted ? 'Screen sound: off' : `Screen sound: ${Math.round(stageScreenPeer.screenVolume * 100)}%`"
+                @input="setPeerScreenVolume(stageScreenPeer.id, Number(($event.target as HTMLInputElement).value))"
               >
             </div>
 
-            <!-- More than one screen going: pick which one you're watching. -->
-            <div v-if="sharers.length > 1" class="ml-auto flex gap-1">
+            <!-- More than one thing to look at — screens and faces both: pick. -->
+            <div v-if="watchables.length > 1" class="ml-auto flex flex-wrap gap-1">
               <button
-                v-for="s in sharers"
-                :key="String(s.key)"
+                v-for="w in watchables"
+                :key="w.key"
                 type="button"
-                class="rounded px-2 py-0.5 text-xs transition"
-                :class="s.key === watching ? 'bg-primary text-primary-foreground' : 'bg-muted text-muted-foreground hover:bg-muted/70'"
-                @click="watching = s.key"
+                class="flex items-center gap-1 rounded px-2 py-0.5 text-xs transition"
+                :class="w.key === watching ? 'bg-primary text-primary-foreground' : 'bg-muted text-muted-foreground hover:bg-muted/70'"
+                @click="watching = w.key"
               >
-                {{ s.name }}
+                <ScreenShare v-if="w.kind === 'screen'" class="h-3 w-3 shrink-0" />
+                <Video v-else class="h-3 w-3 shrink-0" />
+                {{ w.name }}
               </button>
             </div>
           </div>
@@ -518,8 +502,10 @@ const deafenedCount = computed(() => waiting.value.filter(p => p.deafened).lengt
             :speaking="selfSpeaking"
             :muted="!micOpen"
             :sharing="isSharing"
-            :watching="watching === 'self'"
-            @watch="watching = watching === 'self' ? null : 'self'"
+            :watching="watching === watchKey('self', 'screen')"
+            :pinned="watching === watchKey('self', 'camera')"
+            @watch="toggleWatch('self', 'screen')"
+            @pin="toggleWatch('self', 'camera')"
           />
           <VoiceTile
             v-for="peer in peers"
@@ -528,13 +514,15 @@ const deafenedCount = computed(() => waiting.value.filter(p => p.deafened).lengt
             :speaking="peer.speaking"
             :muted="peer.muted"
             :sharing="peer.screenSharing"
-            :watching="watching === peer.id"
+            :watching="watching === watchKey(peer.id, 'screen')"
+            :pinned="watching === watchKey(peer.id, 'camera')"
             :can-moderate="canModerate"
             @toggle-mute="togglePeerMute(peer.id)"
             @set-volume="setPeerVolume(peer.id, $event)"
             @set-screen-volume="setPeerScreenVolume(peer.id, $event)"
             @toggle-screen-mute="togglePeerScreenMute(peer.id)"
-            @watch="watching = watching === peer.id ? null : peer.id"
+            @watch="toggleWatch(peer.id, 'screen')"
+            @pin="toggleWatch(peer.id, 'camera')"
             @disconnect="askKick(peer)"
             @force-mute="muteUser(peer.id, $event)"
           />

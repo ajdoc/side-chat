@@ -1,6 +1,6 @@
 import type { Ref } from 'vue'
 import type { Facing, Occupant, SpaceMap } from '~/lib/spaceMapEngine'
-import { audibility, inConnectRange } from '~/lib/spaceMapEngine'
+import { audibility, inConnectRange, liveSpeakers } from '~/lib/spaceMapEngine'
 
 /**
  * The shortest gap between two evaluations, in milliseconds — and, in the absence of anything
@@ -37,6 +37,16 @@ interface Ctx {
 
 /** Who we can hear right now. The roster and the call dock render from this. */
 const audibleIds = ref<number[]>([])
+/**
+ * Who is live on a stage — you included, if you are.
+ *
+ * Kept here rather than worked out by whoever needs it because this is where the roster is
+ * already being swept once every {@link EVALUATE_EVERY}, and because the answer has to be the
+ * *same* answer the gains were computed from. The dock puts these people's tiles first, the
+ * canvas badges them, and the person who stepped onto a full platform learns from it that they
+ * are in the wings.
+ */
+const liveIds = ref<number[]>([])
 /** Who we could hear last time, so arrivals and departures can be noticed rather than polled. */
 const wasAudible = new Set<number>()
 
@@ -69,6 +79,24 @@ function evaluate() {
   const meeting = ctx.meeting()
   const quiet = ctx.quiet()
 
+  /*
+   * Who's on the platform, decided once for the whole sweep.
+   *
+   * Over `others` *and* `self`, because you can be the one talking, and a speaker whose own
+   * client didn't count them would show them in the wings while the room listened. Positions
+   * are the whispered ones for the same reason everything else here uses them: both ends
+   * computing from the truth is what keeps the two sides' answers in step.
+   *
+   * A meeting outranks it. The game has already taken the room over and flattened every gain to
+   * 1; a stage inside that would be a distinction with nothing left to distinguish.
+   */
+  const live = meeting
+    ? new Set<number>()
+    : liveSpeakers(m, [
+        { id: self.id, x: self.x, y: self.y, stageAt: self.stageAt },
+        ...Object.values(others).map(o => ({ id: o.id, x: o.tx, y: o.ty, stageAt: o.stageAt })),
+      ])
+
   for (const member of ctx.knownMembers()) {
     const them = others[member.id]
 
@@ -96,14 +124,14 @@ function evaluate() {
     // The whispered position, not the eased one. See the note above.
     const at = { x: them.tx, y: them.ty }
 
-    const gain = meeting ? 1 : audibility(m, self, at)
+    const gain = meeting ? 1 : audibility(m, self, at, live.has(member.id))
     // Direction as well as loudness, so spatial audio can put a voice where its owner is
     // standing. Measured from the whispered positions for the same reason the gain is: both
     // ends computing from the truth is what keeps the two sides' answers in step.
     // Your facing rides along so the call can offer a first-person sound field — the room
     // turning as you do — without this loop needing to know whether anyone wants one.
     ctx.setPeerProximity(member.id, gain, { x: at.x - self.x, y: at.y - self.y, facing: self.facing })
-    ctx.setPeerInRange(member.id, meeting ? true : inConnectRange(m, self, at))
+    ctx.setPeerInRange(member.id, meeting ? true : inConnectRange(m, self, at, live.has(member.id)))
 
     if (gain > 0) {
       audible.push(member.id)
@@ -128,6 +156,14 @@ function evaluate() {
   // Only when the set actually changes — this runs many times a second.
   if (audible.length !== audibleIds.value.length || audible.some(id => !audibleIds.value.includes(id))) {
     audibleIds.value = audible
+  }
+
+  // Same discipline, same reason. Live-ness changes when somebody walks across a line, which is
+  // several seconds apart at the very best; the ref must not be rewritten sixteen times a second
+  // in between.
+  const nowLive = [...live]
+  if (nowLive.length !== liveIds.value.length || nowLive.some(id => !liveIds.value.includes(id))) {
+    liveIds.value = nowLive
   }
 }
 
@@ -208,7 +244,8 @@ export function useSpaceProximity() {
     ctx = null
     wasAudible.clear()
     audibleIds.value = []
+    liveIds.value = []
   }
 
-  return { audibleIds, startProximity, stopProximity }
+  return { audibleIds, liveIds, startProximity, stopProximity }
 }

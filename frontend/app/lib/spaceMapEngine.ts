@@ -83,13 +83,37 @@ export const NEAR_TILES = 2
 export const FAR_TILES = 8
 export const CONNECT_TILES = 14
 
+/**
+ * How many people may be live on one stage at a time.
+ *
+ * A cap, and not an arbitrary one: the call is a **mesh**, so a live speaker uplinks their
+ * camera once *per listener*. Three speakers to a room of thirty is ninety encodes' worth of
+ * outbound video spread across three laptops, which the bitrate caps in useVoice can carry.
+ * Thirty speakers is the same room asking every machine in it to be a broadcast studio, and
+ * what it actually produces is thirty stuttering streams and no talk at all.
+ *
+ * So the platform holds three, first come, and everyone else on it is in the wings. When this
+ * room outgrows that the answer is an SFU, not a bigger number here.
+ */
+export const STAGE_SPEAKERS = 3
+
 export type Facing = 'up' | 'down' | 'left' | 'right'
 
 export interface SpaceZone {
   id: string
   name: string
-  /** Only one kind so far: a sealed room. Sound neither leaves it nor gets in. */
-  kind: 'private'
+  /**
+   * What the rectangle does to sound.
+   *
+   *   - `private` — a sealed room. Sound neither leaves it nor gets in.
+   *   - `stage` — sealed in exactly the same way, *except* outbound for whoever is currently
+   *     live on it: a speaker is heard, and seen, by the whole map. See {@link liveSpeakers}.
+   *
+   * The sealing is shared deliberately. It gives the stage its green room for free — step on
+   * while it's full and you're in the wings, hearing the speakers and heard by nobody outside
+   * — and it means a talk isn't drowned by the six people stood next to the platform.
+   */
+  kind: 'private' | 'stage'
   x: number
   y: number
   w: number
@@ -175,6 +199,15 @@ export interface Occupant {
    * room draws it only when both agree. See `holdHands` and `handLink` in useSpacePresence.
    */
   handWith?: number | null
+  /**
+   * When they stepped onto a stage zone, or null if they aren't on one.
+   *
+   * Whispered with the position because it cannot be derived from it: everybody standing on the
+   * platform is on the same tiles, and the queue for a full stage is decided by who got there
+   * first. Only their own client knows that, so only their own client can say it — and once
+   * said, every client can work out the same set of live speakers. See {@link liveSpeakers}.
+   */
+  stageAt?: number | null
 }
 
 // --- the grid ---
@@ -228,23 +261,37 @@ export function spawnPoint(map: SpaceMap): { x: number, y: number } {
  *
  * The whole feature, in one function. Three rules, in order:
  *
- * 1. **Zones win over distance.** Two people in the same private zone hear each other fully,
+ * 1. **A live stage carries everywhere.** If `b` is live on a stage — see {@link liveSpeakers}
+ *    for what earns that — you hear them at full volume from anywhere on the map, walls and
+ *    distance included. That is the entire point of a stage, and it's the one rule that breaks
+ *    the symmetry below: hearing a speaker is not the same as their hearing you.
+ * 2. **Zones win over distance.** Two people in the same private zone hear each other fully,
  *    however far apart they stand in it — that's what a meeting room is *for*. And if exactly
  *    one of them is in a zone, they hear nothing of each other regardless of how close they
  *    are, because a sealed room that leaks to somebody standing against the outside of its
  *    wall is not sealed. Different zones: likewise nothing.
- * 2. **Inside `NEAR_TILES`, full volume.** Flat, so a conversation doesn't wobble as people
+ * 3. **Inside `NEAR_TILES`, full volume.** Flat, so a conversation doesn't wobble as people
  *    shift about in it.
- * 3. **Beyond that, fade to nothing at `FAR_TILES`.** Squared rather than linear, so the fall
+ * 4. **Beyond that, fade to nothing at `FAR_TILES`.** Squared rather than linear, so the fall
  *    is gentle where you're still in earshot and steep as you leave — which sounds like
  *    walking away from someone, whereas a linear ramp sounds like a fader being pulled.
  *
- * Symmetric by construction: both ends compute the same number from the same two positions,
- * which is what lets each side gate its *own* connection without either negotiating.
+ * Symmetric by construction *apart from rule 1*: both ends compute the same number from the
+ * same two positions, which is what lets each side gate its own connection without either
+ * negotiating. `bLive` keeps that property, because it too is computed from whispered state
+ * that everybody holds — both ends of a pair reach the same verdict about who is on the
+ * platform, so the asymmetry is agreed rather than argued over.
  */
-export function audibility(map: SpaceMap, a: { x: number, y: number }, b: { x: number, y: number }): number {
+export function audibility(
+  map: SpaceMap,
+  a: { x: number, y: number },
+  b: { x: number, y: number },
+  bLive = false,
+): number {
   const za = zoneAt(map, a.x, a.y)
   const zb = zoneAt(map, b.x, b.y)
+
+  if (bLive && zb?.kind === 'stage') return 1
 
   if (za || zb) return za && zb && za.id === zb.id ? 1 : 0
 
@@ -270,13 +317,72 @@ export function audibility(map: SpaceMap, a: { x: number, y: number }, b: { x: n
  * inside the room gets eaten. So proximity to the wall is enough to keep a silent connection
  * warm, and sharing the zone keeps it open at any distance.
  */
-export function inConnectRange(map: SpaceMap, a: { x: number, y: number }, b: { x: number, y: number }): boolean {
+export function inConnectRange(
+  map: SpaceMap,
+  a: { x: number, y: number },
+  b: { x: number, y: number },
+  bLive = false,
+): boolean {
   const za = zoneAt(map, a.x, a.y)
   const zb = zoneAt(map, b.x, b.y)
+
+  // Somebody the whole map can hear is somebody the whole map needs a connection to, wherever
+  // they happen to be standing.
+  if (bLive && zb?.kind === 'stage') return true
 
   if (za && zb && za.id === zb.id) return true
 
   return distance(a, b) <= CONNECT_TILES
+}
+
+/**
+ * Who is live on a stage right now — the answer every client works out for itself.
+ *
+ * ## Why it's a pure function of whispered state
+ *
+ * Going live is not a request anybody grants. There is no server in this path at all: positions
+ * are whispers between the people in the room (see useSpacePresence), and `stageAt` rides along
+ * with them. So every client runs this same function over the same roster and arrives at the
+ * same set — which is what lets a speaker's own screen show them live at the same moment the
+ * audience's screens start hearing them, with nothing to negotiate and nothing to go stale.
+ *
+ * ## The ordering
+ *
+ * Per stage, earliest onto the platform first, ties broken by id so the answer is total.
+ * `stageAt` is the wall clock of the person who stepped up, which means a badly-set clock can
+ * jump the queue — the honest bound on this design. It only ever decides *which* of several
+ * people is the one turned away from a full stage, never whether an uncontended speaker is
+ * heard, and the loser can see they're in the wings and ask. That's a fair trade for a feature
+ * that needs no round trip to start talking.
+ */
+export function liveSpeakers(
+  map: SpaceMap,
+  occupants: Array<{ id: number, x: number, y: number, stageAt?: number | null }>,
+): Set<number> {
+  const byZone = new Map<string, Array<{ id: number, stageAt: number }>>()
+
+  for (const o of occupants) {
+    if (!o.stageAt) continue
+
+    const z = zoneAt(map, o.x, o.y)
+    // Claiming a time but standing off the platform: they left, and their next whisper will say
+    // so. Position has the final say either way, so nothing here trusts the claim alone.
+    if (z?.kind !== 'stage') continue
+
+    const queue = byZone.get(z.id) ?? []
+    queue.push({ id: o.id, stageAt: o.stageAt })
+    byZone.set(z.id, queue)
+  }
+
+  const live = new Set<number>()
+
+  for (const queue of byZone.values()) {
+    queue.sort((p, q) => p.stageAt - q.stageAt || p.id - q.id)
+
+    for (const speaker of queue.slice(0, STAGE_SPEAKERS)) live.add(speaker.id)
+  }
+
+  return live
 }
 
 export function distance(a: { x: number, y: number }, b: { x: number, y: number }): number {
@@ -388,6 +494,9 @@ export function toTile(cam: Camera, px: number, py: number): { x: number, y: num
 export interface MapTheme {
   zone: string
   zoneBorder: string
+  /** The platform, and the colour its name and edge are written in. See {@link drawZones}. */
+  stage: string
+  stageBorder: string
   text: string
   muted: string
 }
@@ -483,7 +592,14 @@ function drawObjects(ctx: CanvasRenderingContext2D, map: SpaceMap, cam: Camera):
   }
 }
 
-/** Zones, as a tinted rectangle with its name along the top edge. */
+/**
+ * Zones, as a tinted rectangle with its name along the top edge.
+ *
+ * A stage is drawn as a solid-edged platform rather than the dashed outline of a sealed room,
+ * because the two rectangles do opposite things and telling them apart is not optional: one is
+ * where you go to be *unheard* by the room, the other is where a step across the line puts your
+ * voice in everybody's ears. The border is the warning.
+ */
 function drawZones(ctx: CanvasRenderingContext2D, map: SpaceMap, cam: Camera, theme: MapTheme): void {
   const size = TILE * cam.zoom
 
@@ -491,21 +607,22 @@ function drawZones(ctx: CanvasRenderingContext2D, map: SpaceMap, cam: Camera, th
     const p = toScreen(cam, z.x - 0.5, z.y - 0.5)
     const w = z.w * size
     const h = z.h * size
+    const isStage = z.kind === 'stage'
 
-    ctx.fillStyle = theme.zone
+    ctx.fillStyle = isStage ? theme.stage : theme.zone
     ctx.fillRect(p.x, p.y, w, h)
 
-    ctx.strokeStyle = theme.zoneBorder
-    ctx.lineWidth = 2
-    ctx.setLineDash([6, 4])
+    ctx.strokeStyle = isStage ? theme.stageBorder : theme.zoneBorder
+    ctx.lineWidth = isStage ? 3 : 2
+    if (!isStage) ctx.setLineDash([6, 4])
     ctx.strokeRect(p.x + 1, p.y + 1, w - 2, h - 2)
     ctx.setLineDash([])
 
-    ctx.fillStyle = theme.muted
+    ctx.fillStyle = isStage ? theme.stageBorder : theme.muted
     ctx.font = `500 ${Math.max(10, size * 0.34)}px system-ui, sans-serif`
     ctx.textAlign = 'center'
     ctx.textBaseline = 'top'
-    ctx.fillText(z.name, p.x + w / 2, p.y + 4, w - 8)
+    ctx.fillText(isStage ? `${z.name} · stage` : z.name, p.x + w / 2, p.y + 4, w - 8)
   }
 }
 

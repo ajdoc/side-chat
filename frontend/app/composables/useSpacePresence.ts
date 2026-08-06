@@ -1,7 +1,7 @@
 import type { Facing, Occupant, SpaceMap } from '~/lib/spaceMapEngine'
 import type { AvatarLook } from '~/lib/spaceAvatar'
 import type { PetKind } from '~/lib/spacePets'
-import { facingOf, isWalkable, spawnPoint, step } from '~/lib/spaceMapEngine'
+import { facingOf, isWalkable, spawnPoint, step, zoneAt } from '~/lib/spaceMapEngine'
 import { normaliseLook } from '~/lib/spaceAvatar'
 import { proximityMoved } from '~/composables/useSpaceProximity'
 
@@ -85,6 +85,8 @@ interface MovePayload {
   shout?: string | null
   /** Whose hand they're holding, if anyone — see Occupant.handWith. */
   hand?: number | null
+  /** When they stepped onto a stage, if they're on one — see Occupant.stageAt. */
+  stage?: number | null
 }
 
 /**
@@ -778,11 +780,38 @@ export function useSpacePresence(channelId: number, map: Ref<SpaceMap | null>) {
 
   // --- the wire ---
 
+  /**
+   * Notice that you've walked onto a stage, or off one, and stamp the moment.
+   *
+   * Runs from {@link whisperMove}, which is to say after every single thing that moves you —
+   * walking, being towed by a hand, sitting, standing, being warped by a game. That's the whole
+   * gesture: stepping across the line is going live, and stepping back off is leaving. Nothing
+   * to click, and nobody to ask (see `liveSpeakers` for why the cap needs no server).
+   *
+   * The timestamp is set *once*, on entry, and left alone while you stand there — it's your
+   * place in the queue, so re-stamping it every frame would send you to the back of it forever.
+   *
+   * Returns whether anything changed, because going live is worth breaking the whisper throttle
+   * for: the audience finding out an eighth of a second late is the first word of the talk.
+   */
+  function syncStage(): boolean {
+    const m = map.value
+    if (!m || !me.value) return false
+
+    const onStage = zoneAt(m, me.value.x, me.value.y)?.kind === 'stage'
+    if (onStage === !!me.value.stageAt) return false
+
+    me.value = { ...me.value, stageAt: onStage ? Date.now() : null }
+
+    return true
+  }
+
   function whisperMove(force = false) {
     if (!channel || !me.value) return
 
+    const stageChanged = syncStage()
     const now = Date.now()
-    if (!force && now - lastWhisperAt < WHISPER_EVERY) return
+    if (!force && !stageChanged && now - lastWhisperAt < WHISPER_EVERY) return
     lastWhisperAt = now
 
     channel.whisper('sp-move', {
@@ -799,6 +828,7 @@ export function useSpacePresence(channelId: number, map: Ref<SpaceMap | null>) {
       seat: me.value.seatedOn ?? null,
       shout: me.value.shout ?? null,
       hand: me.value.handWith ?? null,
+      stage: me.value.stageAt ?? null,
     } satisfies MovePayload)
   }
 
@@ -824,6 +854,9 @@ export function useSpacePresence(channelId: number, map: Ref<SpaceMap | null>) {
       // shouting shouldn't have to walk out and back in for anyone to read it.
       existing.shout = payload.shout ?? null
       existing.handWith = payload.hand ?? null
+      // In place like the rest: who is live is recomputed from these values on the proximity
+      // clock, so it needs no re-render of its own to take effect.
+      existing.stageAt = payload.stage ?? null
       if (existing.pet && !existing.petAt) {
         existing.petAt = { x: payload.x, y: payload.y, facing: payload.facing }
       }
@@ -857,6 +890,7 @@ export function useSpacePresence(channelId: number, map: Ref<SpaceMap | null>) {
         seatedOn: payload.seat ?? null,
         shout: payload.shout ?? null,
         handWith: payload.hand ?? null,
+        stageAt: payload.stage ?? null,
         at: Date.now(),
       },
     }

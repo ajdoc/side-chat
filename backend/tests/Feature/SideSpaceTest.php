@@ -334,6 +334,26 @@ it('rejects a zone that runs off the map or has nowhere to stand', function () {
         ->assertJsonValidationErrors('zones.0');
 });
 
+it('saves a stage zone, and refuses a kind of zone it has never heard of', function () {
+    [$owner, , $channel] = ownerWithSpaceChannel();
+    Passport::actingAs($owner);
+
+    // A stage is stored exactly as a sealed room is — a rectangle with a kind. Who is live on
+    // it at any moment is worked out in the browser from whispered positions and never reaches
+    // the server, so there is nothing else here to persist.
+    $stage = ['id' => 's', 'name' => 'Main stage', 'kind' => 'stage', 'x' => 2, 'y' => 2, 'w' => 4, 'h' => 3];
+
+    $this->putJson("/api/channels/{$channel->id}/space/map", validMapPayload(['zones' => [$stage]]))
+        ->assertOk()
+        ->assertJsonPath('data.zones.0.kind', 'stage');
+
+    $this->putJson("/api/channels/{$channel->id}/space/map", validMapPayload([
+        'zones' => [[...$stage, 'kind' => 'auditorium']],
+    ]))
+        ->assertStatus(422)
+        ->assertJsonValidationErrors('zones.0.kind');
+});
+
 it('rejects a grid bigger than the ceiling', function () {
     [$owner, , $channel] = ownerWithSpaceChannel();
     Passport::actingAs($owner);

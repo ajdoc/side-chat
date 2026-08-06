@@ -1,12 +1,13 @@
 <script setup lang="ts">
 import {
   DoorOpen, Eraser, LayoutTemplate, Loader2, MousePointer2, RotateCcw, RotateCw, Sofa,
-  SquareDashed, Trash2, X, ZoomIn, ZoomOut,
+  Megaphone, SquareDashed, Trash2, X, ZoomIn, ZoomOut,
 } from 'lucide-vue-next'
 import type { Camera, MapTheme, SpaceMap, SpaceZone } from '~/lib/spaceMapEngine'
 import type { DecorFacing, SpaceObject } from '~/lib/spaceDecor'
 import type { MapPreset } from '~/composables/useSpacePresets'
 import {
+  STAGE_SPEAKERS,
   TILE,
   TILE_BRUSHES,
   VOID,
@@ -20,7 +21,7 @@ import {
   zoomAround,
 } from '~/lib/spaceMapEngine'
 import { DECOR, DECOR_FACINGS, decorCovers, decorSize } from '~/lib/spaceDecor'
-import { isWalkableTile } from '~/lib/spaceTiles'
+import { isWalkableTile, WOOD } from '~/lib/spaceTiles'
 import { Button } from '~/components/ui/button'
 import { Input } from '~/components/ui/input'
 import { Label } from '~/components/ui/label'
@@ -71,19 +72,23 @@ const { save, saveObjects } = useSpaceMap(props.channelId)
 
 const isDecorMode = computed(() => props.mode === 'decor')
 
-type Tool = 'select' | 'tile' | 'decor' | 'spawn' | 'zone' | 'erase-zone' | 'erase-decor' | 'erase-tile'
+type Tool = 'select' | 'tile' | 'decor' | 'spawn' | 'zone' | 'stage' | 'erase-zone' | 'erase-decor' | 'erase-tile'
 
 /** The full toolbox. In decorate mode only the furniture tools survive — see {@link TOOLS}. */
 const ALL_TOOLS: { id: Tool, label: string, icon: any, hint: string, decor?: boolean }[] = [
   { id: 'select', label: 'Move things', icon: MousePointer2, hint: 'Pick a thing up, turn it, or take it away', decor: true },
   { id: 'spawn', label: 'Entrance', icon: DoorOpen, hint: 'Where people arrive' },
   { id: 'zone', label: 'Room', icon: SquareDashed, hint: 'Drag out a sealed room — inside hears inside only' },
+  // Next to the room rather than off in a mode of its own, because it *is* a room — one whose
+  // occupants are heard outside it. Anybody who has understood the Room tool has understood
+  // three quarters of this one.
+  { id: 'stage', label: 'Stage', icon: Megaphone, hint: 'Drag out a stage — step on it and the whole room hears you' },
   // Taking the ground away is its own tool rather than only the last swatch in the Ground row.
   // It was reachable there — "Nothing" paints the void — but a transparent square at the end of
   // twelve coloured ones is not where anybody looks for an eraser, and rubbing a wall out is a
   // dragged gesture like painting one, not a colour you happen to choose.
   { id: 'erase-tile', label: 'Erase ground', icon: Eraser, hint: 'Drag to rub out wall and floor, back to nothing' },
-  { id: 'erase-zone', label: 'Erase room', icon: SquareDashed, hint: 'Click a room to remove it' },
+  { id: 'erase-zone', label: 'Erase room', icon: SquareDashed, hint: 'Click a room or stage to remove it' },
   { id: 'erase-decor', label: 'Remove furniture', icon: Trash2, hint: 'Click a thing to take it away', decor: true },
 ]
 
@@ -109,7 +114,7 @@ const DECOR_GROUPS: { title: string, kinds: string[] }[] = [
   // office, so the themed presets lean on it too — and a room you can't add a pillar to is a
   // room you can't finish.
   { title: 'Stone and ceremony', kinds: ['pillar', 'statue', 'torch', 'boulder'] },
-  { title: 'Bits and pieces', kinds: ['plant', 'plush', 'plush_vessel', 'plush_pickachu', 'crate', 'barrel', 'campfire', 'rug', 'mat'] },
+  { title: 'Bits and pieces', kinds: ['plant', 'plush', 'plush_vessel', 'plush_pickachu', 'plush_gundam', 'crate', 'barrel', 'campfire', 'rug', 'mat'] },
   { title: 'On the wall', kinds: ['painting', 'poster', 'window', 'clock', 'shelf'] },
 ]
 
@@ -185,13 +190,22 @@ const { grouped: groupedPresets, load: loadPresets, loading: loadingPresets } = 
 const { presets: roomPresets, load: loadRoomPresets } = useSpaceRoomPresets()
 const roomStyle = ref('empty')
 
+/** Boards, like every stage anybody has stood on. Laid under a stage as it's dragged out. */
+const STAGE_FLOOR = WOOD
+
 watch(tool, (t) => { if (t === 'zone') void loadRoomPresets() }, { immediate: true })
 const showPresets = ref(false)
 /** Which preset was last loaded, so the panel can show what you're now working from. */
 const loadedPreset = ref<string | null>(null)
 
 /** An in-progress zone drag, in tiles. */
-let zoneDrag: { x0: number, y0: number, x1: number, y1: number } | null = null
+/*
+ * The kind rides along with the drag rather than being read from `tool` when the pointer comes
+ * up: they are the same value in every ordinary case, and in the one case they aren't — the tool
+ * changed mid-drag, by keyboard shortcut or a stray click — what you asked for is what you
+ * started drawing, not what happened to be selected when you let go.
+ */
+let zoneDrag: { x0: number, y0: number, x1: number, y1: number, kind: SpaceZone['kind'] } | null = null
 /**
  * The piece being dragged, and *where in it* the pointer took hold.
  *
@@ -531,9 +545,9 @@ function onPointerDown(e: PointerEvent) {
 
   if (tool.value === 'select') return grab(px, py)
 
-  if (tool.value === 'zone') {
+  if (tool.value === 'zone' || tool.value === 'stage') {
     const t = toTile(camera, px, py)
-    zoneDrag = { x0: t.x, y0: t.y, x1: t.x, y1: t.y }
+    zoneDrag = { x0: t.x, y0: t.y, x1: t.x, y1: t.y, kind: tool.value === 'stage' ? 'stage' : 'private' }
 
     return
   }
@@ -594,15 +608,19 @@ function onPointerUp(e: PointerEvent) {
   const y = Math.max(0, Math.min(zoneDrag.y0, zoneDrag.y1))
   const w = Math.min(width.value, Math.max(zoneDrag.x0, zoneDrag.x1) + 1) - x
   const h = Math.min(height.value, Math.max(zoneDrag.y0, zoneDrag.y1) + 1) - y
+  const kind = zoneDrag.kind
 
   zoneDrag = null
 
   if (w < 1 || h < 1) return
 
+  const stage = kind === 'stage'
   const zone: SpaceZone = {
     id: `z-${Date.now().toString(36)}`,
-    name: `Room ${zones.value.length + 1}`,
-    kind: 'private',
+    name: stage
+      ? `Stage ${zones.value.filter(z => z.kind === 'stage').length + 1}`
+      : `Room ${zones.value.filter(z => z.kind !== 'stage').length + 1}`,
+    kind,
     x,
     y,
     w,
@@ -614,6 +632,19 @@ function onPointerUp(e: PointerEvent) {
   // A room you dragged comes out furnished, if you asked for one that does. The old behaviour
   // is still there and still the default — it's the `empty` style, which lays a floor and
   // stops, and naming it is better than hiding it.
+  //
+  // A stage is left bare whatever the room style says: the styles furnish a *room* — desks,
+  // couches, a meeting table — and a platform covered in sofas is somewhere to sit rather than
+  // somewhere to be heard from. It still gets a floor, because a zone with nowhere to stand in
+  // it is one the API refuses to save.
+  if (stage) {
+    for (let dy = zone.y; dy < zone.y + zone.h; dy++) {
+      for (let dx = zone.x; dx < zone.x + zone.w; dx++) setTile(dx, dy, STAGE_FLOOR)
+    }
+
+    return
+  }
+
   furnishZone(zone, roomStyle.value)
 }
 
@@ -803,6 +834,10 @@ function theme(): MapTheme {
   palette = {
     zone: 'rgb(99 102 241 / 0.10)',
     zoneBorder: 'rgb(99 102 241 / 0.45)',
+    // Amber against the room's indigo: a stage is the one rectangle you can step into by
+    // accident and start broadcasting, so it doesn't share a colour with anything else.
+    stage: 'rgb(245 158 11 / 0.14)',
+    stageBorder: 'rgb(217 119 6 / 0.75)',
     text: resolve('var(--foreground)', '#0f172a'),
     muted: resolve('var(--muted-foreground)', '#64748b'),
   }
@@ -1011,7 +1046,8 @@ function drawZoneDrag(ctx: CanvasRenderingContext2D) {
   const h = Math.abs(zoneDrag.y1 - zoneDrag.y0) + 1
   const s = toScreen(camera, x - 0.5, y - 0.5)
 
-  ctx.fillStyle = 'rgb(99 102 241 / 0.18)'
+  // Matching the tint the finished thing is drawn in, so a drag previews what you're making.
+  ctx.fillStyle = zoneDrag.kind === 'stage' ? 'rgb(245 158 11 / 0.22)' : 'rgb(99 102 241 / 0.18)'
   ctx.fillRect(s.x, s.y, w * size, h * size)
 }
 
@@ -1168,6 +1204,27 @@ onBeforeUnmount(() => {
           <p class="text-[11px] leading-snug text-muted-foreground">
             Drag out a room and it's laid out for you. The furniture spreads to fit — anything
             that won't fit is left out.
+          </p>
+        </div>
+
+        <!--
+          The stage. No styles to choose from — see the comment where one is created — so this
+          is purely the rule, written down where somebody is about to drag one out. Worth the
+          space: it's the only rectangle in the editor that changes who can hear whom *outside*
+          itself, and finding that out by being heard is the wrong way round.
+        -->
+        <div v-if="!isDecorMode && tool === 'stage'" class="space-y-1.5">
+          <Label class="flex items-center gap-1.5 text-xs text-muted-foreground">
+            <Megaphone class="h-3.5 w-3.5" /> How a stage works
+          </Label>
+
+          <p class="text-[11px] leading-snug text-muted-foreground">
+            Step onto it and the whole room hears you and sees your camera, however far away
+            they're standing. Step off and you're back to talking to whoever is nearby.
+          </p>
+          <p class="text-[11px] leading-snug text-muted-foreground">
+            {{ STAGE_SPEAKERS }} people can be live at once, first on first. Anyone else standing
+            on it waits in the wings — they can hear the speakers, and nobody outside hears them.
           </p>
         </div>
 

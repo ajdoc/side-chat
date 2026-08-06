@@ -51,7 +51,10 @@ class UpdateSideSpaceMapRequest extends MemberRequest
             'zones' => ['present', 'array', 'max:50'],
             'zones.*.id' => ['required', 'string', 'max:40'],
             'zones.*.name' => ['required', 'string', 'max:60'],
-            'zones.*.kind' => ['required', 'string', 'in:private'],
+            // `private` seals a room; `stage` seals it too, but carries whoever is live on it to
+            // the whole map. The client decides who that is (see liveSpeakers) — nothing about
+            // it is stored, so this list is the whole of the server's interest in the matter.
+            'zones.*.kind' => ['required', 'string', 'in:private,stage'],
             'zones.*.x' => ['required', 'integer', 'min:0'],
             'zones.*.y' => ['required', 'integer', 'min:0'],
             'zones.*.w' => ['required', 'integer', 'min:1'],
