@@ -167,6 +167,8 @@ useHead({ title: computed(() => title.value) })
            four labels plus a title don't fit across 390px and the labels are the part you can
            do without. What still overflows scrolls sideways — see ChannelView's header. -->
       <SideChatsButton v-if="channel" :channel-id="channel.id" />
+      <FavoriteAppButton v-if="channel" :channel-id="channel.id" />
+      <AppsButton v-if="channel" :channel-id="channel.id" />
       <Button variant="ghost" size="sm" class="gap-2 text-muted-foreground" :class="narrow && 'px-2'" title="Threads" @click="openThreadsList">
         <MessagesSquare class="h-4 w-4" /> <span v-if="!narrow">Threads</span>
       </Button>

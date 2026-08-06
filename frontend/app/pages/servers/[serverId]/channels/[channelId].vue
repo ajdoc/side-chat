@@ -85,9 +85,14 @@ function openDesk() {
     </template>
 
     <template #actions>
-      <!-- On a phone these collapse to their icons: three labelled buttons plus a title do
-           not fit across 390px, and the labels are the part you can do without. -->
+      <!-- Reading order: Side Chats first — it's the app's signature surface and the branded
+           button, so it leads the row — then the app you reach for, the rest of the catalogue,
+           then this channel's own surfaces. On a phone they all collapse to their icons: six labelled buttons plus a title
+           do not fit across 390px, and the labels are the part you can do without. What still
+           overflows scrolls sideways inside the strip (see ChannelView's header). -->
       <SideChatsButton :channel-id="channel.id" />
+      <FavoriteAppButton :channel-id="channel.id" />
+      <AppsButton :channel-id="channel.id" />
       <Button variant="ghost" size="sm" class="gap-2 text-muted-foreground" :class="narrow && 'px-2'" title="Threads" @click="openThreadsList">
         <MessagesSquare class="h-4 w-4" /> <span v-if="!narrow">Threads</span>
       </Button>

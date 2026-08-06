@@ -137,16 +137,20 @@ const isVoice = computed(() => props.pane.type === 'voice')
 
       <template #actions>
         <!--
-          The same four the channel page carries. They were missing here for no better reason
+          The same row the channel page carries — the app launchers, this channel's surfaces,
+          with Side Chats leading it. They were missing here for no better reason
           than that the page owns them and the dock isn't the page — so a docked channel could
           show a thread or the Side Desk (the panels read the pane's own surface route quite
           happily) but had no way to open one. These write that local route instead of
           navigating, which is the whole of the difference.
 
-          Icons only, always: the dock is the narrow half by definition, and four labelled
-          buttons plus a title don't fit in it even on a wide monitor.
+          Icons only, always: the dock is the narrow half by definition, and a row of labelled
+          buttons plus a title doesn't fit in it even on a wide monitor — which is what the
+          launchers' `icon-only` says, since the *viewport* here isn't narrow.
         -->
         <SideChatsButton :channel-id="channel.id" />
+        <FavoriteAppButton :channel-id="channel.id" icon-only />
+        <AppsButton :channel-id="channel.id" icon-only />
         <Button variant="ghost" size="sm" class="gap-2 px-2 text-muted-foreground" title="Threads" @click="openThreads">
           <MessagesSquare class="h-4 w-4" />
         </Button>
