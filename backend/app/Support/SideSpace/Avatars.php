@@ -51,6 +51,7 @@ final class Avatars
         'none', 'cantor', 'sentinel', 'merc', 'cactus', 'guard', 'colossus',
         'plush', 'bunny', 'faceless', 'mummy', 'jackoghost', 'pirate', 'robot',
         'witch', 'devil', 'espurr', 'espurr_vessel', 'espurr_pickachu',
+        'espurr_winged_gundam',
     ];
 
     /**
@@ -75,6 +76,8 @@ final class Avatars
             'espurr_vessel' => ['label' => 'Espurr Vessel', 'element' => 'psychic', 'region' => 'guest'],
             // And once more in a yellow hood — a third key for a third outfit, same reason.
             'espurr_pickachu' => ['label' => 'Espurr Pikachu', 'element' => 'psychic', 'region' => 'guest'],
+            // And in a suit of winged mobile armour, which is the widest of them by some way.
+            'espurr_winged_gundam' => ['label' => 'Espurr Wing', 'element' => 'psychic', 'region' => 'guest'],
         ];
     }
 

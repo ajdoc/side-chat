@@ -7,13 +7,15 @@ Pure zlib/struct, because this box has no image libraries at all. Only what the 
 The rule for "that's the background" is the one in public/sprites/README.md — flood-fill inward
 from the borders over near-neutral bright pixels, rather than testing every pixel in the image,
 so the white *inside* the sprite (metal highlights, the bright edges of the blades) is kept.
+
+Pass `--no-trim` for an animation sheet. Trimming is right for a standalone image and wrong for
+a sheet: the room finds a frame by dividing the image by the column count and by eight, so a
+crop that moves the edges by an odd number of pixels slices every frame off-centre.
 """
 import struct
 import sys
 import zlib
 from collections import deque
-
-SRC, DST = sys.argv[1], sys.argv[2]
 
 
 def read_png(path):
@@ -114,73 +116,93 @@ def write_png(path, w, h, px):
     )
 
 
-w, h, px = read_png(SRC)
-print(f'in  {w}x{h}')
+def keyout(w, h, px):
+    """Punch the background out of `px` in place."""
 
+    def backgroundish(p, bright=170, neutral=26):
+        """Light and colourless — the two things a checkerboard square is and a sword isn't."""
+        r, g, b = px[p * 4], px[p * 4 + 1], px[p * 4 + 2]
 
-def backgroundish(p, bright=170, neutral=26):
-    """Light and colourless — the two things a checkerboard square is and a sword isn't."""
-    r, g, b = px[p * 4], px[p * 4 + 1], px[p * 4 + 2]
+        return min(r, g, b) >= bright and (max(r, g, b) - min(r, g, b)) <= neutral
 
-    return min(r, g, b) >= bright and (max(r, g, b) - min(r, g, b)) <= neutral
+    # --- flood fill inward from every border pixel ---
+    seen = bytearray(w * h)
+    queue = deque()
 
-
-# --- flood fill inward from every border pixel ---
-seen = bytearray(w * h)
-queue = deque()
-
-for x in range(w):
-    for p in (x, (h - 1) * w + x):
-        if not seen[p] and backgroundish(p):
-            seen[p] = 1
-            queue.append(p)
-
-for y in range(h):
-    for p in (y * w, y * w + w - 1):
-        if not seen[p] and backgroundish(p):
-            seen[p] = 1
-            queue.append(p)
-
-while queue:
-    p = queue.popleft()
-    x, y = p % w, p // w
-
-    for q in ((p - 1) if x else -1, (p + 1) if x < w - 1 else -1,
-              (p - w) if y else -1, (p + w) if y < h - 1 else -1):
-        if q >= 0 and not seen[q] and backgroundish(q):
-            seen[q] = 1
-            queue.append(q)
-
-# --- two passes of the blended edge ---
-# The screenshot's antialiasing leaves a rim of pixels that are part checkerboard and part
-# sprite. Left alone they read as a pale halo round every blade. Each pass takes the rim
-# pixels that are still mostly background, with the bar dropped a little each time.
-for bright in (200, 215):
-    edge = [p for p in range(w * h) if not seen[p] and backgroundish(p, bright=bright, neutral=18)
-            and any(seen[q] for q in (p - 1, p + 1, p - w, p + w) if 0 <= q < w * h)]
-
-    for p in edge:
-        seen[p] = 1
-
-for p in range(w * h):
-    if seen[p]:
-        px[p * 4:p * 4 + 4] = b'\x00\x00\x00\x00'
-
-# --- trim to what's left ---
-x0, y0, x1, y1 = w, h, -1, -1
-
-for y in range(h):
     for x in range(w):
-        if px[(y * w + x) * 4 + 3]:
-            x0, y0 = min(x0, x), min(y0, y)
-            x1, y1 = max(x1, x), max(y1, y)
+        for p in (x, (h - 1) * w + x):
+            if not seen[p] and backgroundish(p):
+                seen[p] = 1
+                queue.append(p)
 
-nw, nh = x1 - x0 + 1, y1 - y0 + 1
-crop = bytearray(nw * nh * 4)
+    for y in range(h):
+        for p in (y * w, y * w + w - 1):
+            if not seen[p] and backgroundish(p):
+                seen[p] = 1
+                queue.append(p)
 
-for y in range(nh):
-    src = ((y + y0) * w + x0) * 4
-    crop[y * nw * 4:(y + 1) * nw * 4] = px[src:src + nw * 4]
+    while queue:
+        p = queue.popleft()
+        x, y = p % w, p // w
 
-write_png(DST, nw, nh, crop)
-print(f'out {nw}x{nh}  (cropped from {x0},{y0})')
+        for q in ((p - 1) if x else -1, (p + 1) if x < w - 1 else -1,
+                  (p - w) if y else -1, (p + w) if y < h - 1 else -1):
+            if q >= 0 and not seen[q] and backgroundish(q):
+                seen[q] = 1
+                queue.append(q)
+
+    # --- two passes of the blended edge ---
+    # The screenshot's antialiasing leaves a rim of pixels that are part checkerboard and part
+    # sprite. Left alone they read as a pale halo round every blade. Each pass takes the rim
+    # pixels that are still mostly background, with the bar dropped a little each time.
+    for bright in (200, 215):
+        edge = [p for p in range(w * h) if not seen[p] and backgroundish(p, bright=bright, neutral=18)
+                and any(seen[q] for q in (p - 1, p + 1, p - w, p + w) if 0 <= q < w * h)]
+
+        for p in edge:
+            seen[p] = 1
+
+    for p in range(w * h):
+        if seen[p]:
+            px[p * 4:p * 4 + 4] = b'\x00\x00\x00\x00'
+
+
+def trim(w, h, px):
+    """Crop to the artwork. Returns the new size and pixels."""
+    x0, y0, x1, y1 = w, h, -1, -1
+
+    for y in range(h):
+        for x in range(w):
+            if px[(y * w + x) * 4 + 3]:
+                x0, y0 = min(x0, x), min(y0, y)
+                x1, y1 = max(x1, x), max(y1, y)
+
+    nw, nh = x1 - x0 + 1, y1 - y0 + 1
+    crop = bytearray(nw * nh * 4)
+
+    for y in range(nh):
+        src = ((y + y0) * w + x0) * 4
+        crop[y * nw * 4:(y + 1) * nw * 4] = px[src:src + nw * 4]
+
+    return nw, nh, crop, x0, y0
+
+
+# Guarded, because quantise.py imports the decoder above rather than duplicating it — without
+# this, importing it would run the whole job again on that script's arguments.
+if __name__ == '__main__':
+    args = [a for a in sys.argv[1:] if not a.startswith('--')]
+    flags = {a for a in sys.argv[1:] if a.startswith('--')}
+    SRC, DST = args[0], args[1]
+
+    w, h, px = read_png(SRC)
+    print(f'in  {w}x{h}')
+
+    keyout(w, h, px)
+
+    if '--no-trim' in flags:
+        write_png(DST, w, h, px)
+        print(f'out {w}x{h}  (not trimmed — sheet)')
+    else:
+        nw, nh, crop, x0, y0 = trim(w, h, px)
+        write_png(DST, nw, nh, crop)
+        print(f'out {nw}x{nh}  (cropped from {x0},{y0})')

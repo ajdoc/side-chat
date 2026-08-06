@@ -21,7 +21,7 @@ import type { SheetSpec } from './spriteSheet'
 import { blit, sprite } from './pixelSprite'
 import { drawSheetFrame, sheetReady, sheetRow } from './spriteSheet'
 
-export type PetKind = 'leafling' | 'emberpup' | 'shellow' | 'sprigling' | 'cinderkit' | 'snapling' | 'espurr' | 'espurr_vessel' | 'espurr_pickachu'
+export type PetKind = 'leafling' | 'emberpup' | 'shellow' | 'sprigling' | 'cinderkit' | 'snapling' | 'espurr' | 'espurr_vessel' | 'espurr_pickachu' | 'espurr_winged_gundam'
 
 export interface PetInfo {
   label: string
@@ -86,6 +86,19 @@ export const PETS: Record<PetKind, PetInfo> = {
     sheets: {
       idle: { name: 'espurr-pickachu/Idle', columns: 4, scale: 1.35 },
       walk: { name: 'espurr-pickachu/Walk', columns: 4, scale: 1.35 },
+    },
+  },
+  // The visitor in a suit of winged mobile armour. Wider than anything else in the picker, and
+  // scaled up a little to match — the wings are most of the silhouette and they read as clutter
+  // if it's drawn at the size of a small grey cat.
+  espurr_winged_gundam: {
+    label: 'Espurr Wing',
+    element: 'psychic',
+    region: 'guest',
+    blurb: 'Winged armour, twin vents, and a stare behind the visor.',
+    sheets: {
+      idle: { name: 'espurr-winged-gundam/Idle', columns: 4, scale: 1.5 },
+      walk: { name: 'espurr-winged-gundam/Walk', columns: 4, scale: 1.5 },
     },
   },
 }
@@ -637,6 +650,69 @@ const ESPURR_PICKACHU: Record<PetDir, string[]> = {
   ],
 }
 
+/**
+ * Espurr Wing: the visitor inside a suit of winged mobile armour. The wings are the silhouette —
+ * they take the space the ears do on every other version of it — and the visor is the face, so
+ * the stare is one green slot rather than two lilac discs. Extra slots on top of the shared six:
+ * `V` the fin, `R` the vents.
+ */
+const ESPURR_WINGED_GUNDAM: Record<PetDir, string[]> = {
+  down: [
+    '................',
+    '.....oVVVVo.....',
+    '....oBLLLLBo....',
+    '...oBBBBBBBBo...',
+    '.oAoBEBBBBEBoAo.',
+    'oAAoBBBmmBBBoAAo',
+    'oAAAoBBBBBBoAAAo',
+    'oAAAoRWWWWRoAAAo',
+    '.oAAoWWWWWWoAAo.',
+    '..oAoBWWWWBoAo..',
+    '...oBBBBBBBBo...',
+    '...oBBBBBBBBo...',
+    '....oBBBBBBo....',
+    '....oDo..oDo....',
+    '....oDo..oDo....',
+    '....ooo..ooo....',
+  ],
+  up: [
+    '................',
+    '.....oBBBBo.....',
+    '....oBBBBBBo....',
+    '...oBBBBBBBBo...',
+    '.oAoBBBBBBBBoAo.',
+    'oAAoBBBBBBBBoAAo',
+    'oAAAoBBBBBBoAAAo',
+    'oAAAoRBBBBRoAAAo',
+    '.oAAoBBBBBBoAAo.',
+    '..oAoBBBBBBoAo..',
+    '...oBBBBBBBBo...',
+    '...oBRRRRRRBo...',
+    '....oBBBBBBo....',
+    '....oDo..oDo....',
+    '....oDo..oDo....',
+    '....ooo..ooo....',
+  ],
+  right: [
+    '................',
+    '....oVVVo.......',
+    '...oBLLLBo......',
+    '..oBBBBBBBo.....',
+    '..oBEBBBBBo.....',
+    '.oAoBBBBBBoAo...',
+    'oAAoRWWWWBoAAo..',
+    'oAAoWWWWWBoAAo..',
+    '.oAoBWWWWBoAo...',
+    '..oBBBBBBBo.....',
+    '..oBBBBBBBo.....',
+    '..oBBBBBBBo.....',
+    '...oBBBBBo......',
+    '...oDo.oDo......',
+    '...oDo.oDo......',
+    '...ooo.ooo......',
+  ],
+}
+
 const ART: Record<PetKind, Record<PetDir, string[]>> = {
   leafling: LEAFLING,
   emberpup: EMBERPUP,
@@ -647,6 +723,7 @@ const ART: Record<PetKind, Record<PetDir, string[]>> = {
   espurr: ESPURR,
   espurr_vessel: ESPURR_VESSEL,
   espurr_pickachu: ESPURR_PICKACHU,
+  espurr_winged_gundam: ESPURR_WINGED_GUNDAM,
 }
 
 /** Body, lit, shaded, belly, accent, accent-lit — six colours is the whole look of a creature. */
@@ -677,6 +754,14 @@ const PALETTE: Record<PetKind, Record<string, string>> = {
     I: '#2a2320',
     P: '#fff6da',
     C: '#e0503c',
+  },
+  // Off-white armour rather than white, so the lit slot has somewhere brighter to go and the
+  // thing doesn't disappear against a pale floor. The visor is the only green on any of them.
+  espurr_winged_gundam: {
+    ...paint('#dfe2ea', '#f4f6fa', '#9aa0b0', '#2f4f9e', '#eef1f7', '#ffffff'),
+    E: '#5fd08a',
+    V: '#f2c53d',
+    R: '#c2352f',
   },
 }
 

@@ -25,3 +25,6 @@ logs
 
 # Staging dir for `make icons`; the derivatives it produces are committed, this is not.
 .icons
+
+# Python bytecode from scripts/sprites/
+__pycache__/
