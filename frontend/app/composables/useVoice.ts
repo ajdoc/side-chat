@@ -352,6 +352,8 @@ let localStream: MediaStream | null = null
  */
 let rawStream: MediaStream | null = null
 let micChain: MicChain | null = null
+/** Guards reviveMic: un-muting can fire twice in a frame, and getUserMedia is slow. */
+let reviving = false
 /**
  * Where remote control's two streams get delivered, once useRemoteControl registers for them.
  *
@@ -2470,6 +2472,16 @@ export function useVoice() {
    * whether you're on air.
    */
   function applyMic() {
+    applyMicTracks()
+    // Coming back on air is the moment to check the capture is still alive: a track left
+    // disabled for a long stretch can be ended out from under us (the OS or the browser
+    // reclaims the device, a headset sleeps), and `enabled = true` on a dead track is silence
+    // the UI can't see. Re-open it instead. See reviveMic.
+    if (micOpen.value) void reviveMic()
+  }
+
+  /** The `enabled` half of {@link applyMic}, on its own so reviveMic can re-assert it. */
+  function applyMicTracks() {
     const open = micOpen.value
     // Both ends of the chain, and the capture above all: disabling only what we send would
     // leave the microphone genuinely live — the browser's recording indicator lit, the OS
@@ -2829,6 +2841,51 @@ export function useVoice() {
     oldChain?.destroy()
     oldStream?.getTracks().forEach(t => t.stop())
     oldCapture?.getTracks().forEach(t => t.stop())
+  }
+
+  /**
+   * Bring the microphone back if it died while it was quiet.
+   *
+   * A muted or deafened call leaves the capture track disabled, sometimes for a long time, and
+   * a disabled track is not a protected one: the browser can end it when the device is taken
+   * elsewhere, the machine sleeps, or a bluetooth headset drops. Nothing about that is visible
+   * from `enabled`, so un-muting would go through cleanly and send nothing but silence — the
+   * "I unmuted and no-one can hear me" bug.
+   *
+   * So on the way back on air we check the capture rather than trust it, and a dead one is
+   * re-opened through the same swap a device change uses. Also resumes the audio context,
+   * which browsers suspend under the same long-idle conditions and which the mic chain (and
+   * therefore everything we send) hangs off.
+   */
+  async function reviveMic() {
+    if (!inCall.value || reviving) return
+
+    if (audioCtx?.state === 'suspended') await audioCtx.resume().catch(() => {})
+
+    const tracks = rawStream?.getAudioTracks() ?? []
+    const dead = tracks.length === 0 || tracks.every(t => t.readyState === 'ended')
+    if (!dead) return
+
+    reviving = true
+    try {
+      await swapMicCapture(micId.value, noiseSuppression.value)
+      if (!inCall.value) {
+        // The call ended while getUserMedia was in flight — teardown has already run, so the
+        // capture it just installed is ours to release. A mic left open after a call is over.
+        micChain?.destroy()
+        micChain = null
+        localStream?.getTracks().forEach(t => t.stop())
+        localStream = null
+        rawStream?.getTracks().forEach(t => t.stop())
+        rawStream = null
+        return
+      }
+      // The swap carries the mute state across, so this only re-asserts it — but micOpen may
+      // have changed again while getUserMedia was in flight.
+      applyMicTracks()
+    } finally {
+      reviving = false
+    }
   }
 
   /** Switch your microphone. Remembered either way; applied on the spot if a call is live. */
