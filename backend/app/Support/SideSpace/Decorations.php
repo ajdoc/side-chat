@@ -117,6 +117,7 @@ final class Decorations
             'plush_vessel' => self::kind('Espurr Vessel plush', solid: false),
             'plush_pickachu' => self::kind('Espurr Pikachu plush', solid: false),
             'plush_gundam' => self::kind('Espurr Wing plush', solid: false),
+            'plush_cubone' => self::kind('Cubone Vessel plush', solid: false),
             'crate' => self::kind('Crate'),
             'barrel' => self::kind('Barrel'),
             'campfire' => self::kind('Campfire'),

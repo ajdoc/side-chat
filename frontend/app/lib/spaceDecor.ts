@@ -863,6 +863,32 @@ const ESPURR_PLUSH_GUNDAM = [
   '...ooo....ooo...',
 ]
 
+/**
+ * The Cubone Vessel plush: a skull the size of its own head, and a bone sewn to one hand.
+ *
+ * The only one of the four that isn't the same silhouette in a different colour, so it gets the
+ * horns and a wider head. Palette as it stands: the paper white is the bone, the black is the
+ * robe, the red is the sigil.
+ */
+const CUBONE_VESSEL_PLUSH = [
+  '................',
+  '.....o....o.....',
+  '....opo..opo....',
+  '....oppooppo....',
+  '...opppppppppo..',
+  '..opprppppprppo.',
+  '..oppppprrppppo.',
+  '..opkprppprkpo..',
+  '..opppprrppppo..',
+  '..pokkkkkkkkop..',
+  '.ppokkkkkkkkopp.',
+  '.ppokkkrrkkkopp.',
+  '..pokkkkkkkkop..',
+  '...okko..okko...',
+  '...okko..okko...',
+  '...ooo....ooo...',
+]
+
 // --- things that hang on a wall ---
 
 const PAINTING = [
@@ -1890,6 +1916,11 @@ export const DECOR: Record<string, DecorKind & { art: string[] | string[][] | nu
     solid: false,
     sheet: { name: 'espurr-winged-gundam/Idle', columns: 4, scale: 1.9 },
     art: ESPURR_PLUSH_GUNDAM,
+  }),
+  plush_cubone: kind('Cubone Vessel plush', {
+    solid: false,
+    sheet: { name: 'cubone-vessel/Idle', columns: 4, scale: 1.5 },
+    art: CUBONE_VESSEL_PLUSH,
   }),
   crate: kind('Crate', { art: CRATE }),
   barrel: kind('Barrel', { art: BARREL }),

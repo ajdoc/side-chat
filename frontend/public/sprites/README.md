@@ -47,6 +47,22 @@ layout as above: 4 frames per direction, eight directions top to bottom.
 
 The yellow-hooded version, shared the same way by the `espurr_pickachu` pet and costume.
 
+## Espurr Wing
+
+    sprites/espurr-winged-gundam/Idle-Anim.png
+    sprites/espurr-winged-gundam/Walk-Anim.png
+
+The one in winged mobile armour, shared by the `espurr_winged_gundam` pet and costume and by the
+`plush_gundam` furniture.
+
+## Cubone Vessel
+
+    sprites/cubone-vessel/Idle-Anim.png
+    sprites/cubone-vessel/Walk-Anim.png
+
+A different creature rather than another Espurr outfit, shared by the `cubone_vessel` pet and
+costume and by the `plush_cubone` furniture.
+
 ## Stills — furniture that doesn't move
 
     sprites/decor/iron-throne.png

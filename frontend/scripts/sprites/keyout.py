@@ -116,10 +116,15 @@ def write_png(path, w, h, px):
     )
 
 
-def keyout(w, h, px):
-    """Punch the background out of `px` in place."""
+def keyout(w, h, px, floor=170):
+    """Punch the background out of `px` in place.
 
-    def backgroundish(p, bright=170, neutral=26):
+    `floor` is how bright a pixel has to be before it can be called background. 170 suits a clean
+    checkerboard; a noisy one wants it lower, and the bar for lowering it is what the *sprite*
+    is made of — dropping it to 150 is safe against a black robe and reckless against grey armour.
+    """
+
+    def backgroundish(p, bright=floor, neutral=26):
         """Light and colourless — the two things a checkerboard square is and a sword isn't."""
         r, g, b = px[p * 4], px[p * 4 + 1], px[p * 4 + 2]
 
@@ -155,7 +160,7 @@ def keyout(w, h, px):
     # The screenshot's antialiasing leaves a rim of pixels that are part checkerboard and part
     # sprite. Left alone they read as a pale halo round every blade. Each pass takes the rim
     # pixels that are still mostly background, with the bar dropped a little each time.
-    for bright in (200, 215):
+    for bright in (floor + 30, floor + 45):
         edge = [p for p in range(w * h) if not seen[p] and backgroundish(p, bright=bright, neutral=18)
                 and any(seen[q] for q in (p - 1, p + 1, p - w, p + w) if 0 <= q < w * h)]
 
@@ -165,6 +170,68 @@ def keyout(w, h, px):
     for p in range(w * h):
         if seen[p]:
             px[p * 4:p * 4 + 4] = b'\x00\x00\x00\x00'
+
+
+def drop_rules(w, h, px):
+    """Clear any row or column that is opaque from one edge of the image to the other.
+
+    Some generators draw a divider between the frames. It is dark, so keying can't reach it, and
+    it is the one thing in the picture that cannot be artwork: no sprite is a single pixel wide
+    and the full height of the sheet. Returns how many lines went.
+
+    Run the flood fill again afterwards — the line was a wall the fill couldn't get past, and the
+    background hiding behind it is only reachable once the wall is down.
+    """
+    gone = 0
+
+    def modal(line):
+        """The colour a line is mostly made of — the rule's own, if it is one."""
+        seen = {}
+        for p in line:
+            key = bytes(px[p * 4:p * 4 + 3])
+            seen[key] = seen.get(key, 0) + 1
+
+        return max(seen, key=seen.get)
+
+    def clear(line, ortho):
+        """Take the rule and leave the sprite.
+
+        Clearing the whole line would bite a notch out of anything drawn across it, so only the
+        pixels that *are* the rule go. Everything else on that line is artwork that happens to
+        share the column.
+
+        Two passes. The first takes the rule's own colour. The second takes what its antialiased
+        shoulders left behind, which is recognisable without any colour test at all: a fragment
+        of a line has nothing beside it, where a sprite crossing the line continues on both
+        sides. `ortho` gives a pixel's two neighbours across the line.
+        """
+        hue = modal([p for p in line if px[p * 4 + 3]])
+
+        for p in line:
+            if px[p * 4 + 3] and max(abs(px[p * 4 + c] - hue[c]) for c in range(3)) <= 24:
+                px[p * 4:p * 4 + 4] = b'\x00\x00\x00\x00'
+
+        for p in line:
+            if px[p * 4 + 3] and not any(px[q * 4 + 3] for q in ortho(p)):
+                px[p * 4:p * 4 + 4] = b'\x00\x00\x00\x00'
+
+    # "Nearly all the way across" rather than all of it: a rule drawn under the sprites is broken
+    # wherever one overlaps it, and its ends fade into the background the pass before this one
+    # just removed. A sheet's frames are a fraction of its height, so nothing but a rule comes
+    # near 90%.
+    for x in range(w):
+        column = [y * w + x for y in range(h)]
+        if sum(1 for p in column if px[p * 4 + 3]) >= h * 0.9:
+            clear(column, lambda p: [q for q, keep in ((p - 1, p % w), (p + 1, p % w < w - 1)) if keep])
+            gone += 1
+
+    for y in range(h):
+        row = [y * w + x for x in range(w)]
+        if sum(1 for p in row if px[p * 4 + 3]) >= w * 0.9:
+            clear(row, lambda p: [q for q, keep in ((p - w, p >= w), (p + w, p + w < w * h)) if keep])
+            gone += 1
+
+    return gone
 
 
 def trim(w, h, px):
@@ -191,13 +258,20 @@ def trim(w, h, px):
 # this, importing it would run the whole job again on that script's arguments.
 if __name__ == '__main__':
     args = [a for a in sys.argv[1:] if not a.startswith('--')]
-    flags = {a for a in sys.argv[1:] if a.startswith('--')}
+    flags = {a.split('=')[0] for a in sys.argv[1:] if a.startswith('--')}
+    opts = dict(a[2:].split('=') for a in sys.argv[1:] if a.startswith('--') and '=' in a)
     SRC, DST = args[0], args[1]
 
     w, h, px = read_png(SRC)
     print(f'in  {w}x{h}')
 
-    keyout(w, h, px)
+    floor = int(opts.get('floor', 170))
+    keyout(w, h, px, floor)
+
+    if '--drop-rules' in flags:
+        gone = drop_rules(w, h, px)
+        print(f'    dropped {gone} full-length rule(s)')
+        keyout(w, h, px, floor)
 
     if '--no-trim' in flags:
         write_png(DST, w, h, px)

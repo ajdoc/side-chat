@@ -555,8 +555,8 @@ const HAIR_ART: Record<HairKind, Record<SpriteDir, string[]>> = {
  * its chunky outline, without reproducing anyone's particular design.
  */
 
-export type CostumeKind = 'none' | 'cantor' | 'sentinel' | 'merc' | 'cactus' | 'guard' | 'colossus' | 'plush' | 'bunny' | 'faceless' | 'mummy' | 'jackoghost' | 'pirate' | 'robot' | 'witch' | 'devil' | 'espurr' | 'espurr_vessel' | 'espurr_pickachu' | 'espurr_winged_gundam'
-export const COSTUMES: CostumeKind[] = ['none', 'cantor', 'sentinel', 'merc', 'cactus', 'guard', 'colossus', 'plush', 'bunny', 'faceless', 'mummy', 'jackoghost', 'pirate', 'robot', 'witch', 'devil', 'espurr', 'espurr_vessel', 'espurr_pickachu', 'espurr_winged_gundam']
+export type CostumeKind = 'none' | 'cantor' | 'sentinel' | 'merc' | 'cactus' | 'guard' | 'colossus' | 'plush' | 'bunny' | 'faceless' | 'mummy' | 'jackoghost' | 'pirate' | 'robot' | 'witch' | 'devil' | 'espurr' | 'espurr_vessel' | 'espurr_pickachu' | 'espurr_winged_gundam' | 'cubone_vessel'
+export const COSTUMES: CostumeKind[] = ['none', 'cantor', 'sentinel', 'merc', 'cactus', 'guard', 'colossus', 'plush', 'bunny', 'faceless', 'mummy', 'jackoghost', 'pirate', 'robot', 'witch', 'devil', 'espurr', 'espurr_vessel', 'espurr_pickachu', 'espurr_winged_gundam', 'cubone_vessel']
 
 interface Costume {
   label: string
@@ -1376,6 +1376,34 @@ const ESPURR_WINGED_GUNDAM: Costume = {
   },
 }
 
+/**
+ * Cubone Vessel: a skull worn as a helmet, a black robe, and a bone carried at the side.
+ *
+ * Slots: `S` the skull, `k` the red sigils on it, `K` the robe, `n` the bone, `E` the eye socket
+ * and `d` the dark feet. The horned skull is what carries this at 16 pixels — it breaks the
+ * silhouette in two places, which no amount of detail on the robe would do.
+ */
+const CUBONE_VESSEL: Costume = {
+  label: 'Cubone Vessel',
+  blurb: 'A horned skull, a black robe, and a bone to hand',
+  covered: true,
+  paint: { S: '#e3ddcb', k: '#a32b28', K: '#241f2b', n: '#efe9d9', E: '#1c1a26', d: '#3b3644' },
+  sheets: {
+    idle: { name: 'cubone-vessel/Idle', columns: 4, scale: 1.7 },
+    walk: { name: 'cubone-vessel/Walk', columns: 4, scale: 1.7 },
+  },
+  body: {
+    down: ['....oSo..oSo....', '...oSSooSSo.....', '..oSSSSSSSSo....', '.oSSkSSSSkSSo...', '.oSSSSkkSSSSo...', '.oSSEkSSkESSo...', '.oSSSSkkSSSSo...', '..oSSSSSSSSo....', '...oKKKKKKo.....', '..noKKKKKKon....', '.nnoKKKkKKKonn..', '.nnoKKKKKKKKon..', '..noKKKKKKKKo...', '...oKKKKKKKKo...'],
+    up: ['....oSo..oSo....', '...oSSooSSo.....', '..oSSSSSSSSo....', '.oSSSSSSSSSSo...', '.oSSSSSSSSSSo...', '.oKKKKKKKKKKo...', '.oKKKKKKKKKKo...', '..oKKKKKKKKo....', '...oKKKKKKo.....', '..noKKKKKKon....', '.nnoKKKkKKKonn..', '.nnoKKKKKKKKon..', '..noKKKKKKKKo...', '...oKKKKKKKKo...'],
+    right: ['....oSo.oSo.....', '...oSSooSSo.....', '..oSSSSSSSo.....', '.oSSkSSSSSo.....', '.oSSSkkSSSo.....', '.oSEkSSSSSo.....', '.oSSSkSSSSo.....', '..oSSSSSSo......', '...oKKKKKo......', '...oKKKKKon.....', '...oKKKkKKonn...', '...oKKKKKKonnn..', '...oKKKKKKKon...', '...oKKKKKKKo....'],
+  },
+  legs: {
+    down: [['...oKKKooKKKo...', '....odd..ddo....'], ['...oKKKKKKKKo...', '...odd....ddo...']],
+    up: [['...oKKKooKKKo...', '....odd..ddo....'], ['...oKKKKKKKKo...', '...odd....ddo...']],
+    right: [['....oKKKKKo.....', '.....oddo.......'], ['...oKKKKKo......', '...odd..ddo.....']],
+  },
+}
+
 const COSTUME_ART: Record<Exclude<CostumeKind, 'none'>, Costume> = {
   cantor: CANTOR,
   sentinel: SENTINEL,
@@ -1396,6 +1424,7 @@ const COSTUME_ART: Record<Exclude<CostumeKind, 'none'>, Costume> = {
   espurr_vessel: ESPURR_VESSEL,
   espurr_pickachu: ESPURR_PICKACHU,
   espurr_winged_gundam: ESPURR_WINGED_GUNDAM,
+  cubone_vessel: CUBONE_VESSEL,
 }
 
 /** Names and one-liners for the picker, including the one for wearing nothing. */
@@ -1420,6 +1449,7 @@ export const COSTUME_META: Record<CostumeKind, { label: string, blurb: string }>
   espurr_vessel: { label: ESPURR_VESSEL.label, blurb: ESPURR_VESSEL.blurb },
   espurr_pickachu: { label: ESPURR_PICKACHU.label, blurb: ESPURR_PICKACHU.blurb },
   espurr_winged_gundam: { label: ESPURR_WINGED_GUNDAM.label, blurb: ESPURR_WINGED_GUNDAM.blurb },
+  cubone_vessel: { label: CUBONE_VESSEL.label, blurb: CUBONE_VESSEL.blurb },
 }
 
 /** The costume being worn, or null for none — the one place the `none` string is unpacked. */

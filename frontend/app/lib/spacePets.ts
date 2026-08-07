@@ -21,11 +21,13 @@ import type { SheetSpec } from './spriteSheet'
 import { blit, sprite } from './pixelSprite'
 import { drawSheetFrame, sheetReady, sheetRow } from './spriteSheet'
 
-export type PetKind = 'leafling' | 'emberpup' | 'shellow' | 'sprigling' | 'cinderkit' | 'snapling' | 'espurr' | 'espurr_vessel' | 'espurr_pickachu' | 'espurr_winged_gundam'
+export type PetKind = 'leafling' | 'emberpup' | 'shellow' | 'sprigling' | 'cinderkit' | 'snapling' | 'espurr' | 'espurr_vessel' | 'espurr_pickachu' | 'espurr_winged_gundam' | 'cubone_vessel'
 
 export interface PetInfo {
   label: string
-  element: 'grass' | 'fire' | 'water' | 'psychic'
+  // Only the first three are in the battle's type triangle; the guests sit outside it and take
+  // no bonus either way, which is what `BEATS[...] ?? null` on the server already assumes.
+  element: 'grass' | 'fire' | 'water' | 'psychic' | 'ground'
   /** Which group it belongs to — the picker shows them in this order. */
   region: 'first' | 'second' | 'guest'
   blurb: string
@@ -99,6 +101,19 @@ export const PETS: Record<PetKind, PetInfo> = {
     sheets: {
       idle: { name: 'espurr-winged-gundam/Idle', columns: 4, scale: 1.5 },
       walk: { name: 'espurr-winged-gundam/Walk', columns: 4, scale: 1.5 },
+    },
+  },
+  // Not the visitor at all — a second creature, in the same order's robe as the Espurr Vessel.
+  // Ground rather than psychic: the first pet in the guest row that isn't a recolour of the
+  // others, and the element is the clearest way to say so in the picker.
+  cubone_vessel: {
+    label: 'Cubone Vessel',
+    element: 'ground',
+    region: 'guest',
+    blurb: 'Wears the skull, carries the bone, keeps its own counsel.',
+    sheets: {
+      idle: { name: 'cubone-vessel/Idle', columns: 4, scale: 1.35 },
+      walk: { name: 'cubone-vessel/Walk', columns: 4, scale: 1.35 },
     },
   },
 }
@@ -713,6 +728,72 @@ const ESPURR_WINGED_GUNDAM: Record<PetDir, string[]> = {
   ],
 }
 
+/**
+ * Cubone Vessel: a small robed thing wearing a skull, with a bone held at its side.
+ *
+ * The skull is the whole sprite — it takes the top half and the horns break the silhouette, so
+ * it reads before any of the detail does. Facing away there's no skull and no bone hand, just
+ * the hood and the club poking out past the robe, which is the same trick the Espurr Vessel's
+ * back view plays. Extra slots on top of the shared six: `K` the robe, `S` the skull, `k` the
+ * red sigils painted on it, `n` the bone.
+ */
+const CUBONE_VESSEL: Record<PetDir, string[]> = {
+  down: [
+    '................',
+    '.....o....o.....',
+    '....oSo..oSo....',
+    '....oSSooSSo....',
+    '...oSSSSSSSSo...',
+    '..oSSkSSSSkSSo..',
+    '..oSSSSkkSSSSo..',
+    '..oSSEkSSkESSo..',
+    '..oSSSSkkSSSSo..',
+    '..noSSSSSSSSon..',
+    '.nnoKKKKKKKKonn.',
+    '.nnoKKKkkKKKonn.',
+    '..noKKKKKKKKon..',
+    '...oKKo..oKKo...',
+    '...oKKo..oKKo...',
+    '...ooo....ooo...',
+  ],
+  up: [
+    '................',
+    '.....o....o.....',
+    '....oSo..oSo....',
+    '....oSSooSSo....',
+    '...oSSSSSSSSo...',
+    '..oSSSSSSSSSSo..',
+    '..oSSSSSSSSSSo..',
+    '..oKKKKKKKKKKo..',
+    '..oKKKKKKKKKKo..',
+    '..oKKKKKKKKKKon.',
+    '.noKKKKkkKKKKonn',
+    '.nnoKKKKKKKKon..',
+    '..noKKKKKKKKo...',
+    '...oKKo..oKKo...',
+    '...oKKo..oKKo...',
+    '...ooo....ooo...',
+  ],
+  right: [
+    '................',
+    '.....o...o......',
+    '....oSo.oSo.....',
+    '...oSSooSSo.....',
+    '...oSSSSSSSo....',
+    '..oSSkSSSSSo....',
+    '..oSSSkkSSSo....',
+    '..oSEkSSSSSo....',
+    '..oSSSkSSSSo....',
+    '..oSSSSSSSSo....',
+    '...oKKKKKKo.nn..',
+    '...oKKKkKKonnn..',
+    '...oKKKKKKonn...',
+    '...oKKo.oKKo....',
+    '...oKKo.oKKo....',
+    '...ooo..ooo.....',
+  ],
+}
+
 const ART: Record<PetKind, Record<PetDir, string[]>> = {
   leafling: LEAFLING,
   emberpup: EMBERPUP,
@@ -724,6 +805,7 @@ const ART: Record<PetKind, Record<PetDir, string[]>> = {
   espurr_vessel: ESPURR_VESSEL,
   espurr_pickachu: ESPURR_PICKACHU,
   espurr_winged_gundam: ESPURR_WINGED_GUNDAM,
+  cubone_vessel: CUBONE_VESSEL,
 }
 
 /** Body, lit, shaded, belly, accent, accent-lit — six colours is the whole look of a creature. */
@@ -762,6 +844,16 @@ const PALETTE: Record<PetKind, Record<string, string>> = {
     E: '#5fd08a',
     V: '#f2c53d',
     R: '#c2352f',
+  },
+  // Bone and near-black, and one red doing all the talking. The robe is a shade off the outline
+  // rather than the same colour as it, or the whole lower half reads as a single blob.
+  cubone_vessel: {
+    ...paint('#2a2630', '#3b3644', '#1d1a23', '#d9d2c0', '#e8e2d2', '#f5f1e6'),
+    K: '#241f2b',
+    S: '#e3ddcb',
+    k: '#a32b28',
+    n: '#efe9d9',
+    E: '#1c1a26',
   },
 }
 
