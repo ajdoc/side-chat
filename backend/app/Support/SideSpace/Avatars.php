@@ -51,7 +51,7 @@ final class Avatars
         'none', 'cantor', 'sentinel', 'merc', 'cactus', 'guard', 'colossus',
         'plush', 'bunny', 'faceless', 'mummy', 'jackoghost', 'pirate', 'robot',
         'witch', 'devil', 'espurr', 'espurr_vessel', 'espurr_pickachu',
-        'espurr_winged_gundam', 'cubone_vessel',
+        'espurr_winged_gundam', 'cubone_vessel', 'espurr_tanjiro',
     ];
 
     /**
@@ -81,6 +81,8 @@ final class Avatars
             // A different creature rather than another outfit — hence an element of its own. It
             // sits outside the battle's type triangle, same as the four above.
             'cubone_vessel' => ['label' => 'Cubone Vessel', 'element' => 'ground', 'region' => 'guest'],
+            // Back to the visitor, in a chequered haori — an outfit again, so psychic again.
+            'espurr_tanjiro' => ['label' => 'Espurr Tanjiro', 'element' => 'psychic', 'region' => 'guest'],
         ];
     }
 

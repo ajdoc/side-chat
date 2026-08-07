@@ -114,7 +114,7 @@ const DECOR_GROUPS: { title: string, kinds: string[] }[] = [
   // office, so the themed presets lean on it too — and a room you can't add a pillar to is a
   // room you can't finish.
   { title: 'Stone and ceremony', kinds: ['pillar', 'statue', 'torch', 'boulder'] },
-  { title: 'Bits and pieces', kinds: ['plant', 'plush', 'plush_vessel', 'plush_pickachu', 'plush_gundam', 'plush_cubone', 'crate', 'barrel', 'campfire', 'rug', 'mat'] },
+  { title: 'Bits and pieces', kinds: ['plant', 'plush', 'plush_vessel', 'plush_pickachu', 'plush_gundam', 'plush_cubone', 'plush_tanjiro', 'crate', 'barrel', 'campfire', 'rug', 'mat'] },
   { title: 'On the wall', kinds: ['painting', 'poster', 'window', 'clock', 'shelf'] },
 ]
 

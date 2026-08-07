@@ -34,6 +34,12 @@ has squares darker than the default bar, and they survive as grit over the whole
 it until they go, and no further — the bar for how low is safe is what the **sprite** is made of.
 150 is fine against a black robe and reckless against grey armour.
 
+Reach for neither by default. A sprite with pale grey in it — this happens with the Espurr sets,
+whose fur sits within a few values of the checker's own grey — looks like it wants a lower floor
+and does not: the default already keys it correctly, and lowering the bar is what starts eating
+the animal. Check a zoomed frame against the *source* before concluding the keyer took something,
+because a hole in the fur is usually a hole the artist drew.
+
 `--drop-rules` is for the divider some generators draw between the frames. It's dark, so keying
 can't reach it; what gives it away is that it runs the length of the sheet, which no sprite does.
 Only the pixels that are the line itself go, so anything drawn across it keeps its middle.
@@ -53,3 +59,5 @@ detail that survives that.
 | `espurr-pickachu/*-Anim.png` | 1.87 MB, 624×1664 sheet, fully opaque | 112 KB, same size, 40 colours |
 | `espurr-winged-gundam/*-Anim.png` | 1.42 MB, 656×1632 sheet, fully opaque | 217 KB, same size, 48 colours |
 | `cubone-vessel/*-Anim.png` | 2.17 MB, 624×1664 sheet, opaque, noisy checker + a divider | 152 KB, same size, 48 colours (`--floor=150 --drop-rules`) |
+| `espurr-tanjiro/Idle-Anim.png` | 1.84 MB, 624×1696 sheet, fully opaque | 101 KB, same size, 48 colours |
+| `espurr-tanjiro/Walk-Anim.png` | 1.80 MB, 624×1696 sheet, fully opaque | 106 KB, same size, 48 colours |

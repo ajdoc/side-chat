@@ -555,8 +555,8 @@ const HAIR_ART: Record<HairKind, Record<SpriteDir, string[]>> = {
  * its chunky outline, without reproducing anyone's particular design.
  */
 
-export type CostumeKind = 'none' | 'cantor' | 'sentinel' | 'merc' | 'cactus' | 'guard' | 'colossus' | 'plush' | 'bunny' | 'faceless' | 'mummy' | 'jackoghost' | 'pirate' | 'robot' | 'witch' | 'devil' | 'espurr' | 'espurr_vessel' | 'espurr_pickachu' | 'espurr_winged_gundam' | 'cubone_vessel'
-export const COSTUMES: CostumeKind[] = ['none', 'cantor', 'sentinel', 'merc', 'cactus', 'guard', 'colossus', 'plush', 'bunny', 'faceless', 'mummy', 'jackoghost', 'pirate', 'robot', 'witch', 'devil', 'espurr', 'espurr_vessel', 'espurr_pickachu', 'espurr_winged_gundam', 'cubone_vessel']
+export type CostumeKind = 'none' | 'cantor' | 'sentinel' | 'merc' | 'cactus' | 'guard' | 'colossus' | 'plush' | 'bunny' | 'faceless' | 'mummy' | 'jackoghost' | 'pirate' | 'robot' | 'witch' | 'devil' | 'espurr' | 'espurr_vessel' | 'espurr_pickachu' | 'espurr_winged_gundam' | 'cubone_vessel' | 'espurr_tanjiro'
+export const COSTUMES: CostumeKind[] = ['none', 'cantor', 'sentinel', 'merc', 'cactus', 'guard', 'colossus', 'plush', 'bunny', 'faceless', 'mummy', 'jackoghost', 'pirate', 'robot', 'witch', 'devil', 'espurr', 'espurr_vessel', 'espurr_pickachu', 'espurr_winged_gundam', 'cubone_vessel', 'espurr_tanjiro']
 
 interface Costume {
   label: string
@@ -1404,6 +1404,35 @@ const CUBONE_VESSEL: Costume = {
   },
 }
 
+/**
+ * Espurr Tanjiro: the grey onesie under a chequered green haori, with a scar over one brow.
+ *
+ * Slots: `G` the fur, `K` the dark of the chequer, `A` its green, `I`/`P` the eye, `R` the scar,
+ * `d` the dark paws. The chequer runs on the *coat* only and stops at the collar — a check that
+ * carried on over the head would turn the whole sprite into a pattern, and then there is no
+ * character left to look at.
+ */
+const ESPURR_TANJIRO: Costume = {
+  label: 'Espurr Tanjiro',
+  blurb: 'A chequered green haori and a scar over one brow',
+  covered: true,
+  paint: { G: '#b9b6c4', K: '#1f2b26', A: '#3f7d5c', I: '#a982c9', P: '#f3e6ff', R: '#a8503c', d: '#6a6676' },
+  sheets: {
+    idle: { name: 'espurr-tanjiro/Idle', columns: 4, scale: 1.7 },
+    walk: { name: 'espurr-tanjiro/Walk', columns: 4, scale: 1.7 },
+  },
+  body: {
+    down: ['.....G....G.....', '....GGo..oGG....', '....oGGGGGGo....', '...oGGRGGGGGo...', '...oGIIGGIIGo...', '...oGIPGGPIGo...', '...oGGGGGGGGo...', '....oGGGGGGo....', '.....oKAKAo.....', '...oAKAKAKAKo...', '..oKAKAKAKAKAo..', '..oAKAKAKAKAKo..', '..oKAKAKAKAKAo..', '...oAKAKAKAKo...'],
+    up: ['.....G....G.....', '....GGo..oGG....', '....oGGGGGGo....', '...oGGGGGGGGo...', '...oGGGGGGGGo...', '...oGGGGGGGGo...', '...oGGGGGGGGo...', '....oGGGGGGo....', '.....oKAKAo.....', '...oAKAKAKAKo...', '..oKAKAKAKAKAo..', '..oAKAKAKAKAKo..', '..oKAKAKAKAKAo..', '...oAKAKAKAKo...'],
+    right: ['.......G........', '......GGo.......', '....oGGGGGGo....', '...oGGRGGGGo....', '...oGIIGGGGo....', '...oGIPGGGGo....', '...oGGGGGGGo....', '....oGGGGGo.....', '.....oKAKAo.....', '....oAKAKAKo....', '...oKAKAKAKAo...', '...oAKAKAKAKo...', '...oKAKAKAKAo...', '....oAKAKAKo....'],
+  },
+  legs: {
+    down: [['...oKAKooAKAo...', '....odd..ddo....'], ['...oKAKAKAKAo...', '...odd....ddo...']],
+    up: [['...oKAKooAKAo...', '....odd..ddo....'], ['...oKAKAKAKAo...', '...odd....ddo...']],
+    right: [['....oKAKAo......', '.....oddo.......'], ['...oKAKAo.......', '...odd..ddo.....']],
+  },
+}
+
 const COSTUME_ART: Record<Exclude<CostumeKind, 'none'>, Costume> = {
   cantor: CANTOR,
   sentinel: SENTINEL,
@@ -1425,6 +1454,7 @@ const COSTUME_ART: Record<Exclude<CostumeKind, 'none'>, Costume> = {
   espurr_pickachu: ESPURR_PICKACHU,
   espurr_winged_gundam: ESPURR_WINGED_GUNDAM,
   cubone_vessel: CUBONE_VESSEL,
+  espurr_tanjiro: ESPURR_TANJIRO,
 }
 
 /** Names and one-liners for the picker, including the one for wearing nothing. */
@@ -1450,6 +1480,7 @@ export const COSTUME_META: Record<CostumeKind, { label: string, blurb: string }>
   espurr_pickachu: { label: ESPURR_PICKACHU.label, blurb: ESPURR_PICKACHU.blurb },
   espurr_winged_gundam: { label: ESPURR_WINGED_GUNDAM.label, blurb: ESPURR_WINGED_GUNDAM.blurb },
   cubone_vessel: { label: CUBONE_VESSEL.label, blurb: CUBONE_VESSEL.blurb },
+  espurr_tanjiro: { label: ESPURR_TANJIRO.label, blurb: ESPURR_TANJIRO.blurb },
 }
 
 /** The costume being worn, or null for none — the one place the `none` string is unpacked. */

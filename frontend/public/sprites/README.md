@@ -63,6 +63,16 @@ The one in winged mobile armour, shared by the `espurr_winged_gundam` pet and co
 A different creature rather than another Espurr outfit, shared by the `cubone_vessel` pet and
 costume and by the `plush_cubone` furniture.
 
+## Espurr Tanjiro
+
+    sprites/espurr-tanjiro/Idle-Anim.png
+    sprites/espurr-tanjiro/Walk-Anim.png
+
+The one in the chequered haori, shared by the `espurr_tanjiro` pet and costume and by the
+`plush_tanjiro` furniture. The first set here whose Idle and Walk are **different animations**
+rather than one drawing saved under two names — so this is the one to look at when you want to
+know what the `walk`/`idle` split in a `SheetSpec` was always for.
+
 ## Stills — furniture that doesn't move
 
     sprites/decor/iron-throne.png

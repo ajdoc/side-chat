@@ -889,6 +889,32 @@ const CUBONE_VESSEL_PLUSH = [
   '...ooo....ooo...',
 ]
 
+/**
+ * The Tanjiro plush: the toy in its chequered haori.
+ *
+ * The check is two greens off the existing palette — the leaf and its lit shade — laid two
+ * pixels at a time, which is the smallest a check can be and still read as one. Above the collar
+ * it is the plain Espurr plush, because that is what is wearing the coat.
+ */
+const ESPURR_PLUSH_TANJIRO = [
+  '................',
+  '..o..........o..',
+  '..oa........ao..',
+  '..oaao....oaao..',
+  '..oaaao..oaaao..',
+  '..ollllllllllo..',
+  '.olllrllllllllo.',
+  '.olvvvvvvvvvvlo.',
+  '.olvVvllllvVvlo.',
+  '.olvvvllllvvvlo.',
+  '.ogGgGguugGgGgo.',
+  '.oGgGgGgGgGgGgo.',
+  '..ogGgGgGgGgGo..',
+  '...ouo....ouo...',
+  '...ouo....ouo...',
+  '...ooo....ooo...',
+]
+
 // --- things that hang on a wall ---
 
 const PAINTING = [
@@ -1921,6 +1947,11 @@ export const DECOR: Record<string, DecorKind & { art: string[] | string[][] | nu
     solid: false,
     sheet: { name: 'cubone-vessel/Idle', columns: 4, scale: 1.5 },
     art: CUBONE_VESSEL_PLUSH,
+  }),
+  plush_tanjiro: kind('Espurr Tanjiro plush', {
+    solid: false,
+    sheet: { name: 'espurr-tanjiro/Idle', columns: 4, scale: 1.5 },
+    art: ESPURR_PLUSH_TANJIRO,
   }),
   crate: kind('Crate', { art: CRATE }),
   barrel: kind('Barrel', { art: BARREL }),

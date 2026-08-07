@@ -21,7 +21,7 @@ import type { SheetSpec } from './spriteSheet'
 import { blit, sprite } from './pixelSprite'
 import { drawSheetFrame, sheetReady, sheetRow } from './spriteSheet'
 
-export type PetKind = 'leafling' | 'emberpup' | 'shellow' | 'sprigling' | 'cinderkit' | 'snapling' | 'espurr' | 'espurr_vessel' | 'espurr_pickachu' | 'espurr_winged_gundam' | 'cubone_vessel'
+export type PetKind = 'leafling' | 'emberpup' | 'shellow' | 'sprigling' | 'cinderkit' | 'snapling' | 'espurr' | 'espurr_vessel' | 'espurr_pickachu' | 'espurr_winged_gundam' | 'cubone_vessel' | 'espurr_tanjiro'
 
 export interface PetInfo {
   label: string
@@ -114,6 +114,19 @@ export const PETS: Record<PetKind, PetInfo> = {
     sheets: {
       idle: { name: 'cubone-vessel/Idle', columns: 4, scale: 1.35 },
       walk: { name: 'cubone-vessel/Walk', columns: 4, scale: 1.35 },
+    },
+  },
+  // The visitor in a chequered green haori, with a scar across one brow. The first of these
+  // whose two sheets are actually different animations — the others were one drawing used twice,
+  // so this is the first pet in the room whose walk is a walk.
+  espurr_tanjiro: {
+    label: 'Espurr Tanjiro',
+    element: 'psychic',
+    region: 'guest',
+    blurb: 'Chequered haori, a scar it will not explain, and that stare.',
+    sheets: {
+      idle: { name: 'espurr-tanjiro/Idle', columns: 4, scale: 1.35 },
+      walk: { name: 'espurr-tanjiro/Walk', columns: 4, scale: 1.35 },
     },
   },
 }
@@ -794,6 +807,70 @@ const CUBONE_VESSEL: Record<PetDir, string[]> = {
   ],
 }
 
+/**
+ * Espurr Tanjiro: the visitor in a chequered haori, with a scar over one eye.
+ *
+ * The chequer is the costume — three slots of it (`K` dark, `A` green, `a` green, lit) laid in a
+ * two-pixel check, which is as fine as a pattern can go here and still read as a pattern rather
+ * than as noise. The scar is two pixels of `R` on the brow and does more work than any of it.
+ */
+const ESPURR_TANJIRO: Record<PetDir, string[]> = {
+  down: [
+    '................',
+    '..o..........o..',
+    '..oa........ao..',
+    '..oaao....oaao..',
+    '..oaaao..oaaao..',
+    '..oBBBBBBBBBBo..',
+    '.oBBRBBBBBBBBBo.',
+    '.oBLRLLLLLLLLBo.',
+    '.oBIIPBBBBPIIBo.',
+    '.oBIIIBBBBIIIBo.',
+    '.oKAKABmmKAKAKo.',
+    '.oAKAKWWWWAKAKo.',
+    '..oKAKAKAKAKAo..',
+    '...oDo....oDo...',
+    '...oDo....oDo...',
+    '...ooo....ooo...',
+  ],
+  up: [
+    '................',
+    '..o..........o..',
+    '..oa........ao..',
+    '..oaao....oaao..',
+    '..oaaao..oaaao..',
+    '..oBBBBBBBBBBo..',
+    '.oBBBBBBBBBBBBo.',
+    '.oBLLLLLLLLLLBo.',
+    '.oBLLLLLLLLLLBo.',
+    '.oBBBBBBBBBBBBo.',
+    '.oKAKAKAKAKAKAo.',
+    '.oAKAKAKAKAKAKo.',
+    '..oKAKAKAKAKAo..',
+    '...oDo....oDo...',
+    '...oDo....oDo...',
+    '...ooo....ooo...',
+  ],
+  right: [
+    '................',
+    '....o......o....',
+    '....oao...oao...',
+    '....oaao.oaao...',
+    '...oaaaoaaao....',
+    '...oBBBBBBBo....',
+    '..oBRBBBBBBBo...',
+    '..oBRLLLLLLBo...',
+    '..oBIIPBBBBBo...',
+    '..oBIIIBBBBBo...',
+    '..oKAKAmBAKAo...',
+    '..oAKAWWWWKAo...',
+    '...oKAKAKAKo....',
+    '...oDo..oDo.....',
+    '...oDo..oDo.....',
+    '...ooo..ooo.....',
+  ],
+}
+
 const ART: Record<PetKind, Record<PetDir, string[]>> = {
   leafling: LEAFLING,
   emberpup: EMBERPUP,
@@ -806,6 +883,7 @@ const ART: Record<PetKind, Record<PetDir, string[]>> = {
   espurr_pickachu: ESPURR_PICKACHU,
   espurr_winged_gundam: ESPURR_WINGED_GUNDAM,
   cubone_vessel: CUBONE_VESSEL,
+  espurr_tanjiro: ESPURR_TANJIRO,
 }
 
 /** Body, lit, shaded, belly, accent, accent-lit — six colours is the whole look of a creature. */
@@ -854,6 +932,17 @@ const PALETTE: Record<PetKind, Record<string, string>> = {
     k: '#a32b28',
     n: '#efe9d9',
     E: '#1c1a26',
+  },
+  // The fur of the plain Espurr, because that is what is under the coat. The chequer is the
+  // accent pair doing a job they were never meant for — a dark green and a lit one — and the
+  // scar is the only warm colour on the sprite.
+  espurr_tanjiro: {
+    ...paint('#b9b6c4', '#d3d1dc', '#8f8b9e', '#e8e6ee', '#1f2b26', '#e6dfc9'),
+    K: '#1f2b26',
+    A: '#3f7d5c',
+    I: '#a982c9',
+    P: '#f3e6ff',
+    R: '#a8503c',
   },
 }
 
