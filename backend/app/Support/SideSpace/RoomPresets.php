@@ -49,7 +49,9 @@ final class RoomPresets
      *     floor: string,
      *     w: int,
      *     h: int,
-     *     objects: array<int, array{kind: string, x: int, y: int, facing?: string}>
+     *     objects: array<int, array{kind: string, x: int, y: int, facing?: string}>,
+     *     tiles?: array<int, string>,
+     *     backdrops?: array<int, array{key: string, x: int, y: int, w: int, h: int}>
      * }>
      */
     public static function all(): array
@@ -154,6 +156,49 @@ final class RoomPresets
                     ['desk', 2, 4], ['desk', 7, 4],
                     ['speaker', 0, 5], ['plant', 8, 5], ['watercooler', 8, 3],
                 ]),
+            ],
+
+            /*
+             * A walk-up living room, drawn rather than furnished. 14×8.
+             *
+             * The first room preset with **its own ground**, and the reason the shape above grew
+             * two optional fields. Every other entry here is a floor character and some furniture:
+             * you drag a rectangle, it is paved with `floor`, and the pieces spread to fit
+             * whatever size you dragged. That works because those rooms are *made of* the
+             * catalogue, so they can be any size.
+             *
+             * This one is a picture. Its walls, its couch and its fire escape are pixels, and the
+             * collision underneath them was derived from those pixels — so it has a grid of tiles
+             * that must be laid exactly as authored, and a backdrop that has to sit exactly on
+             * top of them. Stretch either and the couch stops being where the couch is.
+             *
+             * So it ignores the size you dragged and stamps at 14×8 from where you started. That
+             * is the honest behaviour for a room that is a photograph of a room, and the editor
+             * says so rather than letting somebody drag a 6×4 loft and wonder why it came out
+             * bigger.
+             */
+            'nyc-loft' => [
+                'label' => 'NYC loft',
+                'description' => 'A walk-up living room — brick, a worn couch and the city through the window (14×8)',
+                // Boards, which is what the artwork's floor is. Only used for any part of the
+                // dragged rectangle the fixed grid doesn't cover.
+                'floor' => Tiles::WOOD,
+                'w' => 14,
+                'h' => 8,
+                'tiles' => [
+                    '####.......###',
+                    '####.......###',
+                    '###.#....#.###',
+                    '......#.....##',
+                    '......##......',
+                    '###...........',
+                    '#..........##.',
+                    '#.............',
+                ],
+                'backdrops' => [['key' => 'nyc-loft', 'x' => 0, 'y' => 0, 'w' => 14, 'h' => 8]],
+                // Nothing placed: the furniture is painted into the picture, and a real couch
+                // standing on a drawn one is two couches.
+                'objects' => [],
             ],
         ];
     }

@@ -71,6 +71,11 @@ class SideSpaceController extends Controller
                 // The grid itself, so the picker can draw a real thumbnail of the room rather
                 // than a stock illustration of one.
                 'tiles' => $preset['tiles'],
+                // Which artwork the preset is drawn with, if any. Travels with the rest because
+                // the editor *loads* a preset over the room being edited, and a layout that
+                // arrived without its backdrop would come up as a grid of bare collision tiles.
+                'backdrops' => $preset['backdrops'] ?? [],
+                'portals' => $preset['portals'] ?? [],
                 'zones' => $preset['zones'],
                 'objects' => $preset['objects'],
                 'spawn' => $preset['spawn'],
@@ -125,6 +130,28 @@ class SideSpaceController extends Controller
             // floor plan that no longer has a wall under it.
             'objects' => $request->validated('objects', []),
             'spawn' => $request->validated('spawn'),
+            // Unlike `objects`, an absent projection means *unchanged* rather than "the default".
+            // A save is a whole room, but the projection is the room's frame rather than part of
+            // its contents, and a client that doesn't send one is an old client rather than
+            // somebody flattening the room on purpose.
+            'projection' => $request->validated('projection', $map->projection),
+            /*
+             * The same rule as `objects`, and deliberately *not* the one `projection` uses:
+             * absent means "no artwork", not "leave it alone".
+             *
+             * It was the other way round, and the failure mode is why it isn't any more. The
+             * client stopped sending this field during a rename, so every save took the
+             * "unchanged" branch and no edit could remove a backdrop — not loading another
+             * layout, not starting over. Nothing errored and nothing looked wrong until you
+             * noticed a city you had deleted was still there.
+             *
+             * "Unchanged" fails silently and permanently; "empty" fails visibly and is undone by
+             * loading the preset again. For a whole-map save — which is what this endpoint is —
+             * the room that arrives is the room, artwork included.
+             */
+            'backdrops' => $request->validated('backdrops') ?? [],
+            // Same rule as the artwork: a whole-map save carries the whole map, doorways included.
+            'portals' => $request->validated('portals') ?? [],
             'updated_by' => $request->user()?->id,
         ]);
 

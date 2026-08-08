@@ -1,3 +1,4 @@
+import type { BackdropPlacement } from '~/lib/spaceBackdrops'
 import type { SpaceObject } from '~/lib/spaceDecor'
 import type { SpaceZone } from '~/lib/spaceMapEngine'
 
@@ -17,6 +18,8 @@ export interface MapPreset {
   width: number
   height: number
   tiles: string[]
+  /** The artwork it's drawn with and where, or empty for a room drawn from its tiles. */
+  backdrops: BackdropPlacement[]
   zones: SpaceZone[]
   objects: SpaceObject[]
   spawn: { x: number, y: number }

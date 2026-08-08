@@ -149,6 +149,51 @@ const PRIME_FRAMES = 20
 const GAIN_OPEN = 0.7
 const GAIN_CLOSE = 0.3
 
+/**
+ * ## Impulses, which the estimate above is blind to by construction
+ *
+ * Everything so far learns what is *always there* and subtracts it. A keystroke is the exact
+ * opposite: five milliseconds of broadband energy 30dB over the room, gone before the estimate
+ * has moved a bin. So it passes through at full strength — and then, because it passed through,
+ * every envelope downstream reacts to it. The spectral gains all snap open and close again over
+ * ~10ms, the gate takes it for a word onset and holds the room open for a quarter second after
+ * it, and the compressor ducks and recovers. What arrives at the far end is not a click; it is
+ * a gust — the sound people describe as wind or a small explosion behind the typing.
+ *
+ * Detecting one needs two facts together, because either alone has a common false positive:
+ *
+ * - **A sudden rise** over a slow energy reference. Speech rises fast too, so on its own this
+ *   fires on every word onset.
+ * - **A flat spectrum.** Voiced speech is harmonic — energy in peaks with gaps between them,
+ *   spectral flatness around 0.01–0.1. A click, a clap, a mouse button is broadband hash near
+ *   0.3–0.6. On its own this fires on `s` and `sh`, which are also broadband — but those
+ *   neither rise this fast nor carry this much energy.
+ *
+ * What's done about one is deliberately a *duck* and not a removal, and this is the honest limit
+ * of the approach. A `t` or `k` release burst is itself a broadband impulse: it is a click that
+ * happens to be part of a word. Removing impulses outright takes the edge off consonants and
+ * makes speech sound mushy, so this takes ~12dB off at full strength — enough that a keystroke
+ * stops driving the envelopes downstream and lands as a soft tick, little enough that a plosive
+ * keeps its shape. Telling the two apart properly means knowing what speech *is*, which is a
+ * model, not a heuristic; see the note on `high` in micProcessing.ts.
+ */
+/** Frame energy over its slow reference, above which a frame is a candidate impulse. */
+const TRANSIENT_RISE = 8
+/** Spectral flatness above which a frame is broadband hash rather than a voice. */
+const TRANSIENT_FLATNESS = 0.22
+/** How fast the reference the rise is measured against moves. ~135ms — slower than any impulse,
+ *  faster than the noise estimate, so it tracks speech level rather than the room. */
+const TRANSIENT_REFERENCE = 0.02
+/** Frames the duck is held after the last impulse frame, so the ring-out is ducked too. */
+const TRANSIENT_HOLD = 3
+/** Duck envelope: down fast enough to catch a 5ms impulse, back up over ~40ms. */
+const TRANSIENT_DOWN = 0.6
+const TRANSIENT_UP = 0.12
+/** The band flatness is measured over. Below this is rumble the highpass owns, above it is
+ *  hiss that is flat whatever made it. */
+const TRANSIENT_LO_HZ = 200
+const TRANSIENT_HI_HZ = 8000
+
 class NoiseSuppressorProcessor extends AudioWorkletProcessor {
   static get parameterDescriptors() {
     return [
@@ -159,6 +204,9 @@ class NoiseSuppressorProcessor extends AudioWorkletProcessor {
       { name: 'amount', defaultValue: 0.8, minValue: 0, maxValue: 1, automationRate: 'k-rate' },
       // The quietest a suppressed band is allowed to get. Not zero — see the note above.
       { name: 'floor', defaultValue: 0.08, minValue: 0, maxValue: 1, automationRate: 'k-rate' },
+      // How hard to duck a detected impulse — 0 leaves keystrokes and claps alone, 1 takes
+      // ~12dB off them. See the note on impulses above for why it is never more than that.
+      { name: 'transient', defaultValue: 0.6, minValue: 0, maxValue: 1, automationRate: 'k-rate' },
     ]
   }
 
@@ -191,6 +239,20 @@ class NoiseSuppressorProcessor extends AudioWorkletProcessor {
     this.raw = new Float32Array(BINS)
 
     this.frames = 0
+
+    // Impulse detection. The band is resolved once here rather than per frame; `sampleRate` is
+    // fixed for the processor's lifetime, and a bin index is a divide we don't need 375 times a
+    // second. Clamped so an unusual rate can't walk the loop off the end of the array.
+    const binHz = sampleRate / FFT_SIZE
+    this.flatLo = Math.max(1, Math.min(BINS - 2, Math.round(TRANSIENT_LO_HZ / binHz)))
+    this.flatHi = Math.max(this.flatLo + 1, Math.min(BINS - 1, Math.round(TRANSIENT_HI_HZ / binHz)))
+    /** Slow energy reference an impulse is a rise *over*. */
+    this.slowEnergy = 0
+    /** Frames of duck left on the clock. */
+    this.transientHold = 0
+    /** The duck actually applied, ramped so it never steps. 1 = not ducking. */
+    this.transientGain = 1
+
     /** Set false by the host to bypass without tearing the graph down. */
     this.enabled = true
 
@@ -251,6 +313,35 @@ class NoiseSuppressorProcessor extends AudioWorkletProcessor {
     const priming = this.frames <= PRIME_FRAMES
     const isSpeech = !priming && frameEnergy > noiseEnergy * SPEECH_RATIO * SPEECH_RATIO
 
+    // Impulse? Rise first, because it's a comparison and the flatness below is a log per bin —
+    // on the overwhelming majority of frames nothing has risen and the sum is never paid.
+    const rise = frameEnergy / (this.slowEnergy + 1e-20)
+    if (!priming && rise > TRANSIENT_RISE) {
+      let logSum = 0
+      let linSum = 0
+      for (let k = this.flatLo; k <= this.flatHi; k++) {
+        const power = mag[k] * mag[k] + 1e-20
+        logSum += Math.log(power)
+        linSum += power
+      }
+      const count = this.flatHi - this.flatLo + 1
+      // Geometric mean over arithmetic mean: 1 for a perfectly flat spectrum, near 0 for one
+      // that is all peaks. The exp/log pair is how you take a geometric mean without underflow.
+      const flatness = Math.exp(logSum / count) / (linSum / count)
+      if (flatness > TRANSIENT_FLATNESS) this.transientHold = TRANSIENT_HOLD
+    }
+
+    // Slow reference, updated after the test so an impulse isn't measured against itself.
+    this.slowEnergy += (frameEnergy - this.slowEnergy) * TRANSIENT_REFERENCE
+
+    const ducking = this.transientHold > 0
+    if (ducking) this.transientHold--
+    // Full strength is ~12dB off; the parameter scales that back toward untouched.
+    const duckTarget = ducking ? 1 - 0.75 * parameters.transient[0] : 1
+    this.transientGain += (duckTarget - this.transientGain)
+      * (duckTarget < this.transientGain ? TRANSIENT_DOWN : TRANSIENT_UP)
+    const duck = this.transientGain
+
     for (let k = 0; k < BINS; k++) {
       const m = mag[k]
 
@@ -286,7 +377,10 @@ class NoiseSuppressorProcessor extends AudioWorkletProcessor {
       const prev = gain[k]
       gain[k] = prev + (g - prev) * (g > prev ? GAIN_OPEN : GAIN_CLOSE)
 
-      const applied = gain[k]
+      // The duck multiplies the smoothed gain rather than feeding into it: it's a decision about
+      // this instant, and folding it into `gain` would leave the smoother crawling back up from
+      // it for tens of milliseconds after the impulse — the tail that made a keystroke a gust.
+      const applied = gain[k] * duck
       re[k] *= applied
       im[k] *= applied
       // The upper half of the spectrum is the conjugate mirror of the lower. Keeping it that

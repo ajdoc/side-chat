@@ -51,8 +51,21 @@ final class Decorations
     /** Hangs on a wall — has to be *on* a solid tile, and never blocks anything. */
     public const MOUNT_WALL = 'wall';
 
-    /** How many of one room's worth of furniture is enough. Past this it's a rendering cost. */
-    public const MAX_PER_MAP = 120;
+    /**
+     * How many of one room's worth of furniture is enough.
+     *
+     * It was 120, which was a rendering budget: everything that asked about furniture — collision,
+     * the "press E" reach, the draw loop — walked the whole list, so the cost of a room was its
+     * furniture times how often anybody asked. A floor of an office is a real thing people build
+     * here and 120 pieces doesn't furnish one.
+     *
+     * So the scans became lookups on both sides — {@see self::solidTiles()} here, the tile and row
+     * index in `lib/spaceDecor.ts` there — and the ceiling is now about the room rather than the
+     * renderer: 1000 pieces on the largest grid we allow ({@see SideSpaceMap::MAX_SIZE}, 6,400
+     * tiles) is a room about a sixth furniture, which is a *full* office and not a wall of desks.
+     * It also keeps a saved map to a size that's unremarkable to store, send and parse.
+     */
+    public const MAX_PER_MAP = 1000;
 
     /**
      * The four ways a piece can be turned, in quarter turns clockwise from the front view the
@@ -65,11 +78,29 @@ final class Decorations
     private const TURNS = ['down' => 0, 'left' => 1, 'up' => 2, 'right' => 3];
 
     /**
+     * The catalogue, built once.
+     *
+     * It's a constant expressed as a literal, and {@see self::find()} is asked for one entry per
+     * piece of furniture per collision query — rebuilding the whole table each time was free at a
+     * hundred pieces and is not at a thousand. Nothing mutates it, so a static holds for the
+     * process.
+     *
+     * @var array<string, array{label: string, w: int, h: int, solid: bool, mount: string, interact: string|null, verb: string|null, door: bool}>|null
+     */
+    private static ?array $catalogue = null;
+
+    /**
      * Every kind, keyed by the value a saved map may use.
      *
      * @return array<string, array{label: string, w: int, h: int, solid: bool, mount: string, interact: string|null, verb: string|null, door: bool}>
      */
     public static function all(): array
+    {
+        return self::$catalogue ??= self::catalogue();
+    }
+
+    /** Built once per process — see {@see self::$catalogue}. */
+    private static function catalogue(): array
     {
         return [
             // --- doors ---
@@ -139,6 +170,7 @@ final class Decorations
             'window' => self::kind('Window', mount: self::MOUNT_WALL),
             'clock' => self::kind('Clock', mount: self::MOUNT_WALL),
             'shelf' => self::kind('Wall shelf', mount: self::MOUNT_WALL),
+
         ];
     }
 
@@ -242,13 +274,15 @@ final class Decorations
                 continue;
             }
 
+            // Keyed rather than a list scanned with in_array, which was a comparison per piece
+            // per piece — the one quadratic left in a rulebook that now runs over a thousand.
             $id = (string) ($object['id'] ?? '');
-            if (in_array($id, $seen, true)) {
+            if (isset($seen[$id])) {
                 $errors[$i] = 'Two pieces of furniture share an id.';
 
                 continue;
             }
-            $seen[] = $id;
+            $seen[$id] = true;
 
             $ox = (int) ($object['x'] ?? 0);
             $oy = (int) ($object['y'] ?? 0);
@@ -296,11 +330,45 @@ final class Decorations
     }
 
     /**
+     * Every tile something solid stands on, as a `"x,y" => true` set.
+     *
+     * The same question {@see self::blocks()} answers, asked once for the whole room instead of
+     * once per tile. Anything that sweeps an area — finding a spawn, checking a zone has
+     * somewhere to stand in it, an Among Us round placing bodies — was walking the furniture list
+     * for every square it looked at, which is a room's area times its furniture and grows the
+     * wrong way in exactly the big rooms this is for. Build this once, then ask it.
+     *
+     * @param  array<int, array<string, mixed>>  $objects
+     * @return array<string, true>
+     */
+    public static function solidTiles(array $objects): array
+    {
+        $solid = [];
+
+        foreach ($objects as $object) {
+            $kind = self::find((string) ($object['kind'] ?? ''));
+
+            if ($kind === null || ! $kind['solid']) {
+                continue;
+            }
+
+            foreach (self::footprint($object, $kind) as [$x, $y]) {
+                $solid["$x,$y"] = true;
+            }
+        }
+
+        return $solid;
+    }
+
+    /**
      * Does anything solid stand on this tile?
      *
      * Asked by the collision check and by every rule that has to know whether somewhere is
      * standable — spawning, zone validation, placing more furniture. A decoration occupies the
      * rectangle its catalogue entry declares, anchored at its stored top-left corner.
+     *
+     * A scan, because it's the right shape for a single question. Anything asking about more than
+     * a handful of tiles should hold a {@see self::solidTiles()} set instead.
      *
      * @param  array<int, array<string, mixed>>  $objects
      */

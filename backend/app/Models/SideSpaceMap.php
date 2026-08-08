@@ -49,7 +49,31 @@ class SideSpaceMap extends Model
      */
     public const MIN_SIZE = 8;
 
-    public const MAX_SIZE = 80;
+    /**
+     * The largest a map may be, each way.
+     *
+     * Raised from 80 when maps became things you *join together*. A 30-wide office extended with
+     * the 64-wide New York artwork is 94 tiles across, and under the old ceiling it simply could
+     * not exist — the city arrived with Central Park and SoHo cropped off, which is not the map
+     * anybody asked for. A limit that silently deletes half of what you placed is the wrong limit.
+     *
+     * 128 is still a bound rather than a licence: the grid travels as one document on every load,
+     * so the worst case here is about 16KB of tiles, and the renderer only ever visits what the
+     * camera can see. The thing that would actually hurt is furniture, and that has its own cap
+     * ({@see Decorations::MAX_PER_MAP}).
+     */
+    public const MAX_SIZE = 128;
+
+    /**
+     * This map's furniture as a `"x,y" => true` set, built on first use.
+     *
+     * {@see self::spawnPoint()} and the games that scatter things about ask
+     * {@see self::isWalkable()} for every square of the grid, so the alternative is the furniture
+     * list walked 6,400 times. Kept in step by {@see self::setAttribute()}.
+     *
+     * @var array<string, true>|null
+     */
+    private ?array $solid = null;
 
     protected $fillable = [
         'channel_id',
@@ -60,8 +84,41 @@ class SideSpaceMap extends Model
         'zones',
         'objects',
         'spawn',
+        'projection',
+        'backdrops',
+        'portals',
         'updated_by',
     ];
+
+    /**
+     * The ways a room can be drawn — mirrored in the client's lib/spaceProjection.ts.
+     *
+     * `flat` looks straight down at the grid; `iso` turns it 45° and halves its height, which is
+     * the projection hand-drawn room art is normally authored in. Nothing on the server renders
+     * anything, so this is only ever passed through — but it's validated here so a map can't be
+     * saved claiming a projection no client knows how to draw, which would be a room that opens
+     * to a blank canvas.
+     */
+    public const PROJECTIONS = ['flat', 'iso'];
+
+    /**
+     * How many pieces of backdrop artwork one map may carry.
+     *
+     * Low on purpose. Each placement is a full-size image every browser in the room downloads
+     * before the map is drawable, and the feature exists so a map can be a hand-built room *and*
+     * a city — a handful of districts, not a mosaic of forty.
+     */
+    public const MAX_BACKDROPS = 8;
+
+    /**
+     * How many doorways one map may have.
+     *
+     * Generous, because a portal costs almost nothing — a rectangle and a destination — and a
+     * city map with a station in every district is a reasonable thing to build. The bound exists
+     * so the walk loop's "am I standing in one" check stays a short scan rather than something
+     * worth indexing.
+     */
+    public const MAX_PORTALS = 40;
 
     protected function casts(): array
     {
@@ -72,6 +129,8 @@ class SideSpaceMap extends Model
             'zones' => 'array',
             'objects' => 'array',
             'spawn' => 'array',
+            'backdrops' => 'array',
+            'portals' => 'array',
         ];
     }
 
@@ -113,8 +172,24 @@ class SideSpaceMap extends Model
      */
     public function isWalkable(int $x, int $y): bool
     {
+        $this->solid ??= Decorations::solidTiles($this->objects ?? []);
+
         return Tiles::isWalkable($this->tileAt($x, $y))
-            && ! Decorations::blocks($this->objects ?? [], $x, $y);
+            && ! isset($this->solid["$x,$y"]);
+    }
+
+    /**
+     * Thrown away the moment the furniture changes, which is the whole reason this is here
+     * rather than a local in each sweep: a map saved and then asked about again inside one
+     * request would otherwise answer from the room it used to be.
+     */
+    public function setAttribute($key, $value)
+    {
+        if ($key === 'objects') {
+            $this->solid = null;
+        }
+
+        return parent::setAttribute($key, $value);
     }
 
     /**

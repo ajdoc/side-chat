@@ -38,7 +38,7 @@
 
 import type { Facing, Occupant, SpaceMap } from './spaceMapEngine'
 import type { SpaceObject } from './spaceDecor'
-import { DECOR, decorSize } from './spaceDecor'
+import { DECOR, decorDoors, decorSize } from './spaceDecor'
 
 /**
  * How close somebody has to be, in tiles, measured from the nearest tile of the door.
@@ -161,10 +161,7 @@ export function syncDoors(
 ): void {
   if (!map) return
 
-  for (const object of map.objects ?? []) {
-    const kind = DECOR[object.kind]
-    if (!kind?.door) continue
-
+  for (const object of decorDoors(map.objects)) {
     object.open = occupants.some(
       person => mayPass(locks, object.id, person.id) && distanceTo(object, person) <= DOOR_REACH,
     )
@@ -181,9 +178,8 @@ export function doorInFront(
   map: SpaceMap | null,
   at: { x: number, y: number, facing: Facing },
 ): SpaceObject | null {
-  for (const object of map?.objects ?? []) {
-    const kind = DECOR[object.kind]
-    if (kind?.door && distanceTo(object, at) <= DOOR_REACH) return object
+  for (const object of decorDoors(map?.objects)) {
+    if (distanceTo(object, at) <= DOOR_REACH) return object
   }
 
   return null

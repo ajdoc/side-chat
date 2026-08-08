@@ -41,7 +41,12 @@ final class SendMessageAction
         // a command — anything with an attachment or a GIF is a plain message. See WidgetService.
         $body = $data->body;
 
-        $isPlainText = $files === [] && $uploadIds === [] && $data->gif === null;
+        // In an encrypted channel the body is ciphertext, so none of the command shapes can
+        // be recognised — and mustn't be guessed at. A base64 envelope that happens to start
+        // with a prefix character is not a command, and running one would answer a message
+        // nobody sent. Commands come back the moment encryption is turned off.
+        $isPlainText = ! $channel->isEncrypted()
+            && $files === [] && $uploadIds === [] && $data->gif === null;
 
         if ($isPlainText && ($command = $this->commands->parse($body)) !== null) {
             if ($command->namespace !== CommandParser::SLASH_NAMESPACE) {
@@ -67,9 +72,14 @@ final class SendMessageAction
             $body = $outcome->body;
         }
 
+        // Stamped from the channel as it is *at this instant*, and never read back off the
+        // channel afterwards. The setting can be turned off tomorrow; what this message is
+        // can't change, because nobody can un-encrypt what was sent encrypted.
         $message = $channel->messages()->create([
             'user_id' => $user->id,
             'body' => $body,
+            'encrypted' => $channel->isEncrypted(),
+            'epoch' => $channel->currentEpoch(),
             'reply_to_id' => $data->reply_to_id,
         ]);
 
@@ -83,7 +93,12 @@ final class SendMessageAction
 
         // Any URL we haven't seen before unfurls on the queue and arrives over the
         // websocket a moment later — the send itself never waits on a third-party fetch.
-        $this->links->syncFor($message);
+        // Skipped entirely when encrypted: there is no URL to find in ciphertext, and the
+        // one thing worse than no preview would be the server reaching out to a third party
+        // about a link it was never meant to see.
+        if (! $message->isEncrypted()) {
+            $this->links->syncFor($message);
+        }
 
         $message->load('user', 'replyTo.user', 'attachments', 'reactions.user', 'linkPreviews');
 
@@ -140,6 +155,16 @@ final class SendMessageAction
     {
         $container = $channel->container();
         if ($container === null || $message->body === null) {
+            return ['mentionsAll' => false, 'mentionedUserIds' => []];
+        }
+
+        // Ciphertext names nobody. The unread badge still lights up — that's ChannelActivity's
+        // job and it doesn't need the body — but it lights up as an ordinary unread rather
+        // than a mention. Working out who was called out is the client's to do once it has
+        // decrypted, and until it can tell the server that without handing back the plaintext,
+        // an encrypted mention is a quieter notification than an unencrypted one. Say so in
+        // the UI rather than pretending otherwise.
+        if ($message->isEncrypted()) {
             return ['mentionsAll' => false, 'mentionedUserIds' => []];
         }
 

@@ -32,7 +32,11 @@ class SearchController extends Controller
         $filters = $request->filters();
 
         return match ($request->type()) {
-            'messages' => SearchMessageResource::collection($this->search->messagePage($user, $term, $filters)),
+            // The only listing that carries the blind spot with it: message search is the one
+            // an encrypted channel makes incomplete, and a result count that silently omits
+            // them would have people concluding they never said the thing they're looking for.
+            'messages' => SearchMessageResource::collection($this->search->messagePage($user, $term, $filters))
+                ->additional(['encrypted_skipped' => $this->search->encryptedSkipped($user, $filters)]),
             'channels' => ChannelResource::collection($this->search->channelPage($user, $term, $filters)),
             'conversations' => ConversationResource::collection($this->search->conversationPage($user, $term)),
             'servers' => ServerResource::collection($this->search->serverPage($user, $term)),
@@ -65,6 +69,10 @@ class SearchController extends Controller
                 'servers' => ServerResource::collection($results['servers'])->resolve(),
                 'messages' => SearchMessageResource::collection($results['messages'])->resolve(),
             ],
+            // Outside `data` because it isn't a result — it's a fact about the search. The
+            // palette shows at most a handful of messages anyway, so it reads as a footnote
+            // there and as a banner on the full list.
+            'encrypted_skipped' => $this->search->encryptedSkipped($request->user(), $request->filters()),
         ]);
     }
 }

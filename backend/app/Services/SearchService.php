@@ -135,11 +135,14 @@ final class SearchService
      */
     private function messages(User $user, string $term, SearchFilters $filters): Builder
     {
-        $query = Message::query()
-            ->visibleTo($user)
-            // System messages ("X joined the server") are furniture. They match common
-            // words, there are a lot of them, and nobody has ever gone looking for one.
-            ->where('type', '!=', 'system')
+        $query = $this->messageScope($user, $filters)
+            // Ciphertext can't be matched, and matching it *by accident* would be worse than
+            // not matching it: a base64 body will happily contain any short term you type.
+            // This is where the whole feature is felt by people who never turned it on — see
+            // {@see encryptedSkipped()}, which counts what this line hides so the UI can say
+            // so rather than quietly returning less. Turning encryption off restores search
+            // for everything sent afterwards; the encrypted era stays hidden forever.
+            ->where('encrypted', false)
             ->with([
                 'user',
                 'attachments',
@@ -148,6 +151,46 @@ final class SearchService
                 'sideChat:id,name',
                 'thread:id,name',
             ]);
+
+        $this->driver->matchProse($query, 'body', $term);
+
+        return $query;
+    }
+
+    /**
+     * How many messages the search couldn't look inside, because they're encrypted.
+     *
+     * Not "how many would have matched" — that is unknowable, which is the point of the
+     * feature. It's the size of the blind spot within everything else the search was told
+     * to look at: same visibility, same channel scope, same date and author filters, so
+     * narrowing a search narrows this number too and it stays about the search in front of
+     * you rather than about the account.
+     *
+     * The term is deliberately not applied. Counting encrypted rows whose *ciphertext*
+     * matched would be counting noise, and would leak a little about the plaintext besides.
+     */
+    public function encryptedSkipped(User $user, SearchFilters $filters): int
+    {
+        return $this->messageScope($user, $filters)->where('encrypted', true)->count();
+    }
+
+    /**
+     * Everything that decides *which* messages are in scope, short of the term itself.
+     *
+     * Shared by the search and by the count of what the search couldn't read, so the two
+     * can never disagree about what they were looking at — a "12 encrypted messages not
+     * searched" drawn from a wider scope than the results would be a worse lie than saying
+     * nothing.
+     *
+     * @return Builder<Message>
+     */
+    private function messageScope(User $user, SearchFilters $filters): Builder
+    {
+        $query = Message::query()
+            ->visibleTo($user)
+            // System messages ("X joined the server") are furniture. They match common
+            // words, there are a lot of them, and nobody has ever gone looking for one.
+            ->where('type', '!=', 'system');
 
         $this->applyScope($query, $filters, 'channel_id');
 
@@ -169,8 +212,6 @@ final class SearchService
             'image' => $query->whereHas('attachments', fn ($q) => $q->where('mime_type', 'like', 'image/%')),
             default => null,
         };
-
-        $this->driver->matchProse($query, 'body', $term);
 
         return $query;
     }

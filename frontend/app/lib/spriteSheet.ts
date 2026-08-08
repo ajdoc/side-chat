@@ -134,7 +134,12 @@ export function drawStill(
   const dh = size * spec.scale
   const dw = dh * (img.width / img.height)
 
+  // Smoothing off, like every other blit in the room: these are pixel art, and a browser's
+  // default bilinear filter turns a hard-edged sprite into a smear the moment the zoom isn't 1.
+  ctx.save()
+  ctx.imageSmoothingEnabled = false
   ctx.drawImage(img, px - dw / 2, py - dh, dw, dh)
+  ctx.restore()
 
   return true
 }

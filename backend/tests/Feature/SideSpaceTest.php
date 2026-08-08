@@ -8,6 +8,7 @@ use App\Models\User;
 use App\Models\VoiceParticipant;
 use App\Models\Widget;
 use App\Services\VoiceService;
+use App\Support\SideSpace\Backdrops;
 use App\Support\SideSpace\Decorations;
 use App\Support\SideSpace\MapPresets;
 use App\Support\SideSpace\RoomPresets;
@@ -150,6 +151,34 @@ it('lists the room presets, each one furnishable on the floor it asks for', func
     foreach (RoomPresets::all() as $key => $preset) {
         expect(Tiles::isWalkable($preset['floor']))->toBeTrue("The '$key' room is paved with something nobody can stand on.");
 
+        /*
+         * A room that brings its own ground has to bring exactly as much of it as it claims, and
+         * its artwork has to cover precisely that. Both are stamped straight into somebody's map:
+         * a grid one row short lays a strip of the room they were standing on, and a backdrop
+         * that doesn't match its grid is a picture whose walls are not where the walls are.
+         */
+        if (isset($preset['tiles'])) {
+            expect($preset['tiles'])->toHaveCount($preset['h'], "The '$key' room's grid isn't {$preset['h']} rows.");
+
+            foreach ($preset['tiles'] as $row => $line) {
+                expect(mb_strlen($line))->toBe($preset['w'], "Row $row of the '$key' room isn't {$preset['w']} wide.");
+            }
+
+            foreach ($preset['backdrops'] ?? [] as $art) {
+                expect(Backdrops::find($art['key']))->not->toBeNull("The '$key' room names artwork that doesn't exist.");
+                expect([$art['w'], $art['h']])->toBe([$preset['w'], $preset['h']], "The '$key' room's artwork doesn't cover its grid.");
+            }
+
+            // And somewhere to stand, or it is a room that stamps a solid block into a map.
+            $open = 0;
+            foreach ($preset['tiles'] as $line) {
+                foreach (str_split($line) as $tile) {
+                    $open += Tiles::isWalkable($tile) ? 1 : 0;
+                }
+            }
+            expect($open)->toBeGreaterThan(0, "The '$key' room has nowhere to stand in it.");
+        }
+
         $taken = [];
 
         foreach ($preset['objects'] as $object) {
@@ -212,6 +241,246 @@ it('lets the server owner rebuild the room and tells everyone in it', function (
     expect($channel->spaceMap()->sole()->height)->toBe(10);
 
     Event::assertDispatched(SideSpaceMapUpdated::class);
+});
+
+it('saves which way the room is drawn, and defaults it to flat', function () {
+    [$owner, , $channel] = ownerWithSpaceChannel();
+    Passport::actingAs($owner);
+
+    // A map nobody has ever chosen a projection for is flat — that's what every room built
+    // before the isometric view existed is, and it must not change under them.
+    $this->getJson("/api/channels/{$channel->id}/space/map")
+        ->assertOk()
+        ->assertJsonPath('data.projection', 'flat');
+
+    $this->putJson("/api/channels/{$channel->id}/space/map", validMapPayload(['projection' => 'iso']))
+        ->assertOk()
+        ->assertJsonPath('data.projection', 'iso');
+
+    expect($channel->spaceMap()->sole()->projection)->toBe('iso');
+
+    // A save that names no projection leaves the room's own alone. Unlike the furniture, an
+    // absent projection is "unchanged" rather than "the default" — an older client saving a
+    // layout must not quietly flatten a room somebody built isometric.
+    $this->putJson("/api/channels/{$channel->id}/space/map", validMapPayload())
+        ->assertOk()
+        ->assertJsonPath('data.projection', 'iso');
+});
+
+it('saves backdrop artwork with the rectangle it covers, and lets it be taken off again', function () {
+    [$owner, , $channel] = ownerWithSpaceChannel();
+    Passport::actingAs($owner);
+
+    // A placement, not a whole-map key: the point of the rectangle is that a map can be part
+    // hand-built room and part artwork.
+    $placed = [['key' => 'gather-town', 'x' => 2, 'y' => 1, 'w' => 6, 'h' => 4]];
+
+    $this->putJson("/api/channels/{$channel->id}/space/map", validMapPayload(['backdrops' => $placed]))
+        ->assertOk()
+        ->assertJsonPath('data.backdrops.0.key', 'gather-town')
+        ->assertJsonPath('data.backdrops.0.x', 2)
+        ->assertJsonPath('data.backdrops.0.w', 6);
+
+    // A whole-map save carries the whole map, artwork included — so an empty list, or no list at
+    // all, is a room with no artwork. This used to mean "leave it alone", and that made a
+    // backdrop impossible to remove the moment the client stopped sending the field. See the
+    // note in SideSpaceController::update.
+    $this->putJson("/api/channels/{$channel->id}/space/map", validMapPayload(['backdrops' => []]))
+        ->assertOk()
+        ->assertJsonCount(0, 'data.backdrops');
+
+    $this->putJson("/api/channels/{$channel->id}/space/map", validMapPayload(['backdrops' => $placed]))
+        ->assertOk()
+        ->assertJsonCount(1, 'data.backdrops');
+
+    $this->putJson("/api/channels/{$channel->id}/space/map", validMapPayload())
+        ->assertOk()
+        ->assertJsonCount(0, 'data.backdrops');
+});
+
+it('refuses backdrop artwork that is not one of ours', function () {
+    [$owner, , $channel] = ownerWithSpaceChannel();
+    Passport::actingAs($owner);
+
+    // The rule that matters: a map is user-authored and any member may save one, so a stored
+    // path would be an address a member gets every other browser in the room to fetch.
+    $this->putJson("/api/channels/{$channel->id}/space/map", validMapPayload([
+        'backdrops' => [['key' => 'https://example.com/tracker.png', 'x' => 0, 'y' => 0, 'w' => 4, 'h' => 4]],
+    ]))
+        ->assertStatus(422)
+        ->assertJsonValidationErrors('backdrops.0.key');
+});
+
+it('seeds a new channel with its preset\'s backdrop, and the artwork map is walkable throughout', function () {
+    $preset = MapPresets::find('gather-town');
+
+    $placement = $preset['backdrops'][0];
+
+    expect($placement['key'])->toBe('gather-town')
+        ->and(Backdrops::find($placement['key']))->not->toBeNull()
+        // The placement has to cover the grid it was cut for, or the streets in the picture stop
+        // lining up with the squares people can stand on.
+        ->and([$placement['w'], $placement['h']])->toBe([$preset['width'], $preset['height']]);
+
+    // The grid is machine-derived from the artwork, so the thing worth asserting is not any
+    // particular tile but that the island is one place: four landmasses joined by four bridges
+    // is four ways for a generated map to be silently cut in half.
+    $tiles = $preset['tiles'];
+    $spawn = $preset['spawn'];
+
+    // Every tile you can stand on, not just floor. The map's links across the harbour are laid
+    // as boards, so a flood that only followed '.' would stop at every bridge — which is exactly
+    // what it did, and it failed this test rather than the map.
+    $seen = [];
+    $stack = [[$spawn['x'], $spawn['y']]];
+    while ($stack) {
+        [$x, $y] = array_pop($stack);
+        $key = "$x,$y";
+        if (isset($seen[$key]) || ! Tiles::isWalkable($tiles[$y][$x] ?? '#')) {
+            continue;
+        }
+        $seen[$key] = true;
+        $stack[] = [$x + 1, $y];
+        $stack[] = [$x - 1, $y];
+        $stack[] = [$x, $y + 1];
+        $stack[] = [$x, $y - 1];
+    }
+
+    $walkable = 0;
+    foreach ($tiles as $row) {
+        foreach (str_split($row) as $tile) {
+            $walkable += Tiles::isWalkable($tile) ? 1 : 0;
+        }
+    }
+
+    expect(count($seen))->toBeGreaterThan((int) ($walkable * 0.95));
+
+    /*
+     * And the property the whole feature turns on: you can get *in* from the outside. Wherever
+     * this map is placed, its rim is what meets the map next door, so a solid rim is a city
+     * nobody can walk into — which is precisely the bug that took four attempts to fix.
+     */
+    $rim = [];
+    for ($x = 0; $x < $preset['width']; $x++) {
+        $rim[] = [$x, 0];
+        $rim[] = [$x, $preset['height'] - 1];
+    }
+    for ($y = 0; $y < $preset['height']; $y++) {
+        $rim[] = [0, $y];
+        $rim[] = [$preset['width'] - 1, $y];
+    }
+
+    foreach ($rim as [$x, $y]) {
+        expect(Tiles::isWalkable($tiles[$y][$x]))->toBeTrue("The rim blocks at $x,$y, so nothing placed beside this map could be walked into.");
+        expect(isset($seen["$x,$y"]))->toBeTrue("The rim at $x,$y is walkable but cut off from the city.");
+    }
+});
+
+it('saves doorways, and refuses ones that lead nowhere real', function () {
+    [$owner, $server, $channel] = ownerWithSpaceChannel();
+    Passport::actingAs($owner);
+
+    $doorway = fn (array $to) => [[
+        'id' => 'p1', 'name' => 'Doorway', 'x' => 2, 'y' => 2, 'w' => 2, 'h' => 1, 'to' => $to,
+    ]];
+
+    // Somewhere else on this map, which the payload's own grid says you can stand on.
+    $this->putJson("/api/channels/{$channel->id}/space/map", validMapPayload([
+        'portals' => $doorway(['kind' => 'point', 'x' => 6, 'y' => 6]),
+    ]))
+        ->assertOk()
+        ->assertJsonPath('data.portals.0.to.x', 6);
+
+    // A doorway you cannot step into is one that would silently never fire.
+    $this->putJson("/api/channels/{$channel->id}/space/map", validMapPayload([
+        'portals' => [[
+            'id' => 'p1', 'name' => 'Sealed', 'x' => 0, 'y' => 0, 'w' => 1, 'h' => 1,
+            'to' => ['kind' => 'point', 'x' => 5, 'y' => 5],
+        ]],
+    ]))->assertStatus(422)->assertJsonValidationErrors('portals.0');
+
+    // An exit inside a wall would drop somebody into the masonry.
+    $this->putJson("/api/channels/{$channel->id}/space/map", validMapPayload([
+        'portals' => $doorway(['kind' => 'point', 'x' => 0, 'y' => 0]),
+    ]))->assertStatus(422)->assertJsonValidationErrors('portals.0.to');
+
+    // A doorway is walked into by everybody in the room, so one pointing at a text channel is
+    // not a broken link — it is a door to somewhere that isn't a place.
+    $text = Channel::factory()->for($server)->create(['type' => 'text']);
+
+    $this->putJson("/api/channels/{$channel->id}/space/map", validMapPayload([
+        'portals' => $doorway(['kind' => 'room', 'channel_id' => $text->id]),
+    ]))->assertStatus(422)->assertJsonValidationErrors('portals.0.to');
+});
+
+it('round-trips every part of a map the editor can change', function () {
+    [$owner, , $channel] = ownerWithSpaceChannel();
+    Passport::actingAs($owner);
+
+    /*
+     * The guard for the bug this feature kept hitting.
+     *
+     * Three times running, a new part of the map — artwork, then its rename, then doorways —
+     * was added to the editor, filled in correctly, and dropped on the way to the server by a
+     * hand-maintained list of fields to send. The server read the missing field as "there are
+     * none of those" and wiped it on every save. Nothing errored; the feature just didn't stick.
+     *
+     * So this saves a map with *one of everything* and demands it all comes back. It cannot see
+     * the client's payload, but it pins the contract the client has to meet, and it fails loudly
+     * the moment a field stops surviving a save.
+     */
+    $payload = validMapPayload([
+        'projection' => 'iso',
+        'backdrops' => [['key' => 'gather-town', 'x' => 1, 'y' => 1, 'w' => 5, 'h' => 4]],
+        'portals' => [[
+            'id' => 'p1', 'name' => 'To the park', 'x' => 2, 'y' => 2, 'w' => 2, 'h' => 1,
+            'to' => ['kind' => 'point', 'x' => 6, 'y' => 6],
+        ]],
+        'zones' => [['id' => 'z1', 'name' => 'Corner', 'kind' => 'private', 'x' => 1, 'y' => 1, 'w' => 3, 'h' => 3]],
+        'objects' => [['id' => 'o1', 'kind' => 'plant', 'x' => 4, 'y' => 4]],
+    ]);
+
+    $this->putJson("/api/channels/{$channel->id}/space/map", $payload)->assertOk();
+
+    // Read back fresh, not from the save's own response: a field can be echoed by the resource
+    // and still never have been written.
+    $this->getJson("/api/channels/{$channel->id}/space/map")
+        ->assertOk()
+        ->assertJsonPath('data.name', 'Rebuilt')
+        ->assertJsonPath('data.projection', 'iso')
+        ->assertJsonPath('data.spawn.x', 5)
+        ->assertJsonPath('data.zones.0.name', 'Corner')
+        ->assertJsonPath('data.objects.0.kind', 'plant')
+        ->assertJsonPath('data.backdrops.0.key', 'gather-town')
+        ->assertJsonPath('data.backdrops.0.w', 5)
+        ->assertJsonPath('data.portals.0.name', 'To the park')
+        ->assertJsonPath('data.portals.0.to.kind', 'point')
+        ->assertJsonPath('data.portals.0.to.y', 6);
+});
+
+it('refuses a doorway into another server', function () {
+    [$owner, , $channel] = ownerWithSpaceChannel();
+    // A Side Space somewhere else entirely — the one destination that must never be reachable,
+    // because who may follow somebody through it is a question this feature does not answer.
+    [, , $elsewhere] = ownerWithSpaceChannel();
+
+    Passport::actingAs($owner);
+
+    $this->putJson("/api/channels/{$channel->id}/space/map", validMapPayload([
+        'portals' => [[
+            'id' => 'p1', 'name' => 'Out', 'x' => 2, 'y' => 2, 'w' => 1, 'h' => 1,
+            'to' => ['kind' => 'room', 'channel_id' => $elsewhere->id],
+        ]],
+    ]))->assertStatus(422)->assertJsonValidationErrors('portals.0.to');
+});
+
+it('refuses a projection nothing knows how to draw', function () {
+    [$owner, , $channel] = ownerWithSpaceChannel();
+    Passport::actingAs($owner);
+
+    $this->putJson("/api/channels/{$channel->id}/space/map", validMapPayload(['projection' => 'dimetric']))
+        ->assertStatus(422)
+        ->assertJsonValidationErrors('projection');
 });
 
 it('lets a plain member rebuild the room too', function () {

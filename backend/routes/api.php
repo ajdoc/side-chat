@@ -32,6 +32,7 @@ use App\Http\Controllers\DecisionController;
 use App\Http\Controllers\DeskAppsController;
 use App\Http\Controllers\DiscussionController;
 use App\Http\Controllers\DocumentController;
+use App\Http\Controllers\EncryptionController;
 use App\Http\Controllers\FriendController;
 use App\Http\Controllers\GifController;
 use App\Http\Controllers\GiveawayController;
@@ -263,6 +264,15 @@ Route::middleware('auth:api')->group(function () {
     Route::put('channels/{channel}/access', [ChannelController::class, 'access']);
     // Owner only — deletes the channel's threads, messages and uploaded files.
     Route::delete('channels/{channel}', [ChannelController::class, 'destroy']);
+
+    /*
+     * End-to-end encryption, on or off. Off everywhere by default.
+     *
+     * Whoever is responsible for the place decides: a server channel's staff, a group's
+     * owner, either person in a DM. It applies going forward only — see
+     * ToggleChannelEncryptionAction for why there is no retroactive version of this.
+     */
+    Route::put('channels/{channel}/encryption', [EncryptionController::class, 'toggle']);
 
     /*
      * Discussions: the conversations inside a channel. A discussion *is* a channel, so

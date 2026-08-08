@@ -14,7 +14,7 @@ use Illuminate\Queue\SerializesModels;
  *
  * A notification, not the map. It used to carry the whole `SideSpaceMapResource`, and for a
  * furnished 80x80 room that is comfortably past Reverb's `max_message_size` (10KB by default):
- * the grid alone is ~6.5KB of tile rows, before 120 pieces of furniture, 50 zones and a
+ * the grid alone is ~6.5KB of tile rows, before a thousand pieces of furniture, 50 zones and a
  * keyholder list per locked door. Over that ceiling the websocket server rejects the frame — so
  * the one message this whole feature depends on, "the collision grid changed", is the message
  * that goes missing precisely in the rooms people have built the most in.

@@ -55,19 +55,40 @@ export function useSpaceMap(channelId: number) {
     return res.data
   }
 
-  /** Save a rebuilt room. Owner only server-side; the caller hides the editor from everyone else. */
+  /**
+   * Fields the server owns, which must never be echoed back at it.
+   *
+   * The counterpart to the rule below: everything on the map document is sent *except* these.
+   * `id` and `channel_id` say which map this is and are the route's business; `rooms` and `locks`
+   * are permissions the map is merely delivered with, and a client that could write them could
+   * grant itself a key; `updated_by` and `updated_at` are the server's record of the save it is
+   * currently being asked to make.
+   */
+  const SERVER_OWNED = ['id', 'channel_id', 'rooms', 'locks', 'updated_by', 'updated_at'] as const
+
+  /**
+   * Save a rebuilt room. Owner only server-side; the caller hides the editor from everyone else.
+   *
+   * ## Why this sends everything except a deny list
+   *
+   * It used to name each field it sent. That is the safer-looking arrangement and it was wrong
+   * three times in a row, in exactly the same way each time: a new field was added to the map —
+   * `backdrops`, then a rename of it, then `portals` — the editor filled it in, and this function
+   * quietly dropped it on the floor. The server reads an absent field as "there are none of
+   * those", so every save wiped the thing that had just been added. Nothing errored. The feature
+   * simply did not persist, and the cause was thirty lines away from anything that looked wrong.
+   *
+   * An allow list fails *closed and silently*; a deny list fails *open and harmlessly* — an extra
+   * key the server doesn't validate is ignored, while a missing one destroys data. Given that,
+   * the default has to be "send it".
+   */
   async function save(next: Omit<SpaceMap, 'id' | 'channel_id'>) {
+    const body = { ...next } as Record<string, unknown>
+    for (const key of SERVER_OWNED) delete body[key]
+
     const res = await api<{ data: SpaceMap }>(`/api/channels/${channelId}/space/map`, {
       method: 'PUT',
-      body: {
-        name: next.name,
-        width: next.width,
-        height: next.height,
-        tiles: next.tiles,
-        zones: next.zones,
-        objects: next.objects,
-        spawn: next.spawn,
-      },
+      body,
     })
 
     map.value = res.data

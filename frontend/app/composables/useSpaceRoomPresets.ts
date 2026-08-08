@@ -1,3 +1,4 @@
+import type { BackdropPlacement } from '~/lib/spaceBackdrops'
 import type { SpaceObject } from '~/lib/spaceDecor'
 import type { SpaceZone } from '~/lib/spaceMapEngine'
 import { decorSize, DECOR } from '~/lib/spaceDecor'
@@ -20,6 +21,16 @@ export interface RoomPreset {
   h: number
   /** Positions relative to the room's top-left corner. No ids — see the PHP note. */
   objects: Array<{ kind: string, x: number, y: number, facing?: SpaceObject['facing'] }>
+  /**
+   * A grid of ground to lay, instead of paving the whole zone with {@link floor}.
+   *
+   * Present only on rooms that *are* a picture. Their collision was derived from artwork, so it
+   * has to be laid exactly as authored — which also means such a room has a **fixed size** and
+   * ignores how big a rectangle you dragged. See `fixedSize`.
+   */
+  tiles?: string[]
+  /** Artwork to place over the stamped ground, offset to wherever the room lands. */
+  backdrops?: BackdropPlacement[]
 }
 
 /**
@@ -29,6 +40,18 @@ export interface RoomPreset {
  * identical for everybody, never changes between requests, and is wanted by more than one part
  * of the editor.
  */
+/**
+ * Whether a room preset must be laid at its own size rather than stretched to fit a drag.
+ *
+ * True exactly when it brings its own ground. A room made of catalogue furniture can be any size
+ * — that is what {@link anchorObjects} is for — but a room whose walls and couch are *pixels*
+ * cannot: stretch the collision away from the picture and the couch stops being where the couch
+ * is.
+ */
+export function fixedSize(preset: RoomPreset): boolean {
+  return !!preset.tiles?.length
+}
+
 export function useSpaceRoomPresets() {
   const api = useApi()
 

@@ -65,6 +65,12 @@ class RunMessageAutomations
     {
         return $message->user !== null
             && ! $message->user->is_bot
+            // Encrypted messages don't trigger rules. Every condition a `message.created`
+            // rule can carry is about the body — contains, matches, starts with — and a rule
+            // evaluated against ciphertext wouldn't merely fail to fire, it would fire
+            // wrongly and at random. Same recovery as bots: turning encryption off makes the
+            // channel's rules live again for everything sent afterwards.
+            && ! $message->isEncrypted()
             && $message->thread_id === null
             && $message->side_chat_id === null
             && ! $message->isSystem()

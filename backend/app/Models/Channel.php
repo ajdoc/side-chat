@@ -43,6 +43,10 @@ class Channel extends Model
         'join_effect',
         'leave_effect',
         'desk_apps',
+        'encrypted',
+        'encryption_epoch',
+        'encryption_toggled_by',
+        'encryption_toggled_at',
     ];
 
     /** @return array<string, string> */
@@ -50,7 +54,36 @@ class Channel extends Model
     {
         // The Side Desk's tab strip, as an ordered array of app ids. Null until customised —
         // see the migration for why that isn't the same as storing the defaults.
-        return ['desk_apps' => 'array', 'is_private' => 'boolean'];
+        return [
+            'desk_apps' => 'array',
+            'is_private' => 'boolean',
+            'encrypted' => 'boolean',
+            'encryption_toggled_at' => 'datetime',
+        ];
+    }
+
+    /**
+     * Are messages sent here encrypted before they leave the sender's device?
+     *
+     * Answers for *now*, and only for now. It is the right question when writing a message
+     * and the wrong one when reading one: the timeline outlives the setting, so anything
+     * inspecting a body asks {@see Message::isEncrypted()} instead.
+     */
+    public function isEncrypted(): bool
+    {
+        return (bool) $this->encrypted;
+    }
+
+    /**
+     * The key era a message written right now belongs to, or null if it would be plaintext.
+     *
+     * Paired with isEncrypted() rather than folded into it because the two are stamped onto
+     * the message together and must never disagree — a ciphertext with no epoch is
+     * undecryptable, and a plaintext with one sends readers hunting for a key.
+     */
+    public function currentEpoch(): ?int
+    {
+        return $this->isEncrypted() ? (int) $this->encryption_epoch : null;
     }
 
     public function server(): BelongsTo

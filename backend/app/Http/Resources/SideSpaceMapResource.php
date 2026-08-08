@@ -28,6 +28,22 @@ class SideSpaceMapResource extends JsonResource
             'height' => $this->height,
             'tiles' => $this->tiles,
             'zones' => $this->zones,
+            // Which way to draw the grid — flat, or the isometric view. See the migration that
+            // added it, and lib/spaceProjection.ts for what each one means on screen.
+            'projection' => $this->projection ?? 'flat',
+            // Keys and rectangles only. The browser has the same catalogue and resolves a key to
+            // a path, so there is nothing to send that it doesn't already know.
+            'backdrops' => $this->backdrops ?? [],
+            /*
+             * Doorways, with where each one goes.
+             *
+             * Sent to everybody, like zones and locked doors are, because the browser has to
+             * decide *as somebody walks* whether they have just stepped into one — and it has to
+             * decide it for every person in the room, not only the one at this keyboard. Whether
+             * a particular person may actually pass through a door into another room is checked
+             * again when they use it; this is the geometry, not the permission.
+             */
+            'portals' => $this->portals ?? [],
             // Furniture. Positions and kinds only — the browser has the same catalogue and
             // looks the rest up, so there is nothing to send that it doesn't already know.
             'objects' => $this->objects ?? [],

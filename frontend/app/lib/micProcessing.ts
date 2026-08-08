@@ -143,6 +143,10 @@ export function suppressionSettings(strength: number) {
       amount: lerp(0.15, 0.9, t),
       // How much of the noise a suppressed band may keep. High floor = gentler, less "underwater".
       floor: lerp(0.35, 0.05, t),
+      // How hard keystrokes, mouse clicks and claps are ducked. Unlike everything else here the
+      // gentle end is not near-zero: an impulse getting through is what drives every envelope
+      // downstream into the gust that reads as wind, and that is a complaint at any strength.
+      transient: lerp(0.5, 1, t),
     },
     gate: {
       // What counts as speech. Low threshold = opens for almost anything, including the room.
@@ -345,15 +349,27 @@ export async function buildMicChain(
     let tail: AudioNode = source
 
     if (wantsGate || wantsSuppressor) {
-      // Below ~90Hz there is no speech, only rumble: desk knocks, footsteps, breath on the
+      // Below ~85Hz there is no speech, only rumble: desk knocks, footsteps, breath on the
       // capsule, mains hum. Removing it is the single cheapest thing in this chain.
-      const highpass = ctx.createBiquadFilter()
-      highpass.type = 'highpass'
-      highpass.frequency.value = 90
-      highpass.Q.value = 0.7
+      //
+      // Two biquads, not one, and that is the whole point of them. A single one rolls off at
+      // 12dB/octave, so at 30Hz — where the blast of air from a `p` or `b` hitting the capsule
+      // actually lands — it is only about 14dB down, and a plosive is 30dB up. What survives is
+      // a low thud that the compressor then ducks the following syllable around: the "popping"
+      // or "exploding" people report on an unshielded mic. Cascaded into a 4th-order Butterworth
+      // (these Q values are what make the pair maximally flat rather than peaky at the corner)
+      // the same corner is ~48dB down at 30Hz, which puts the pop under the voice instead of
+      // over it — while everything from 100Hz up, including the lowest speaking fundamentals,
+      // passes untouched.
+      for (const q of [0.5412, 1.3066]) {
+        const highpass = ctx.createBiquadFilter()
+        highpass.type = 'highpass'
+        highpass.frequency.value = 85
+        highpass.Q.value = q
 
-      built.push(highpass)
-      tail = tail.connect(highpass)
+        built.push(highpass)
+        tail = tail.connect(highpass)
+      }
     }
 
     if (wantsSuppressor) {

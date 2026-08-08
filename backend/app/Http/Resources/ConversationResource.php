@@ -34,6 +34,10 @@ class ConversationResource extends JsonResource
             // The channel behind the chat. Every message, thread, pin, reaction and call
             // endpoint in the app is addressed by this — a chat *is* a channel.
             'channel_id' => $this->whenLoaded('channel', fn () => $this->channel->id),
+            // The lock on the sidebar row. Comes off the channel because that's where the
+            // setting lives, and is absent rather than false when the channel wasn't loaded —
+            // drawing "not encrypted" from a missing relation would be a claim, not a default.
+            'encrypted' => $this->whenLoaded('channel', fn () => $this->channel->isEncrypted()),
             'members' => UserResource::collection($this->whenLoaded('members')),
             // Live now, so a chat you aren't looking at can say "call in progress".
             'call_active' => $this->call_started_at !== null,

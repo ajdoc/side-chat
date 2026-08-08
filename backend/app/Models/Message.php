@@ -17,11 +17,24 @@ class Message extends Model
     /** @use HasFactory<MessageFactory> */
     use HasFactory;
 
-    protected $fillable = ['channel_id', 'thread_id', 'side_chat_id', 'widget_id', 'user_id', 'body', 'type', 'reply_to_id', 'replies_to_post', 'forwarded_from_id', 'edited_at', 'pinned_at', 'pinned_by', 'decided_at', 'decided_by'];
+    protected $fillable = ['channel_id', 'thread_id', 'side_chat_id', 'widget_id', 'user_id', 'body', 'encrypted', 'epoch', 'type', 'reply_to_id', 'replies_to_post', 'forwarded_from_id', 'edited_at', 'pinned_at', 'pinned_by', 'decided_at', 'decided_by'];
 
     protected function casts(): array
     {
-        return ['edited_at' => 'datetime', 'pinned_at' => 'datetime', 'decided_at' => 'datetime', 'replies_to_post' => 'boolean'];
+        return ['edited_at' => 'datetime', 'pinned_at' => 'datetime', 'decided_at' => 'datetime', 'replies_to_post' => 'boolean', 'encrypted' => 'boolean'];
+    }
+
+    /**
+     * Is this message's body ciphertext the server can't read?
+     *
+     * The gate on every server-side feature that reads what somebody wrote — search,
+     * unfurling, bot delivery, automation triggers. Asked of the message and never of its
+     * channel: encryption is a toggle, so a channel contains both kinds at once and will
+     * for as long as it exists.
+     */
+    public function isEncrypted(): bool
+    {
+        return (bool) $this->encrypted;
     }
 
     /**

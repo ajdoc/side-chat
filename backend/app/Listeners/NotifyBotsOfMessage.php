@@ -76,6 +76,13 @@ class NotifyBotsOfMessage
     {
         return $message->user !== null
             && ! $message->user->is_bot
+            // Encrypted messages aren't delivered at all, rather than delivered with an
+            // unreadable body. A bot handed base64 would treat it as content — matching on
+            // it, echoing it, storing it somewhere the message was encrypted to stay out of.
+            // Silence is the honest answer, and it's temporary: turn encryption off and the
+            // channel's bots hear everything sent from that moment. Bot authors are told
+            // which channels are encrypted rather than left to wonder — see BOTS.md.
+            && ! $message->isEncrypted()
             && $message->thread_id === null
             && $message->side_chat_id === null
             && ! $message->isSystem()

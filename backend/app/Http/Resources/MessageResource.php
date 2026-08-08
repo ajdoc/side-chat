@@ -20,6 +20,12 @@ class MessageResource extends JsonResource
             'thread_id' => $this->thread_id,
             'side_chat_id' => $this->side_chat_id,
             'body' => $this->body,
+            // Whether `body` above is ciphertext, and the key era it was written under. Per
+            // message rather than per channel: encryption can be turned on and off, so a
+            // timeline is striped and the client decides how to render each row on its own
+            // flag, not on the channel's current setting.
+            'encrypted' => (bool) $this->encrypted,
+            'epoch' => $this->epoch,
             'type' => $this->type,
             'edited' => $this->edited_at !== null,
             // A top-level reply to the side chat *post* (its title), as opposed to

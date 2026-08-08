@@ -1970,6 +1970,7 @@ export const DECOR: Record<string, DecorKind & { art: string[] | string[][] | nu
   window: kind('Window', { mount: 'wall', art: WINDOW }),
   clock: kind('Clock', { mount: 'wall', art: CLOCK }),
   shelf: kind('Wall shelf', { mount: 'wall', art: SHELF }),
+
 }
 
 /** The defaults, spelled out once instead of twenty-six times. */
@@ -2124,16 +2125,98 @@ function pose(kind: DecorKind, facing: DecorFacing): { rotate: number, mirror: b
 }
 
 /**
+ * What's where, worked out once per version of the room.
+ *
+ * The questions the walk loop and the renderer ask — "what covers this tile", "what is on this
+ * row", "which of these are doors" — were all plain scans of the whole furniture list, which was
+ * the right answer while a room held at most a hundred pieces. A big office holds ten times that,
+ * and a scan per walkability check (several per step, per person, per pet) and a filter-and-sort
+ * per frame both grow with it. So the list is turned into three lookups, and every hot question
+ * becomes proportional to the answer instead of to the room.
+ *
+ * Note what is *not* in here: `open`. A door's state changes every frame ({@see syncDoors}) and
+ * is read off the object itself at query time, so the index holds references and never goes stale
+ * for the one property that actually moves. Everything it does store — position, kind, facing —
+ * only changes when the map is saved.
+ */
+interface DecorIndex {
+  /** Tile → the pieces covering it, in map order. Unknown kinds are left out; nothing can ask. */
+  at: Map<number, SpaceObject[]>
+  /** Origin row → the pieces starting on it, in map order. Everything, drawable or not. */
+  rows: Map<number, SpaceObject[]>
+  /** The doors, for the once-a-frame sweep that opens them. */
+  doors: SpaceObject[]
+}
+
+/**
+ * Rebuilt when the array identity changes, which is exactly when the room changes: the editor
+ * replaces `objects` wholesale on every edit rather than mutating it, and a refetched map is a
+ * new array by construction. Weak, so a room nobody is standing in is not a room being kept
+ * alive by its own index.
+ */
+const INDEXES = new WeakMap<SpaceObject[], DecorIndex>()
+
+/** Tiles are 0..{@link SideSpaceMap::MAX_SIZE} on both axes, so this packs without collision. */
+const ROW_STRIDE = 8192
+
+function indexOf(objects: SpaceObject[] | undefined): DecorIndex | null {
+  if (!objects?.length) return null
+
+  const cached = INDEXES.get(objects)
+  if (cached) return cached
+
+  const index: DecorIndex = { at: new Map(), rows: new Map(), doors: [] }
+
+  for (const object of objects) {
+    const row = index.rows.get(object.y)
+    if (row) row.push(object)
+    else index.rows.set(object.y, [object])
+
+    const kind = DECOR[object.kind]
+    if (!kind) continue
+    if (kind.door) index.doors.push(object)
+
+    const { w, h } = decorSize(object, kind)
+    for (let dy = 0; dy < h; dy++) {
+      for (let dx = 0; dx < w; dx++) {
+        const key = (object.y + dy) * ROW_STRIDE + (object.x + dx)
+        const here = index.at.get(key)
+        if (here) here.push(object)
+        else index.at.set(key, [object])
+      }
+    }
+  }
+
+  INDEXES.set(objects, index)
+
+  return index
+}
+
+/** The pieces covering a tile, nearest thing to a free lookup. Empty for open floor. */
+export function decorAt(objects: SpaceObject[] | undefined, x: number, y: number): SpaceObject[] {
+  return indexOf(objects)?.at.get(y * ROW_STRIDE + x) ?? []
+}
+
+/** The pieces whose origin sits on row `y`, in map order — what the renderer draws, row by row. */
+export function decorRow(objects: SpaceObject[] | undefined, y: number): SpaceObject[] {
+  return indexOf(objects)?.rows.get(y) ?? []
+}
+
+/** Every door in the room. */
+export function decorDoors(objects: SpaceObject[] | undefined): SpaceObject[] {
+  return indexOf(objects)?.doors ?? []
+}
+
+/**
  * Is a tile blocked by furniture?
  *
- * Called from the walk loop for every step, so it's a plain loop over a list that is at most a
- * hundred long rather than anything cleverer — an index would need rebuilding whenever the room
- * was rebuilt, and the room is rebuilt more often than this is slow.
+ * Called from the walk loop for every step, and answered from {@link decorAt} — the handful of
+ * pieces on that one tile, not the whole room.
  */
 export function decorBlocks(objects: SpaceObject[] | undefined, x: number, y: number): boolean {
-  for (const object of objects ?? []) {
+  for (const object of decorAt(objects, x, y)) {
     const kind = DECOR[object.kind]
-    if (!kind?.solid || !decorCovers(object, kind, x, y)) continue
+    if (!kind?.solid) continue
     // An open door is a doorway. Anything that hasn't been told otherwise — the editor, the
     // spawn search, a map being validated — sees every door shut, which is the safe reading.
     if (kind.door && object.open) continue
@@ -2172,9 +2255,9 @@ export function decorInFront(
   const candidates: Array<[number, number]> = [[ahead[0]!, ahead[1]!], [x, y]]
 
   for (const [cx, cy] of candidates) {
-    for (const object of objects ?? []) {
+    for (const object of decorAt(objects, cx, cy)) {
       const kind = DECOR[object.kind]
-      if (kind && wants(kind) && decorCovers(object, kind, cx, cy)) return object
+      if (kind && wants(kind)) return object
     }
   }
 

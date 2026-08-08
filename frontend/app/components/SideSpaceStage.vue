@@ -33,7 +33,7 @@ import {
 } from 'lucide-vue-next'
 import { useLocalStorage } from '@vueuse/core'
 import type { AmongUsState, Channel, SpaceInteraction, VoiceParticipant } from '~/types'
-import type { Camera, MapTheme, Occupant } from '~/lib/spaceMapEngine'
+import type { Camera, MapTheme, Occupant, SpacePortal } from '~/lib/spaceMapEngine'
 import type { SpaceObject } from '~/lib/spaceDecor'
 import type { RoomEffectInstance } from '~/lib/spaceEffects'
 import type { RoomEvent } from '~/composables/useSpacePresence'
@@ -50,6 +50,8 @@ import {
   drawMap,
   drawPet,
   drawTrainer,
+  isWalkable,
+  portalAt,
   spriteHue,
   toScreen,
   toWorld,
@@ -340,6 +342,16 @@ const occupants = computed(() => (me.value ? [me.value, ...Object.values(others.
 
 /** Which doors are locked and who holds a key, in the shape the frame loop wants to ask. */
 const locks = computed(() => lockMap(map.value?.locks))
+
+/**
+ * Whether the room is big enough to be worth an overview.
+ *
+ * A threshold rather than a setting. The stage frames about sixteen tiles of height, so anything
+ * near that is already entirely on screen and a minimap of it would be a smaller copy of what you
+ * are looking at — clutter that costs a repaint. A city twice that in both directions is mostly
+ * off-screen at any moment, and then it earns its corner.
+ */
+const showMiniMap = computed(() => (map.value?.width ?? 0) > 34 || (map.value?.height ?? 0) > 24)
 
 /**
  * The clock the *prompt* runs on, as distinct from the door itself.
@@ -854,7 +866,20 @@ let ro: ResizeObserver | undefined
 let widthRo: ResizeObserver | undefined
 let cssW = 0
 let cssH = 0
+const route = useRoute()
 const camera = reactive<Camera>({ x: 0, y: 0, zoom: 1, width: 0, height: 0 })
+
+/*
+ * The room decides how it's drawn, not the viewer — see the note on `projection` in SpaceMap.
+ * Watched rather than read in the draw loop because the pointer handlers unproject through the
+ * camera too, and a click has to resolve against the view it was aimed at.
+ *
+ * This also picks up a live rebuild: somebody switching the room to isometric broadcasts a new
+ * map, and everyone standing in it turns with it on the next frame.
+ */
+watchEffect(() => {
+  camera.projection = map.value?.projection ?? 'flat'
+})
 
 /** Behind everything: what's beyond the walls of a room that doesn't fill the canvas. */
 const OUTSIDE = '#20242c'
@@ -928,9 +953,19 @@ async function enter() {
       pet: p.user.space_pet,
       shout: p.user.space_shout,
     })))
-    // …and put yourself back where you were standing, if the room still allows it.
+    /*
+     * …and put yourself back where you were standing, if the room still allows it.
+     *
+     * Unless you arrived through a doorway, in which case `?at=x,y` says where its far end is and
+     * that wins. Coming out of a portal has to beat being restored to where you last stood in
+     * this room, or walking through a door would drop you wherever you happened to be the last
+     * time you visited — which is the one thing a door is supposed to decide.
+     */
     const mine = roster.find(p => p.user.id === user.value?.id)
-    place(mine && mine.x !== null && mine.y !== null ? { x: mine.x, y: mine.y, facing: mine.facing ?? null } : null)
+    const arrival = arrivalPoint()
+
+    place(arrival
+      ?? (mine && mine.x !== null && mine.y !== null ? { x: mine.x, y: mine.y, facing: mine.facing ?? null } : null))
 
     // Last, because it needs somewhere to measure from: it runs the instant it's registered.
     watchProximity()
@@ -983,6 +1018,105 @@ async function leave() {
   await disconnect()
 }
 
+// --- doorways ---
+
+/**
+ * Where a `?at=x,y` in the URL says to arrive, if it is somewhere you can actually stand.
+ *
+ * Read once and then wiped from the address bar, because it describes *this arrival* and not the
+ * page: left in place, a reload an hour later would pick you up and put you back at the door, and
+ * the link would be a trap rather than a shortcut.
+ *
+ * Validated against the map like any other position. It arrives in a URL, so it is untrusted in
+ * the ordinary way — a hand-typed `?at=9999,9999` should be ignored, not walk somebody into the
+ * void.
+ */
+function arrivalPoint(): { x: number, y: number, facing: null } | null {
+  const raw = route.query.at
+  if (typeof raw !== 'string' || !map.value) return null
+
+  const [x, y] = raw.split(',').map(Number)
+
+  void navigateTo({ path: route.path, query: { ...route.query, at: undefined } }, { replace: true })
+
+  if (!Number.isFinite(x) || !Number.isFinite(y) || !isWalkable(map.value, x!, y!)) return null
+
+  return { x: x!, y: y!, facing: null }
+}
+
+/**
+ * The doorway you are currently standing in, if any — and whether you have already used it.
+ *
+ * The second half is the whole difficulty. A portal fires on *being inside it*, checked every
+ * frame, so without a memory you would trigger it sixty times a second; and if two portals face
+ * each other, arriving at one puts you inside it and it sends you straight back. Holding "the one
+ * I arrived in" and clearing it only when you step out means a doorway you walk into takes you
+ * once, and the one you arrive in stays quiet until you leave it and come back.
+ */
+let usedPortal: string | null = null
+const travelling = ref(false)
+
+function checkPortal() {
+  const m = map.value
+  const here = me.value
+  if (!m || !here || travelling.value) return
+
+  const portal = portalAt(m, here.x, here.y)
+
+  if (!portal) {
+    usedPortal = null
+
+    return
+  }
+
+  if (portal.id === usedPortal) return
+  usedPortal = portal.id
+
+  void travelThrough(portal)
+}
+
+/**
+ * Go through a doorway.
+ *
+ * Two destinations and they could hardly be less alike underneath. A point on this map is a
+ * `warp` — the map is already loaded and the only thing that changes is where you are standing.
+ * Another room is a *navigation*: a different channel, a different map, a different call. So
+ * walking out is done properly rather than by changing the URL underneath a live room — the
+ * arrival point rides in the query string, which is also what makes a doorway shareable as a
+ * link.
+ */
+async function travelThrough(portal: SpacePortal) {
+  if (portal.to.kind === 'point') {
+    warp(portal.to.x, portal.to.y)
+    // Marked as used at the far end too, so a portal whose exit sits inside another one doesn't
+    // immediately fire that one as well and bounce you down a chain of them.
+    usedPortal = portalAt(map.value!, portal.to.x, portal.to.y)?.id ?? null
+
+    return
+  }
+
+  travelling.value = true
+
+  try {
+    // Leave the room the way the Leave button does, rather than letting the page change under a
+    // live call: the peer connections, the presence channel and the mic all have teardown, and
+    // skipping it leaves a ghost of you standing in the room you walked out of.
+    await leave()
+
+    const at = portal.to.x != null && portal.to.y != null
+      ? { at: `${portal.to.x},${portal.to.y}` }
+      : {}
+
+    await navigateTo({
+      path: `/servers/${props.channel.server_id}/channels/${portal.to.channel_id}`,
+      query: at,
+    })
+  }
+  finally {
+    travelling.value = false
+  }
+}
+
 // --- the frame loop ---
 
 function loop(now: number) {
@@ -1018,6 +1152,7 @@ function loop(now: number) {
 
     checkFurniture()
     checkGame()
+    checkPortal()
   }
 
   // Outside the `inThisRoom` guard on purpose: an effect that started while you were standing in
@@ -3043,6 +3178,23 @@ watch(inThisRoom, (now) => {
             1×
           </button>
         </div>
+
+        <!--
+          The overview.
+
+          Under the zoom buttons on the same edge, so the two things that answer "where am I" sit
+          together. Only for maps too big to take in at once — on a room that already fits on
+          screen a second smaller copy of it is decoration that costs a repaint. Hidden while a
+          game owns the room, like the zoom controls, because a game draws its own world.
+        -->
+        <SideSpaceMiniMap
+          v-if="map && showMiniMap && !gameRunning && !gameMeeting"
+          class="absolute right-2 top-[7.5rem]"
+          :map="map"
+          :occupants="occupants"
+          :me-id="user?.id ?? null"
+          :camera="camera"
+        />
 
         <!--
           You, on a stage. Sits above the earshot line rather than replacing it, because the two

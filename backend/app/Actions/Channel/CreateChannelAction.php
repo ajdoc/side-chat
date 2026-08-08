@@ -63,6 +63,9 @@ final class CreateChannelAction
             'zones' => $map['zones'],
             'objects' => $map['objects'],
             'spawn' => $map['spawn'],
+            // Only the artwork-backed presets carry any; everything else draws its tiles.
+            'backdrops' => $map['backdrops'] ?? [],
+            'portals' => $map['portals'] ?? [],
         ]);
     }
 }

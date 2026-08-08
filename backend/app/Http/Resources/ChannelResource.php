@@ -23,6 +23,11 @@ class ChannelResource extends JsonResource
             'position' => $this->position,
             // Restricted to an allow-list rather than open to the whole server.
             'is_private' => (bool) $this->is_private,
+            // Whether messages sent *now* are encrypted, and which key era they belong to.
+            // Both, always, because a client that knew only the flag would have to ask which
+            // epoch to encrypt under, and it needs to know before the next keystroke.
+            'encrypted' => (bool) $this->encrypted,
+            'encryption_epoch' => (int) $this->encryption_epoch,
             // Only ever loaded for the staff editing the access settings — never on the
             // sidebar listing, and never on a broadcast (see ChannelAccessUpdated).
             'member_ids' => $this->whenLoaded('allowedMembers', fn () => $this->allowedMembers->pluck('id')),

@@ -55,6 +55,8 @@ final class MapPresets
             'sleep-temple' => self::sleepTemple(),
             'espurr-den' => self::espurrDen(),
             'new-york' => self::newYork(),
+            'gather-town' => self::gatherTown(),
+            'nyc-street' => self::nycStreet(),
             // The gyms: an arena crossed with an office, one per badge. See gym().
             'gym-cinnabar' => self::gymCinnabar(),
             'gym-celadon' => self::gymCeladon(),
@@ -82,7 +84,7 @@ final class MapPresets
      */
     public const GROUPS = [
         'Rooms' => ['office', 'lounge', 'park', 'campfire', 'blank'],
-        'Themed' => ['throne-room', 'green-hall', 'sleep-temple', 'espurr-den', 'new-york'],
+        'Themed' => ['throne-room', 'green-hall', 'sleep-temple', 'espurr-den', 'new-york', 'gather-town', 'nyc-street'],
         'Gyms' => ['gym-cinnabar', 'gym-celadon', 'gym-vermilion', 'gym-azalea', 'gym-olivine', 'gym-blackthorn'],
     ];
 
@@ -631,9 +633,9 @@ final class MapPresets
         }
 
         return [
-            'label' => 'New York',
+            'label' => 'New York Block',
             'description' => 'A city block: a street with a diner, a bodega, a lobby and a pocket park',
-            'name' => 'New York',
+            'name' => 'New York Block',
             'width' => $w,
             'height' => $h,
             'tiles' => $tiles,
@@ -937,6 +939,171 @@ final class MapPresets
                 ['painting', 7, 0], ['painting', 28, 0],
             ],
         );
+    }
+
+    /**
+     * Gather Town: a New York island, drawn as artwork rather than assembled from tiles.
+     *
+     * The first map with a {@see Backdrops} image, and the reason that mechanism exists. The
+     * Financial District's skyline, the neon over Times Square, the brownstones of SoHo and the
+     * lake in Central Park are a piece of pixel art; there is no arrangement of sixteen-pixel
+     * rectangles that gets there, and pretending otherwise would have produced a recognisably
+     * New-York-ish island that looked nothing like the picture.
+     *
+     * ## The grid below is collision, not scenery
+     *
+     * Every character in it is invisible. `.` is somewhere you can walk — streets, plazas, the
+     * piers, the park and its paths — `#` is a building, and `~` is the harbour and the night sky
+     * above it. The picture is what you see; this is what you bump into.
+     *
+     * ## It is machine-derived, and that is the point
+     *
+     * Hand-authoring 2,240 tiles against a painting is hours of counting that goes wrong in a
+     * dozen places nobody notices until somebody walks into a lamppost. So the grid is generated
+     * by sampling the artwork a tile at a time and classifying each by what it is mostly made of
+     * — blue is water, grey is asphalt, green is parkland, warm and light is a footpath, and
+     * anything else is a building. The generator lives in the scratchpad with the slicer.
+     *
+     * Two things it could not get from colour alone, both fixed and both worth naming:
+     *
+     *   - **The bridges.** Brick, and the same hue as the brownstones two streets away. The
+     *     island is four landmasses joined by four crossings, so getting these wrong doesn't
+     *     make a slightly wrong map — it makes four maps nobody can walk between. The generator
+     *     now runs a reachability flood on its own output and reports anything stranded; this
+     *     grid has one walkable region holding 96% of its walkable tiles, and no stranded region
+     *     bigger than a rooftop.
+     *   - **The causeway to Liberty Island**, which was closed at a single tile of darker timber.
+     *
+     * ## No zones
+     *
+     * Deliberately. A zone seals sound, and an open city is the one shape where you want the
+     * opposite: distance alone deciding who hears whom as people drift between the square, the
+     * park and the waterfront. Somebody who wants a sealed room can drag one; nothing here should
+     * decide in advance that Times Square is a private meeting.
+     */
+    private static function gatherTown(): array
+    {
+        $tiles = [
+                '................................................................',
+                '................................................................',
+                '..~~~~~~~~===~~~#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~..',
+                '..~~~~~~~~=..~.~~~#~..~#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~..',
+                '..~~~~~~~~=..~~~~~.~#~..~~~~~~~~~~~~~~~~~~~~~~~~#~~~~~~~~~~~~~..',
+                '..~~~~~~~..~.~~~~~.~.~~~~~~#..~====~~~~~~..~~.~~#~~.#~~~~~~~~~..',
+                '..~~~~~~~.~~..#.#..#.~~~~~~~#~~==....~~~~.#~~~~~.~~~~~###~~~~~..',
+                '..~~~~~.~.#~....#.....~~~~~#.#~....##~~~~~.~~~~~.~~~~.####~~~~..',
+                '..~~~~~..~.~.#..~~...#~#...####...###........#~...#.~.#.#..~~~..',
+                '..~~~~.......~.......~~~...#..#..####....#~...~...~#~......~~~..',
+                '..~#.......................#~......#....~~#.#.~...~#.......~~~..',
+                '..~~~~#..~..............................#~~..~.~.#~~#......~~~..',
+                '..~~~~...~...#........~..............#..#~~.......##..##~..~~~..',
+                '..~~~~...#.....#..#......................#~............~#..~~~..',
+                '..~~.......................................................~~~..',
+                '..~~~~.........#.#.........................................~~~..',
+                '..~~~~~~~~~~~~~~.~~~~~~~........#....#..~~~~~~~~.#~~~~~~~~~~~~..',
+                '..~~~~~~~~~~~~~~.~~~~~~~................~~~~~~~~.#~~~~~~~~~~~~..',
+                '..~~~~~~~......~.~..............#........~.#.#...#........~~~~..',
+                '..~~~~~~..#.......#~..##.............#..................#..~~~..',
+                '..~~~~~~...##.....###.#....................................~~~..',
+                '..~~~~==...#............................#....~~~..~~~......~~~..',
+                '..~~~#...........................#...#.......~~~~~~~~#...#.~~~..',
+                '..~~~~==......~.............#..#..............~~~~~~~#.....~~~..',
+                '..~~~....##..##............##.................#~~~~~~......~~~..',
+                '..~~..==.##.#..#...#..##...~##.....~~...#~~~...............~~~..',
+                '..~~~~~~.##.#....###................~.....~................~~~..',
+                '..~~~~~~...~#.~.#...###~.~~~~~~#.~~~~~~~######.....#.##....~~~..',
+                '..~~~~~~........#....##..~~~~~~#.~~~~~~~...................~~~..',
+                '..~~~~~~~~#~~..#~===~~~~~~~~~~~##~~~~~~~~~~~~~~~~~~~~~~~~~~~~~..',
+                '..~~~~~~~~.~~..~~===~~~~~~~~~......~~~~~~~~~~~~~~~~~~~~~~~~~~~..',
+                '..~~~~~~~~~~~##~~===~~~~~~~~~......~~~~~~~~~~~~~~~~~~~~~~~~~~~..',
+                '..~~~~~~~~~~~~~~~===~~~~~~~~~......~~~~~~~~~~~~~~~~~~~~~~~~~~~..',
+                '................................................................',
+                '................................................................',
+        ];
+
+        return [
+            'label' => 'New York',
+            'description' => 'A New York island: the Financial District, Times Square, SoHo and Central Park',
+            'name' => 'New York',
+            'width' => 64,
+            'height' => 35,
+            'tiles' => $tiles,
+            // One placement covering the whole grid — this preset *is* the city. A map that
+            // extends it keeps this rectangle and grows around it.
+            'backdrops' => [['key' => 'gather-town', 'x' => 0, 'y' => 0, 'w' => 64, 'h' => 35]],
+            'zones' => [],
+            // Unfurnished. The artwork already has benches, food carts, taxis and trees painted
+            // into it, so anything placed here would be a second bench beside a painted one.
+            'objects' => [],
+            // The middle of Gather Town Square, which is where somebody arriving should arrive.
+            'spawn' => ['x' => 28, 'y' => 14],
+        ];
+    }
+
+    /**
+     * Four city blocks around a fountain square. 36×24.
+     *
+     * The second artwork-backed map, and the one that showed what the generator still cannot do.
+     * Its collision grid is derived from the picture the same way New York's is — sample each
+     * tile, decide what it is mostly made of — with one extra pass that map did not need:
+     * **ground has to be joined to the road** before it counts as walkable. Seen from directly
+     * above, a flat roof is an unsaturated rectangle indistinguishable from a pavement. Sampled
+     * off this artwork one roof reads 161 and the plaza reads 153; another roof reads 96 and the
+     * asphalt beside it reads 95. No threshold separates them, so position does the work instead.
+     *
+     * It is still imperfect: the low olive rooftops sit close enough to their pavement, at this
+     * tile size, that a few of them join the street through a shopfront thinner than one tile and
+     * come out walkable. The wall brush fixes those in seconds and this note is here so the next
+     * person knows it is a known edge rather than a mystery.
+     *
+     * The artwork is cropped to 1152×768 rather than used whole. 36 tiles across 1408 pixels
+     * would be 39 wide and 32 tall — a fifth of horizontal squash on pixel art, which is worse
+     * than losing a strip of a city that repeats anyway.
+     */
+    private static function nycStreet(): array
+    {
+        $tiles = [
+                '....................................',
+                '....................................',
+                '...#######....##################....',
+                '....#####..#.###########..######....',
+                '....#####.##..########.#..#..#......',
+                '...........#.......#.....#..####....',
+                '..########...#.##...........#####...',
+                '....######...#...........##....##...',
+                '....#####..#..........#...######....',
+                '....#####......###..####..######....',
+                '....######.....#.....##..########...',
+                '....######.....#.....##...######....',
+                '...######.........##......######....',
+                '...#######..#.............######....',
+                '....######..#.#......##...######.#..',
+                '...######......###..###..#.#####.#..',
+                '...#######.#...#.....##....#####.#..',
+                '....#...#..#....#..#..##............',
+                '.....##......#......................',
+                '...#######...#.################.#...',
+                '...#.........####################...',
+                '....#......#..#..#..#.......#..#....',
+                '....................................',
+                '....................................',
+        ];
+
+        return [
+            'label' => 'NYC street',
+            'description' => 'Four blocks around a fountain square: the bakery, the bookshop, the deli and the cinema',
+            'name' => 'NYC street',
+            'width' => 36,
+            'height' => 24,
+            'tiles' => $tiles,
+            'backdrops' => [['key' => 'nyc-street', 'x' => 0, 'y' => 0, 'w' => 36, 'h' => 24]],
+            'zones' => [],
+            // Unfurnished, like the island: the artwork already has benches, carts and a fountain
+            // painted into it, and anything placed here would be a second bench beside a drawn one.
+            'objects' => [],
+            'portals' => [],
+            'spawn' => ['x' => 12, 'y' => 12],
+        ];
     }
 
     /** Four walls and nothing in them, for somebody who'd rather draw their own. 24×16. */
