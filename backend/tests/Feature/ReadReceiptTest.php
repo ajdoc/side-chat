@@ -98,10 +98,14 @@ it('counts unread messages per channel, ignoring your own and thread replies', f
     $member = User::factory()->create();
     $server->members()->attach($member->id, ['role' => 'member']);
 
-    $first = Message::factory()->create(['channel_id' => $channel->id, 'user_id' => $owner->id]);
-    Message::factory()->count(2)->create(['channel_id' => $channel->id, 'user_id' => $owner->id]);
+    // Messages live in a discussion, and the count the sidebar shows against the channel is the
+    // sum over its discussions — so this exercises the rollup, not just the count.
+    $general = $channel->discussions()->sole();
+
+    $first = Message::factory()->create(['channel_id' => $general->id, 'user_id' => $owner->id]);
+    Message::factory()->count(2)->create(['channel_id' => $general->id, 'user_id' => $owner->id]);
     // The member's own message doesn't count against them...
-    Message::factory()->create(['channel_id' => $channel->id, 'user_id' => $member->id]);
+    Message::factory()->create(['channel_id' => $general->id, 'user_id' => $member->id]);
 
     Passport::actingAs($member);
 
@@ -109,12 +113,12 @@ it('counts unread messages per channel, ignoring your own and thread replies', f
     $response = $this->getJson("/api/servers/{$server->id}/channels")->assertOk();
     expect($response->json('data.0.unread_count'))->toBe(3);
 
-    $this->postJson("/api/channels/{$channel->id}/read", ['message_id' => $first->id])->assertOk();
+    $this->postJson("/api/channels/{$general->id}/read", ['message_id' => $first->id])->assertOk();
 
     $response = $this->getJson("/api/servers/{$server->id}/channels")->assertOk();
     expect($response->json('data.0.unread_count'))->toBe(2);
 
-    $this->postJson("/api/channels/{$channel->id}/read")->assertOk();
+    $this->postJson("/api/channels/{$general->id}/read")->assertOk();
 
     $response = $this->getJson("/api/servers/{$server->id}/channels")->assertOk();
     expect($response->json('data.0.unread_count'))->toBe(0);

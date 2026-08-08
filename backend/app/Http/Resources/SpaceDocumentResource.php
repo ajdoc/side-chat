@@ -2,6 +2,7 @@
 
 namespace App\Http\Resources;
 
+use App\Models\SpaceDocument;
 use Illuminate\Http\Request;
 use Illuminate\Http\Resources\Json\JsonResource;
 
@@ -10,7 +11,7 @@ use Illuminate\Http\Resources\Json\JsonResource;
  * `kind` that picks a viewer, and the signed inline / download URLs (mirrors how
  * {@see AttachmentResource} hands out an attachment's URLs).
  *
- * @mixin \App\Models\SpaceDocument
+ * @mixin SpaceDocument
  */
 class SpaceDocumentResource extends JsonResource
 {

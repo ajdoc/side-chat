@@ -3,6 +3,7 @@
 namespace App\Models;
 
 // use Illuminate\Contracts\Auth\MustVerifyEmail;
+use App\Services\FriendService;
 use Database\Factories\UserFactory;
 use Illuminate\Database\Eloquent\Attributes\Fillable;
 use Illuminate\Database\Eloquent\Attributes\Hidden;
@@ -117,7 +118,7 @@ class User extends Authenticatable
     /**
      * Friend requests this user sent, and friendships they opened. Not "my friends" — a
      * friendship is a single row shared by two people (see the migration), so half of them
-     * are on the other side of it. Ask {@see \App\Services\FriendService} for the pair.
+     * are on the other side of it. Ask {@see FriendService} for the pair.
      */
     public function sentFriendships(): HasMany
     {

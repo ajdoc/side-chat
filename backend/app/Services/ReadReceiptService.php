@@ -70,7 +70,7 @@ final class ReadReceiptService
      * Note the `>=`: the avatars in the timeline sit on the message a marker rests on,
      * but "did Bob see message 40" is true for any marker at 40 or beyond.
      *
-     * @return Collection<int, ChannelRead>  keyed by user id
+     * @return Collection<int, ChannelRead> keyed by user id
      */
     public function seenBy(Message $message): Collection
     {
@@ -87,7 +87,7 @@ final class ReadReceiptService
      * newer than where they left off. Channels with nothing unread are simply absent.
      *
      * @param  array<int, int>  $channelIds
-     * @return Collection<int, int>  channel_id => count
+     * @return Collection<int, int> channel_id => count
      */
     public function unreadCounts(User $user, array $channelIds): Collection
     {

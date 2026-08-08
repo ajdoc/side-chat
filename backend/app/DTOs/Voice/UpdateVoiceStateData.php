@@ -13,9 +13,13 @@ use WendellAdriel\ValidatedDTO\ValidatedDTO;
 final class UpdateVoiceStateData extends ValidatedDTO
 {
     public ?bool $muted;
+
     public ?bool $deafened;
+
     public ?bool $screen_sharing;
+
     public ?bool $camera_on;
+
     public ?bool $audio_sharing;
 
     /**

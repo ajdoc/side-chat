@@ -73,6 +73,34 @@ export function useSidebarChannels() {
       : [...collapsedSections.value, key]
   }
 
+  /**
+   * Which channels have their discussions unfolded beneath them.
+   *
+   * An *expanded* set rather than the collapsed set the type sections use, and the asymmetry is
+   * the point. A section defaults to open because a hidden channel list looks like an empty
+   * server; a branch defaults to shut because a server with eight channels of four discussions
+   * each is forty rows, and the second level is detail you go looking for rather than detail
+   * you are shown. So absence means shut here, and means open there — each defaults to the
+   * answer that stays readable.
+   */
+  const expandedBranches = useLocalStorage<number[]>('sidebar:expandedBranches', [])
+
+  /**
+   * The branch you are standing in is always drawn, unfolded or not — a discussion you're
+   * reading that doesn't appear in the sidebar is a sidebar lying about where you are. This is
+   * a read of the route, not a write to storage: stepping away folds it back to whatever you
+   * had chosen, rather than quietly unfolding every channel you visit.
+   */
+  function isBranchOpen(channelId: number, activeParentId?: number | null) {
+    return expandedBranches.value.includes(channelId) || channelId === activeParentId
+  }
+
+  function toggleBranch(channelId: number) {
+    expandedBranches.value = expandedBranches.value.includes(channelId)
+      ? expandedBranches.value.filter(id => id !== channelId)
+      : [...expandedBranches.value, channelId]
+  }
+
   /** Fetch a server's channels into the cache (first page — 200 — is the whole tree here). */
   async function loadChannels(serverId: number, force = false) {
     if (isLoading(serverId)) return
@@ -128,5 +156,8 @@ export function useSidebarChannels() {
     collapsedSections,
     isSectionOpen,
     toggleSection,
+    expandedBranches,
+    isBranchOpen,
+    toggleBranch,
   }
 }

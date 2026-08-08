@@ -43,7 +43,7 @@ use App\Support\Commands\ParsedCommand;
  *   log:          [ string, … ]
  *   used:         [ string, … ] — words already drawn this game, so they don't repeat
  */
-final class SkribblWidget implements WidgetHandler, RedactsState
+final class SkribblWidget implements RedactsState, WidgetHandler
 {
     /** How long a drawing turn runs. */
     private const TURN_MS = 80_000;

@@ -12,18 +12,18 @@ export function useUnread() {
   const echo: any = useNuxtApp().$echo
   const route = useRoute()
   const { user } = useAuth()
-  const { channels } = useServer()
+  const { findChannel, patchChannel } = useServer()
   const { notify } = useDesktopNotifications()
 
   const activeChannelId = computed(() => Number(route.params.channelId) || null)
 
   function bump(channelId: number, mention = false) {
-    const idx = channels.value.findIndex(c => c.id === channelId)
-    if (idx === -1) return
+    // Activity always names a discussion, since that is what holds messages. patchChannel finds
+    // it at whichever level it sits and rolls the container's badge up from its discussions'.
+    const channel = findChannel(channelId)
+    if (!channel) return
 
-    const channel = channels.value[idx]!
-    channels.value.splice(idx, 1, {
-      ...channel,
+    patchChannel(channelId, {
       unread_count: (channel.unread_count ?? 0) + 1,
       // Sticky: once a channel holds a mention, it keeps the louder badge until you read it.
       mention: channel.mention || mention,
@@ -54,7 +54,7 @@ export function useUnread() {
         // A mention in a channel you're not reading is worth a system notification (notify()
         // itself stays quiet unless the tab is in the background).
         if (mentionsMe) {
-          const channel = channels.value.find(c => c.id === a.channel_id)
+          const channel = findChannel(a.channel_id)
           if (channel) {
             notify({
               title: `#${channel.name}`,

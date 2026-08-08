@@ -35,6 +35,7 @@ class Channel extends Model
     protected $fillable = [
         'server_id',
         'conversation_id',
+        'parent_id',
         'name',
         'type',
         'is_private',
@@ -55,6 +56,36 @@ class Channel extends Model
     public function server(): BelongsTo
     {
         return $this->belongsTo(Server::class);
+    }
+
+    /**
+     * The channel this one is a discussion of, or null if this channel is itself a container.
+     *
+     * Nesting is exactly one level deep — a discussion never has discussions of its own. See
+     * DISCUSSIONS.md; the short version is that this is the category system, and a sidebar
+     * three levels deep is a sidebar nobody can read.
+     */
+    public function parent(): BelongsTo
+    {
+        return $this->belongsTo(Channel::class, 'parent_id');
+    }
+
+    /** This container's discussions, in the order the sidebar draws them. */
+    public function discussions(): HasMany
+    {
+        return $this->hasMany(Channel::class, 'parent_id')->orderBy('position')->orderBy('id');
+    }
+
+    /** A discussion — it has a timeline, a desk and (if its type allows) a call of its own. */
+    public function isDiscussion(): bool
+    {
+        return $this->parent_id !== null;
+    }
+
+    /** A container — it holds discussions and nothing else. Never joinable, never postable. */
+    public function isContainer(): bool
+    {
+        return $this->parent_id === null;
     }
 
     /** Set instead of `server_id` when this channel is a DM or a group chat. */
@@ -177,9 +208,33 @@ class Channel extends Model
             return false;
         }
 
+        if (! $this->passesAccess($user, $container)) {
+            return false;
+        }
+
+        // A discussion is also gated by the channel it is a discussion of. Without this line a
+        // private channel would hide itself and then hand out every one of its discussions,
+        // since the children carry `is_private = false` — the lock is on the container, so the
+        // container is where the children have to ask.
+        $this->loadMissing('parent');
+
+        return $this->parent === null || $this->parent->passesAccess($user, $container);
+    }
+
+    /**
+     * This one channel's own access gate, container membership already established.
+     *
+     * Split out of {@see hasMember} because it now has to be asked twice — once of the
+     * discussion, once of its parent — and asking it twice must mean asking the *same*
+     * question, not two similar ones written out separately.
+     */
+    public function passesAccess(User $user, ?MessageContainer $container = null): bool
+    {
         if (! $this->is_private) {
             return true;
         }
+
+        $container ??= $this->container();
 
         return ($container instanceof Server && $container->isStaff($user))
             || $this->allowedMembers()->whereKey($user->getKey())->exists();
@@ -206,17 +261,44 @@ class Channel extends Model
             $q->where(function (Builder $inServer) use ($user) {
                 $inServer
                     ->whereIn('server_id', $user->servers()->select('servers.id'))
-                    ->where(function (Builder $access) use ($user) {
-                        $access
-                            ->where('is_private', false)
-                            ->orWhereIn('server_id', Server::where('owner_id', $user->getKey())->select('id'))
-                            ->orWhereIn('server_id', $user->servers()->wherePivot('role', Server::ROLE_ADMIN)->select('servers.id'))
-                            ->orWhereExists(fn ($exists) => $exists
-                                ->from('channel_user')
-                                ->whereColumn('channel_user.channel_id', 'channels.id')
-                                ->where('channel_user.user_id', $user->getKey()));
-                    });
+                    ->where(fn (Builder $access) => $this->applyAccessClause($access, $user, 'channels'));
             })->orWhereIn('conversation_id', $user->conversations()->select('conversations.id'));
+        })->where(function (Builder $q) use ($user) {
+            // ...and, if this is a discussion, its container has to let you in too. The set-shaped
+            // twin of the parent check in hasMember, and it has to be here rather than left to the
+            // caller: search reaches messages by channel id alone, so a private channel whose
+            // discussions were visible would be a private channel with a public archive.
+            //
+            // Membership of the server or conversation isn't re-asked of the parent — a discussion
+            // carries its container's `server_id`/`conversation_id`, so the clause above already
+            // settled that for both rows at once.
+            $q->whereNull('parent_id')->orWhereExists(function ($exists) use ($user) {
+                $exists->from('channels as parents')->whereColumn('parents.id', 'channels.parent_id');
+                $this->applyAccessClause($exists, $user, 'parents');
+            });
+        });
+    }
+
+    /**
+     * "Is this row's own lock open for you?", as a grouped where clause on whichever table
+     * holds the row — `channels` for the discussion itself, `parents` for its container.
+     *
+     * Pulled out for the same reason {@see passesAccess} was: the rule is now asked of two
+     * rows per channel, and two copies of an access rule is one copy and one future bug.
+     *
+     * @param  Builder<Channel>|\Illuminate\Database\Query\Builder  $query
+     */
+    private function applyAccessClause($query, User $user, string $table): void
+    {
+        $query->where(function ($access) use ($user, $table) {
+            $access
+                ->where($table.'.is_private', false)
+                ->orWhereIn($table.'.server_id', Server::where('owner_id', $user->getKey())->select('id'))
+                ->orWhereIn($table.'.server_id', $user->servers()->wherePivot('role', Server::ROLE_ADMIN)->select('servers.id'))
+                ->orWhereExists(fn ($exists) => $exists
+                    ->from('channel_user')
+                    ->whereColumn('channel_user.channel_id', $table.'.id')
+                    ->where('channel_user.user_id', $user->getKey()));
         });
     }
 

@@ -2,6 +2,7 @@
 
 namespace App\Services\Widgets;
 
+use Illuminate\Http\Client\Response;
 use Illuminate\Support\Facades\Http;
 
 /**
@@ -379,7 +380,7 @@ final class YouTubeResolver
      * bad link, it's the whole search engine being down for the day, and it silently takes out
      * every text search and playlist add until the quota resets. Everything else is transient.
      */
-    private function apiError(\Illuminate\Http\Client\Response $res, string $fallback): string
+    private function apiError(Response $res, string $fallback): string
     {
         $reason = data_get($res->json(), 'error.errors.0.reason');
         if ($res->status() === 403 && in_array($reason, ['quotaExceeded', 'dailyLimitExceeded'], true)) {

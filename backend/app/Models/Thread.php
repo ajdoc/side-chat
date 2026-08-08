@@ -2,6 +2,7 @@
 
 namespace App\Models;
 
+use Database\Factories\ThreadFactory;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
@@ -10,7 +11,7 @@ use Illuminate\Database\Eloquent\Relations\HasMany;
 
 class Thread extends Model
 {
-    /** @use HasFactory<\Database\Factories\ThreadFactory> */
+    /** @use HasFactory<ThreadFactory> */
     use HasFactory;
 
     protected $fillable = ['channel_id', 'side_chat_id', 'user_id', 'message_id', 'name'];

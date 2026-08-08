@@ -2,6 +2,7 @@
 
 namespace App\Models;
 
+use Database\Factories\SideSpaceLockFactory;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
@@ -25,7 +26,7 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
  */
 class SideSpaceLock extends Model
 {
-    /** @use HasFactory<\Database\Factories\SideSpaceLockFactory> */
+    /** @use HasFactory<SideSpaceLockFactory> */
     use HasFactory;
 
     protected $fillable = ['side_space_map_id', 'object_id', 'zone_id', 'created_by', 'allowed', 'password', 'passed'];
@@ -74,7 +75,7 @@ class SideSpaceLock extends Model
      * know about a lapsed pass, so the pruning that matters is the one at the point of reading.
      * The column is tidied whenever a new pass is granted, which is often enough.
      *
-     * @return array<int, int>  user id => unix timestamp the pass runs out
+     * @return array<int, int> user id => unix timestamp the pass runs out
      */
     public function activePasses(): array
     {

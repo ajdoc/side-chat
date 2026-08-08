@@ -16,7 +16,7 @@ import { AudioLines, Headphones, HeadphoneOff, Mic, MicOff, PhoneOff, ScreenShar
  * concerned, so this asks both lists and links to whichever one claims it.
  */
 const { user } = useAuth()
-const { server, channels } = useServer()
+const { server, findChannel } = useServer()
 const { conversations } = useConversations()
 const {
   channelId, status, peers, selfMuted, selfDeafened, isSharing, isCameraOn, isAudioSharing, inCall,
@@ -63,7 +63,7 @@ onBeforeUnmount(() => {
   window.removeEventListener('blur', releaseTalk)
 })
 
-const channel = computed(() => channels.value.find(c => c.id === channelId.value) ?? null)
+const channel = computed(() => findChannel(channelId.value))
 const conversation = computed(() =>
   conversations.value.find(c => c.channel_id === channelId.value) ?? null,
 )

@@ -2,6 +2,7 @@
 
 namespace App\Events;
 
+use App\Models\Message;
 use Illuminate\Broadcasting\InteractsWithSockets;
 use Illuminate\Broadcasting\PrivateChannel;
 use Illuminate\Contracts\Broadcasting\ShouldBroadcastNow;
@@ -22,7 +23,7 @@ class MessageDeleted implements ShouldBroadcastNow
     /** @return array<int, PrivateChannel> */
     public function broadcastOn(): array
     {
-        $name = \App\Models\Message::streamNameFor($this->channelId, $this->threadId, $this->sideChatId);
+        $name = Message::streamNameFor($this->channelId, $this->threadId, $this->sideChatId);
 
         return [new PrivateChannel($name)];
     }

@@ -2,6 +2,7 @@
 
 namespace App\Models;
 
+use Database\Factories\AttachmentFactory;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
@@ -11,7 +12,7 @@ use Illuminate\Support\Str;
 
 class Attachment extends Model
 {
-    /** @use HasFactory<\Database\Factories\AttachmentFactory> */
+    /** @use HasFactory<AttachmentFactory> */
     use HasFactory;
 
     protected $fillable = ['message_id', 'disk', 'path', 'name', 'mime_type', 'extension', 'size'];

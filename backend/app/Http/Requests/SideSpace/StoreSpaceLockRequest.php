@@ -3,13 +3,14 @@
 namespace App\Http\Requests\SideSpace;
 
 use App\Http\Requests\MemberRequest;
+use App\Support\SideSpace\Doors;
 
 /**
  * Locking a door, or changing who may come through it.
  *
  * Membership only at this layer, which is not the whole gate: whether *this* member may lock
  * *this* door depends on the room the door turns out to guard, and that needs the map in hand.
- * It's checked in the controller against {@see \App\Support\SideSpace\Doors::mayAdminister} —
+ * It's checked in the controller against {@see Doors::mayAdminister} —
  * the same function the listing and the removal use, so the three can't drift apart.
  *
  * `allowed` is the explicit key-holders only. The people who can always pass — whoever set it,

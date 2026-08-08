@@ -4,7 +4,6 @@ namespace App\Http\Requests\Message;
 
 use App\DTOs\Message\SendMessageData;
 use App\Http\Requests\MemberRequest;
-use App\Http\Requests\Message\UploadRules;
 use Illuminate\Validation\Rule;
 
 class StoreMessageRequest extends MemberRequest

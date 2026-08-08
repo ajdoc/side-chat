@@ -8,6 +8,8 @@ use App\Models\Channel;
 use App\Models\SideChat;
 use App\Models\Thread;
 use App\Models\User;
+use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\Eloquent\Relations\HasMany;
 
 final class CreateThreadAction
 {
@@ -27,7 +29,7 @@ final class CreateThreadAction
     }
 
     /**
-     * @param  \Illuminate\Database\Eloquent\Relations\HasMany<Thread, \Illuminate\Database\Eloquent\Model>  $relation
+     * @param  HasMany<Thread, Model>  $relation
      * @param  array<string, mixed>  $extra
      */
     private function create($relation, User $user, CreateThreadData $data, array $extra = []): Thread

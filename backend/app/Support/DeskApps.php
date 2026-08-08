@@ -2,6 +2,9 @@
 
 namespace App\Support;
 
+use App\Http\Requests\Canvas\CanvasItemRules;
+use App\Models\Widget;
+
 /**
  * The Side Desk app catalogue, as far as the API is concerned.
  *
@@ -16,7 +19,7 @@ namespace App\Support;
  *   - **surface apps** own storage of their own, hanging off the surface (`board` → whiteboard
  *     strokes, `notes` → the shared document, `docs` → uploaded files, `calendar` → events).
  *   - **widget apps** are the interactive widgets, promoted from canvas cards to full tabs.
- *     They store nothing new: a tab renders the channel's existing {@see \App\Models\Widget} of
+ *     They store nothing new: a tab renders the channel's existing {@see Widget} of
  *     that type — the same row the timeline card and the canvas card render. That's the whole
  *     of the "an app and a widget stay in sync" requirement; there is only ever one of them.
  *
@@ -30,7 +33,7 @@ final class DeskApps
 
     /**
      * Widgets promoted to apps. Must stay in step with the widget handler types — the same list
-     * {@see \App\Http\Requests\Canvas\CanvasItemRules} validates a widget card against.
+     * {@see CanvasItemRules} validates a widget card against.
      */
     public const WIDGET_APPS = ['music', 'video', 'kanban', 'poll', 'shooter', 'racing', 'skribbl', 'poker'];
 

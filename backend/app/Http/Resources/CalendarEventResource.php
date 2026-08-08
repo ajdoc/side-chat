@@ -2,6 +2,7 @@
 
 namespace App\Http\Resources;
 
+use App\Models\CalendarEvent;
 use Illuminate\Http\Request;
 use Illuminate\Http\Resources\Json\JsonResource;
 
@@ -11,7 +12,7 @@ use Illuminate\Http\Resources\Json\JsonResource;
  * Times go out as ISO-8601 UTC and are rendered in the viewer's own zone — a shared calendar
  * spanning zones has to agree on the instant, not on the wall clock.
  *
- * @mixin \App\Models\CalendarEvent
+ * @mixin CalendarEvent
  */
 class CalendarEventResource extends JsonResource
 {

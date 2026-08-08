@@ -10,7 +10,12 @@ final class RenameServerAction
 {
     public function handle(Server $server, UpdateServerData $data): Server
     {
-        $server->update(['name' => $data->name]);
+        $server->update(array_filter([
+            'name' => $data->name,
+            // Left alone when the payload doesn't mention it: this endpoint is the rename, and a
+            // rename must not quietly reset who may start a discussion.
+            'discussion_creation' => $data->discussion_creation,
+        ], fn ($value) => $value !== null));
 
         broadcast(new ServerUpdated($server));
 

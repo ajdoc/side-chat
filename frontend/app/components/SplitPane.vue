@@ -62,7 +62,7 @@ provideChannelScope('split:')
 // carry over as a stale query key aimed at a channel that never had it.
 watch(() => props.pane.channelId, () => { surfaceState.value = {} })
 
-const { channels } = useServer()
+const { findChannel } = useServer()
 
 /**
  * The full channel record, when we happen to have it.
@@ -74,13 +74,16 @@ const { channels } = useServer()
  * timeline reads. The fields left out are the ones only the *page* uses.
  */
 const channel = computed(() => {
-  const known = channels.value.find(c => c.id === props.pane.channelId)
+  const known = findChannel(props.pane.channelId)
   if (known) return known
 
   return {
     id: props.pane.channelId,
     server_id: null,
     conversation_id: null,
+    // A pane always carries a discussion (that's what a timeline is), but we may not hold the
+    // tree it came from — and nothing the pane draws needs to know which channel it's under.
+    parent_id: null,
     name: props.pane.title,
     type: props.pane.type,
     position: 0,

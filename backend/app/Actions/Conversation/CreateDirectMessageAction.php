@@ -44,7 +44,17 @@ final class CreateDirectMessageAction
 
                 // The channel *is* the conversation, as far as every message, thread,
                 // reaction, pin and call in the app is concerned. Nothing reads this name.
-                $conversation->channel()->create(['name' => 'direct', 'type' => 'text']);
+                $channel = $conversation->channel()->create(['name' => 'direct', 'type' => 'text']);
+
+                // ...and the channel holds discussions rather than messages, so the timeline is
+                // the General one underneath it. A DM starts with exactly one, which is what
+                // makes it feel like it has none.
+                $channel->discussions()->create([
+                    'conversation_id' => $conversation->getKey(),
+                    'name' => 'General',
+                    'type' => 'text',
+                    'position' => 0,
+                ]);
 
                 return $conversation;
             });

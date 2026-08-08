@@ -2,6 +2,7 @@
 
 namespace App\Models;
 
+use Database\Factories\SideChatFactory;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
@@ -13,7 +14,7 @@ use Illuminate\Support\Str;
 
 class SideChat extends Model
 {
-    /** @use HasFactory<\Database\Factories\SideChatFactory> */
+    /** @use HasFactory<SideChatFactory> */
     use HasFactory;
 
     /** How many tags a post may carry, and how long one may be. Enforced in the request. */

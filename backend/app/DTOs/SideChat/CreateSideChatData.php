@@ -8,6 +8,7 @@ use WendellAdriel\ValidatedDTO\ValidatedDTO;
 final class CreateSideChatData extends ValidatedDTO
 {
     public string $name;
+
     public ?int $message_id;
 
     /**

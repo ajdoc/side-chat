@@ -2,6 +2,8 @@
 
 namespace App\Http\Resources;
 
+use App\Models\Attachment;
+use App\Models\SpaceDocument;
 use Illuminate\Http\Request;
 use Illuminate\Http\Resources\Json\JsonResource;
 
@@ -11,7 +13,7 @@ use Illuminate\Http\Resources\Json\JsonResource;
  * `source: 'chat'` and carrying its `message_id` — the client uses those to gate actions (a
  * chat file isn't deletable from the shelf and is already in chat, so it offers neither).
  *
- * @mixin \App\Models\Attachment
+ * @mixin Attachment
  */
 class AttachmentDocResource extends JsonResource
 {
@@ -36,7 +38,7 @@ class AttachmentDocResource extends JsonResource
         ];
     }
 
-    /** Same kinds {@see \App\Models\SpaceDocument::kind()} derives, from the attachment. */
+    /** Same kinds {@see SpaceDocument::kind()} derives, from the attachment. */
     private function docKind(): string
     {
         return match (true) {

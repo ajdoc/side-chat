@@ -3,6 +3,7 @@
 namespace App\Services;
 
 use App\Models\User;
+use App\Services\Widgets\SpotifyClient;
 use Illuminate\Contracts\Encryption\DecryptException;
 use Illuminate\Support\Facades\Crypt;
 use Illuminate\Support\Facades\Http;
@@ -11,7 +12,7 @@ use Illuminate\Support\Facades\Http;
  * The user-facing Spotify OAuth (Authorization Code) flow — linking a person's own Spotify
  * account so the music widget can play the real track through the Web Playback SDK.
  *
- * This is separate from {@see \App\Services\Widgets\SpotifyClient}, which reads *public*
+ * This is separate from {@see SpotifyClient}, which reads *public*
  * catalog metadata with no user. Here we act on behalf of one user, which needs their
  * consent and a Premium subscription (only Premium accounts can stream through the SDK).
  *

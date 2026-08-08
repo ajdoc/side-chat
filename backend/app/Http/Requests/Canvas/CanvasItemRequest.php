@@ -2,14 +2,16 @@
 
 namespace App\Http\Requests\Canvas;
 
+use App\Http\Requests\SideChat\ViewSideChatRequest;
+use App\Http\Requests\Whiteboard\ManageWhiteboardRequest;
 use App\Models\SideChat;
 use Illuminate\Foundation\Http\FormRequest;
 
 /**
  * Create, change or delete a card on a side chat's Open Canvas — a taking-part power, so you
  * have to be on the roster, exactly like posting a message or drawing on the board
- * ({@see \App\Http\Requests\Whiteboard\ManageWhiteboardRequest}). Reading the canvas only
- * needs channel membership ({@see \App\Http\Requests\SideChat\ViewSideChatRequest}).
+ * ({@see ManageWhiteboardRequest}). Reading the canvas only
+ * needs channel membership ({@see ViewSideChatRequest}).
  *
  * One class serves store, update and destroy; the rules are empty on DELETE.
  */

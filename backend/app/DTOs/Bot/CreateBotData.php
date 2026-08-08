@@ -9,7 +9,9 @@ use WendellAdriel\ValidatedDTO\ValidatedDTO;
 final class CreateBotData extends ValidatedDTO
 {
     public string $name;
+
     public ?string $description;
+
     public ?string $avatar;
 
     /** Where to deliver events. Optional — a bot that only ever posts needs no endpoint. */

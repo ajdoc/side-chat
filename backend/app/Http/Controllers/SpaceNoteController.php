@@ -3,8 +3,8 @@
 namespace App\Http\Controllers;
 
 use App\Events\SpaceNoteUpdated;
-use App\Http\Requests\Space\UpdateSpaceNoteRequest;
 use App\Http\Requests\SideChat\ViewSideChatRequest;
+use App\Http\Requests\Space\UpdateSpaceNoteRequest;
 use App\Http\Resources\SpaceNoteResource;
 use App\Models\SideChat;
 use Illuminate\Http\JsonResponse;

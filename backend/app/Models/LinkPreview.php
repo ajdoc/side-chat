@@ -2,6 +2,7 @@
 
 namespace App\Models;
 
+use Database\Factories\LinkPreviewFactory;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsToMany;
@@ -13,7 +14,7 @@ use Illuminate\Database\Eloquent\Relations\BelongsToMany;
  */
 class LinkPreview extends Model
 {
-    /** @use HasFactory<\Database\Factories\LinkPreviewFactory> */
+    /** @use HasFactory<LinkPreviewFactory> */
     use HasFactory;
 
     /** Consider a successful unfurl stale after this long, and refetch it. */

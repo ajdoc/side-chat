@@ -15,6 +15,9 @@ class ServerResource extends JsonResource
         return [
             'id' => $this->id,
             'name' => $this->name,
+            // Who may add a discussion to a channel here. Sent to everyone, not just staff: the
+            // client has to know whether to offer the button at all.
+            'discussion_creation' => $this->discussion_creation,
             'owner_id' => $this->owner_id,
             'is_owner' => $request->user()?->id === $this->owner_id,
             // What the *asker* is here, and whether that's enough to run the place. The two

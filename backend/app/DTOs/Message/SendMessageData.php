@@ -9,6 +9,7 @@ use WendellAdriel\ValidatedDTO\ValidatedDTO;
 final class SendMessageData extends ValidatedDTO
 {
     public ?string $body;
+
     public ?int $reply_to_id;
 
     /**
@@ -71,6 +72,6 @@ final class SendMessageData extends ValidatedDTO
     protected function casts(): array
     {
         // Same reason for the boolean: over multipart it arrives as the string "1"/"0".
-        return ['reply_to_id' => new IntegerCast(), 'replies_to_post' => new BooleanCast()];
+        return ['reply_to_id' => new IntegerCast, 'replies_to_post' => new BooleanCast];
     }
 }

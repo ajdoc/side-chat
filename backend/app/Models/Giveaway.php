@@ -5,6 +5,7 @@ namespace App\Models;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
+use Illuminate\Support\Collection;
 
 /**
  * A prize, a message to react to, and a closing time. See the giveaways migration.
@@ -78,9 +79,9 @@ class Giveaway extends Model
      * Returns the winning entries. An empty collection is a real answer — a giveaway nobody
      * entered has no winner, and inventing one would be worse.
      *
-     * @return \Illuminate\Support\Collection<int, GiveawayEntry>
+     * @return Collection<int, GiveawayEntry>
      */
-    public function draw(): \Illuminate\Support\Collection
+    public function draw(): Collection
     {
         $winners = $this->entries()->inRandomOrder()->limit($this->winner_count)->get();
 

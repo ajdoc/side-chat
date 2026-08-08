@@ -4,21 +4,22 @@ namespace App\Services\Commands;
 
 use App\Jobs\DeliverBotEvent;
 use App\Models\BotCommand;
-use App\Models\CustomCommand;
 use App\Models\Channel;
+use App\Models\CustomCommand;
 use App\Models\User;
+use App\Services\Automation\AutomationEngine;
+use App\Services\Automation\TriggerRegistry;
 use App\Services\Commands\Handlers\EightBallCommand;
 use App\Services\Commands\Handlers\MeCommand;
 use App\Services\Commands\Handlers\RemindCommand;
 use App\Services\Commands\Handlers\RollCommand;
 use App\Services\Commands\Handlers\ShrugCommand;
-use App\Services\Automation\AutomationEngine;
-use App\Services\Automation\TriggerRegistry;
 use App\Services\Commands\Handlers\WebCommand;
 use App\Support\Automation\AutomationContext;
 use App\Support\Automation\Subject;
 use App\Support\Commands\ParsedCommand;
 use App\Support\Commands\SlashOutcome;
+use Illuminate\Support\Collection;
 use Illuminate\Support\Str;
 
 /**
@@ -226,9 +227,9 @@ class SlashCommandService
      * shouldn't appear in its autocomplete either — the list of commands a bot answers to
      * is itself a hint about what that bot is for.
      *
-     * @return \Illuminate\Support\Collection<int, BotCommand>
+     * @return Collection<int, BotCommand>
      */
-    private function botCommands(Channel $channel): \Illuminate\Support\Collection
+    private function botCommands(Channel $channel): Collection
     {
         if ($channel->server_id === null) {
             return collect(); // A DM or group chat: bots belong to servers.

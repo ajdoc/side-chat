@@ -2,6 +2,7 @@
 
 namespace App\Http\Resources;
 
+use App\Models\CanvasItem;
 use Illuminate\Http\Request;
 use Illuminate\Http\Resources\Json\JsonResource;
 
@@ -10,7 +11,7 @@ use Illuminate\Http\Resources\Json\JsonResource;
  * its shape depends on `kind` and is the renderer's contract, not the API's (the same stance
  * {@see WhiteboardStrokeResource} takes on a stroke's payload).
  *
- * @mixin \App\Models\CanvasItem
+ * @mixin CanvasItem
  */
 class CanvasItemResource extends JsonResource
 {

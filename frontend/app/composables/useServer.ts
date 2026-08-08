@@ -124,9 +124,66 @@ export function useServer() {
     return res.data
   }
 
-  /** Take a channel out of the sidebar — deleted here, or deleted by someone else. */
+  /**
+   * Every channel in the tree — containers and the discussions under them — as one list.
+   *
+   * `channels` is a tree now, but most of the app addresses a channel by id and doesn't care
+   * which level it sits on: a route parameter, a split pane, a voice bar, a search result. They
+   * all look here rather than each learning to walk two levels.
+   */
+  const flatChannels = computed<Channel[]>(() =>
+    channels.value.flatMap(c => [c, ...(c.discussions ?? [])]))
+
+  /** A channel or a discussion, by id. Null when it isn't in the open server's tree. */
+  function findChannel(id: number | null): Channel | null {
+    if (!id) return null
+
+    return flatChannels.value.find(c => c.id === id) ?? null
+  }
+
+  /**
+   * The discussion a channel id should actually open.
+   *
+   * Handed a discussion, that discussion. Handed a container, the one you've pinned as your
+   * default, or its first discussion if you haven't — a container holds no timeline, so opening
+   * one has to mean opening something inside it. Every route into a channel goes through here,
+   * which is why "click the channel, land where I asked to land" needs no special case
+   * anywhere else.
+   *
+   * The default falls back rather than fails: a discussion you pinned and somebody has since
+   * deleted lands you in the first one, not nowhere.
+   */
+  function resolveDiscussion(channel: Channel | null): Channel | null {
+    if (!channel) return null
+    if (channel.parent_id) return channel
+
+    const preferred = channel.discussions?.find(d => d.id === channel.default_child_id)
+
+    return preferred ?? channel.discussions?.[0] ?? null
+  }
+
+  /** Take a channel or discussion out of the sidebar — deleted here, or by someone else. */
   function forgetChannel(id: number) {
-    channels.value = channels.value.filter(c => c.id !== id)
+    channels.value = channels.value
+      .filter(c => c.id !== id)
+      .map(c => c.discussions?.some(d => d.id === id)
+        ? { ...c, discussions: c.discussions.filter(d => d.id !== id) }
+        : c)
+
+    rollUpUnread()
+  }
+
+  /**
+   * A container's badge is the sum of its discussions', recomputed whenever one of them moves.
+   *
+   * The server does this when it builds the list; this keeps it true between fetches, as
+   * messages arrive and channels are read. Without it a container's badge would be a number
+   * that was right once, which is worse than no number at all.
+   */
+  function rollUpUnread() {
+    channels.value = channels.value.map(c => c.discussions
+      ? { ...c, unread_count: c.discussions.reduce((n, d) => n + (d.unread_count ?? 0), 0), mention: c.discussions.some(d => d.mention) }
+      : c)
   }
 
   /**
@@ -137,8 +194,16 @@ export function useServer() {
    * overwriting the row wholesale would blank the badge for everyone on every rename.
    */
   function patchChannel(id: number, fields: Partial<Channel>) {
-    const idx = channels.value.findIndex(c => c.id === id)
-    if (idx !== -1) channels.value.splice(idx, 1, { ...channels.value[idx]!, ...fields })
+    // Either level: the id may name a container or one of its discussions, and the callers —
+    // a rename broadcast, an unread bump, a read receipt — don't know which they hold.
+    channels.value = channels.value.map((c) => {
+      if (c.id === id) return { ...c, ...fields }
+      if (!c.discussions?.some(d => d.id === id)) return c
+
+      return { ...c, discussions: c.discussions.map(d => d.id === id ? { ...d, ...fields } : d) }
+    })
+
+    rollUpUnread()
   }
 
   /** Same, for the open server's own metadata (the sidebar header). */
@@ -166,6 +231,9 @@ export function useServer() {
   return {
     server,
     channels,
+    flatChannels,
+    findChannel,
+    resolveDiscussion,
     hasMoreChannels,
     openServer,
     refreshChannels,

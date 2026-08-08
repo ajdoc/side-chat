@@ -2,11 +2,12 @@
 
 namespace App\Http\Requests\Message;
 
+use App\Http\Controllers\ChunkedUploadController;
 use Illuminate\Validation\Rule;
 
 /**
  * The `uploads` half of a send — files that came up the chunked path rather than in the request
- * body ({@see \App\Http\Controllers\ChunkedUploadController}). Shared by every surface a message
+ * body ({@see ChunkedUploadController}). Shared by every surface a message
  * can be posted to (a channel, a thread, a side chat), the way {@see \App\Http\Requests\
  * Whiteboard\StrokeRules} is shared by every board.
  *

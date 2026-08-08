@@ -4,6 +4,7 @@ namespace App\Models;
 
 use App\Contracts\MessageContainer;
 use App\Models\Concerns\HasNicknames;
+use Database\Factories\ServerFactory;
 use Illuminate\Broadcasting\PrivateChannel;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
@@ -14,7 +15,7 @@ use Illuminate\Support\Str;
 
 class Server extends Model implements MessageContainer
 {
-    /** @use HasFactory<\Database\Factories\ServerFactory> */
+    /** @use HasFactory<ServerFactory> */
     use HasFactory, HasNicknames;
 
     /**
@@ -33,7 +34,18 @@ class Server extends Model implements MessageContainer
 
     public const ROLES = [self::ROLE_MEMBER, self::ROLE_ADMIN];
 
-    protected $fillable = ['name', 'owner_id', 'invite_code'];
+    /**
+     * Who may add a discussion to a channel.
+     *
+     * Starts at `everyone`, which is the behaviour we want: a discussion is a conversation
+     * somebody wanted to have, and needing permission to start one is how a channel stays a
+     * single undifferentiated wall. The switch exists because an open discussion list on a
+     * public server is an unbounded thing anyone can spam, and a server that discovers it
+     * needs the lock needs it that minute.
+     */
+    public const DISCUSSION_CREATION = ['everyone', 'staff'];
+
+    protected $fillable = ['name', 'owner_id', 'invite_code', 'discussion_creation'];
 
     public function owner(): BelongsTo
     {
@@ -75,6 +87,18 @@ class Server extends Model implements MessageContainer
             ->whereKey($user->getKey())
             ->wherePivot('role', self::ROLE_ADMIN)
             ->exists();
+    }
+
+    /**
+     * May this person start a discussion here?
+     *
+     * Membership is assumed — the caller has already been through Channel::hasMember, which is
+     * the check that decides whether they can see the channel at all. This adds only the
+     * server's own policy on top.
+     */
+    public function canCreateDiscussions(User $user): bool
+    {
+        return $this->discussion_creation !== 'staff' || $this->isStaff($user);
     }
 
     /** This member's role string — 'owner' for the owner, else the pivot value. */

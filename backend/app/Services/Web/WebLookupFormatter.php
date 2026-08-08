@@ -53,7 +53,7 @@ class WebLookupFormatter
 
     /**
      * @param  array<string, mixed>  $result  A {@see WebLookup::lookup()} return value.
-     * @return array<int, string>  One message per element — usually one.
+     * @return array<int, string> One message per element — usually one.
      */
     public function format(string $query, array $result): array
     {

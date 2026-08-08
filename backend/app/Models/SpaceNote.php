@@ -2,6 +2,8 @@
 
 namespace App\Models;
 
+use App\Http\Controllers\ChannelSpaceNoteController;
+use App\Http\Controllers\SpaceNoteController;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 
@@ -10,8 +12,8 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
  * edited collaboratively. A save replaces the whole body and broadcasts it, but it is *not*
  * blind last-write-wins: every save carries the `version` it was based on, and a save based
  * on a stale version is refused so the client can merge the two edits rather than erase one
- * of them ({@see applyEdit()}). See {@see \App\Http\Controllers\SpaceNoteController} /
- * {@see \App\Http\Controllers\ChannelSpaceNoteController}.
+ * of them ({@see applyEdit()}). See {@see SpaceNoteController} /
+ * {@see ChannelSpaceNoteController}.
  */
 class SpaceNote extends Model
 {

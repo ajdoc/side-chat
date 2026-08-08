@@ -2,6 +2,7 @@
 
 namespace App\Models;
 
+use Database\Factories\VoiceParticipantFactory;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
@@ -11,7 +12,7 @@ use Illuminate\Support\Carbon;
 /** One user sitting in one voice channel. */
 class VoiceParticipant extends Model
 {
-    /** @use HasFactory<\Database\Factories\VoiceParticipantFactory> */
+    /** @use HasFactory<VoiceParticipantFactory> */
     use HasFactory;
 
     protected $fillable = [

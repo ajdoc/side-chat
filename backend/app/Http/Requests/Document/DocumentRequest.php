@@ -2,6 +2,7 @@
 
 namespace App\Http\Requests\Document;
 
+use App\Http\Requests\SideChat\ViewSideChatRequest;
 use App\Models\SideChat;
 use Illuminate\Foundation\Http\FormRequest;
 
@@ -9,7 +10,7 @@ use Illuminate\Foundation\Http\FormRequest;
  * Upload or delete a document on a side chat's Docs app — a taking-part power, so you have to
  * be on the roster, exactly like posting a message ({@see \App\Http\Requests\Whiteboard\
  * ManageWhiteboardRequest}). Reading the list only needs channel membership
- * ({@see \App\Http\Requests\SideChat\ViewSideChatRequest}).
+ * ({@see ViewSideChatRequest}).
  *
  * One class serves store and destroy; the file rule applies only on upload (POST).
  */

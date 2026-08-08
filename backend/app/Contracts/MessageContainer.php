@@ -2,8 +2,10 @@
 
 namespace App\Contracts;
 
+use App\Models\Nickname;
 use App\Models\User;
 use Illuminate\Broadcasting\PrivateChannel;
+use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsToMany;
 use Illuminate\Database\Eloquent\Relations\MorphMany;
 
@@ -32,7 +34,7 @@ interface MessageContainer
      * Shared by the @mention autocomplete and by mention resolution on send, so a name in a
      * message body can be turned back into the member it names, in a server or a chat alike.
      *
-     * @return BelongsToMany<User, \Illuminate\Database\Eloquent\Model>
+     * @return BelongsToMany<User, Model>
      */
     public function members(): BelongsToMany;
 
@@ -76,7 +78,7 @@ interface MessageContainer
      * no say in it. So it hangs off the container, like membership does — which is also
      * what lets one implementation serve a server, a DM and a group chat alike.
      *
-     * @return MorphMany<\App\Models\Nickname, \Illuminate\Database\Eloquent\Model>
+     * @return MorphMany<Nickname, Model>
      */
     public function nicknames(): MorphMany;
 }

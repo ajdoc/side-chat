@@ -2,13 +2,13 @@
 
 namespace App\Http\Controllers;
 
-use App\Console\Commands\RunBotSchedules;
 use App\Http\Requests\Automation\ManageAutomationsRequest;
 use App\Http\Requests\Automation\StoreBotScheduleRequest;
 use App\Models\BotSchedule;
 use App\Models\BotSettings;
 use App\Models\Server;
 use App\Services\Automation\Actions\PostMessageAction;
+use App\Services\Automation\Actions\RunScheduleAction;
 use App\Services\Automation\TriggerRegistry;
 use App\Support\Automation\AutomationContext;
 use Illuminate\Http\JsonResponse;
@@ -72,7 +72,7 @@ class BotScheduleController extends Controller
      * Send it now, without waiting for its clock.
      *
      * Doesn't move `next_run_at`: the Monday post is still due on Monday. Same reasoning as
-     * {@see \App\Services\Automation\Actions\RunScheduleAction}, and the same path.
+     * {@see RunScheduleAction}, and the same path.
      */
     public function run(
         ManageAutomationsRequest $request,

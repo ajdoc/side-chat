@@ -8,6 +8,7 @@ use App\Events\ThreadUpdated;
 use App\Models\Message;
 use App\Services\AttachmentService;
 use App\Services\LinkPreviewService;
+use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Str;
 
 final class UpdateMessageAction
@@ -24,7 +25,7 @@ final class UpdateMessageAction
      *  - Any newly uploaded files are added.
      *  - If the message started a thread, the thread title is kept in sync (business rule 2).
      *
-     * @param  array<int, \Illuminate\Http\UploadedFile>  $files
+     * @param  array<int, UploadedFile>  $files
      */
     public function handle(Message $message, UpdateMessageData $data, array $files = []): Message
     {

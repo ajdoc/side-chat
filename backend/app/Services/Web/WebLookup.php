@@ -2,6 +2,7 @@
 
 namespace App\Services\Web;
 
+use App\Jobs\PostWebLookup;
 use Illuminate\Support\Facades\Http;
 use Throwable;
 
@@ -20,7 +21,7 @@ use Throwable;
  * a set of related links, Wikipedia has the paragraph of context. Falling back from one to
  * the other would throw away whichever arrived second.
  *
- * Never called on the request path — see {@see \App\Jobs\PostWebLookup} for why.
+ * Never called on the request path — see {@see PostWebLookup} for why.
  */
 class WebLookup
 {
@@ -129,7 +130,6 @@ class WebLookup
      * neighbours get cards. Nested topic *groups* (a `Topics` key instead of a `FirstURL`)
      * are skipped — they're headings, not destinations.
      *
-     * @param  mixed  $topics
      * @return array<int, array{text: string, url: string}>
      */
     private function relatedTopics(mixed $topics): array

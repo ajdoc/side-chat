@@ -6,6 +6,7 @@ use App\Models\Automation;
 use App\Models\Giveaway;
 use App\Services\Automation\Actions\PostMessageAction;
 use App\Support\Automation\AutomationContext;
+use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
 
 /**
@@ -53,7 +54,7 @@ class GiveawayDrawer
         );
     }
 
-    /** @param \Illuminate\Support\Collection<int, string> $names */
+    /** @param Collection<int, string> $names */
     private function result(Giveaway $giveaway, $names): string
     {
         // Said plainly rather than dressed up. A giveaway nobody entered is a normal thing
@@ -67,7 +68,7 @@ class GiveawayDrawer
         return "🎉 **{$giveaway->prize}** goes to {$list}. Congratulations!";
     }
 
-    /** @return \Illuminate\Support\Collection<int, Automation> */
+    /** @return Collection<int, Automation> */
     private function entryRules(Giveaway $giveaway)
     {
         return Automation::where('server_id', $giveaway->server_id)

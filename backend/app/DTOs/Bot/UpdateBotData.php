@@ -9,7 +9,9 @@ use WendellAdriel\ValidatedDTO\ValidatedDTO;
 final class UpdateBotData extends ValidatedDTO
 {
     public ?string $name;
+
     public ?string $description;
+
     public ?string $avatar;
 
     /**

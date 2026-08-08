@@ -2,6 +2,7 @@
 
 namespace App\Models;
 
+use App\Http\Resources\MessageResource;
 use Database\Factories\MessageFactory;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
@@ -29,7 +30,7 @@ class Message extends Model
      *
      * Deliberately not a column and never broadcast: launching a floating window is a thing
      * that happens to one person, in the browser tab that typed the command, once. It rides
-     * out on that one HTTP response ({@see \App\Http\Resources\MessageResource}) and is gone.
+     * out on that one HTTP response ({@see MessageResource}) and is gone.
      */
     public ?string $openApp = null;
 

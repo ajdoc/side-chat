@@ -4,10 +4,13 @@ import { Button } from '~/components/ui/button'
 definePageMeta({ middleware: 'auth', layout: 'app' })
 
 const route = useRoute()
-const { server, channels } = useServer()
+const { server, channels, resolveDiscussion } = useServer()
 
 const serverId = computed(() => Number(route.params.serverId))
-const firstText = computed(() => channels.value.find(c => c.type === 'text'))
+// A channel holds no timeline of its own, so landing on the server means landing in the first
+// text channel's first discussion. `resolveDiscussion` is the same hop the channel page makes,
+// done here so the redirect goes straight to the destination rather than bouncing through it.
+const firstText = computed(() => resolveDiscussion(channels.value.find(c => c.type === 'text') ?? null))
 
 // Once the server (loaded by the layout) has a text channel, jump straight into it.
 watchEffect(() => {

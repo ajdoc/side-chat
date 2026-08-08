@@ -2,6 +2,7 @@
 
 namespace App\Http\Resources;
 
+use App\Models\Widget;
 use App\Services\Widgets\RedactsState;
 use App\Services\Widgets\WidgetService;
 use Illuminate\Http\Request;
@@ -16,7 +17,7 @@ use Illuminate\Http\Resources\Json\JsonResource;
  * this viewer isn't entitled to before the state leaves the server. Still no shape
  * knowledge here — we only ask the handler.
  *
- * @mixin \App\Models\Widget
+ * @mixin Widget
  */
 class WidgetResource extends JsonResource
 {

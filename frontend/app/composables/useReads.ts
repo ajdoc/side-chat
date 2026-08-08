@@ -10,7 +10,7 @@ export function useReads() {
   const api = useApi()
   const echo: any = useNuxtApp().$echo
   const { user } = useAuth()
-  const { channels } = useServer()
+  const { patchChannel } = useServer()
 
   // user id → their marker. A map, not a list: a read is an *update* to where someone
   // is, not a new event, so the same user must never appear twice.
@@ -80,8 +80,7 @@ export function useReads() {
   }
 
   function clearUnread(id: number) {
-    const idx = channels.value.findIndex(c => c.id === id)
-    if (idx !== -1) channels.value.splice(idx, 1, { ...channels.value[idx]!, unread_count: 0, mention: false })
+    patchChannel(id, { unread_count: 0, mention: false })
   }
 
   function subscribe(id: number) {

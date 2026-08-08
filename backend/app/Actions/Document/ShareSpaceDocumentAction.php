@@ -2,6 +2,7 @@
 
 namespace App\Actions\Document;
 
+use App\Actions\Message\SendMessageAction;
 use App\Events\ChannelActivity;
 use App\Events\MessageSent;
 use App\Models\Channel;
@@ -16,7 +17,7 @@ use App\Services\AttachmentService;
  * the file now lives in chat exactly like one dragged into the composer: it shows in the
  * timeline and in Info → Files, and stays independent of the shelf original.
  *
- * Mirrors the tail of {@see \App\Actions\Message\SendMessageAction} — create, attach,
+ * Mirrors the tail of {@see SendMessageAction} — create, attach,
  * broadcast MessageSent and ChannelActivity — minus the command/link/mention handling a
  * document share has no use for.
  */

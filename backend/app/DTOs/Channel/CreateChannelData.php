@@ -9,6 +9,7 @@ use WendellAdriel\ValidatedDTO\ValidatedDTO;
 final class CreateChannelData extends ValidatedDTO
 {
     public string $name;
+
     public string $type;
 
     /**

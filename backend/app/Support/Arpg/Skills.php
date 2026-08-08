@@ -2,6 +2,8 @@
 
 namespace App\Support\Arpg;
 
+use App\Http\Controllers\ArpgSkillController;
+
 /**
  * Every skill in the Labyrinth, and the rules about who may learn one.
  *
@@ -9,7 +11,7 @@ namespace App\Support\Arpg;
  *
  * The client fights the fight — it's the only thing that knows where anybody is standing — so it
  * would be natural to put the skills next to it. They're here instead, and served to the client
- * over {@see \App\Http\Controllers\ArpgSkillController}, because *learning* a skill is a durable
+ * over {@see ArpgSkillController}, because *learning* a skill is a durable
  * decision about a character: it spends a point, it's bounded by a cap, and it has to be the same
  * fact tomorrow. Two copies of that table would drift the first time a number was tuned, and the
  * copy that mattered would be the one on the client, which is the wrong one.

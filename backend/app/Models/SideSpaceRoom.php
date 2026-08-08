@@ -2,6 +2,7 @@
 
 namespace App\Models;
 
+use Database\Factories\SideSpaceRoomFactory;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
@@ -22,7 +23,7 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
  */
 class SideSpaceRoom extends Model
 {
-    /** @use HasFactory<\Database\Factories\SideSpaceRoomFactory> */
+    /** @use HasFactory<SideSpaceRoomFactory> */
     use HasFactory;
 
     protected $fillable = ['side_space_map_id', 'zone_id', 'owner_id', 'assigned_by'];

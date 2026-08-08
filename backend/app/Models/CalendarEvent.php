@@ -2,14 +2,16 @@
 
 namespace App\Models;
 
+use App\Http\Controllers\CalendarController;
+use App\Http\Controllers\ChannelCalendarController;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 
 /**
  * One entry on a Side Desk's shared Calendar. Like a {@see CanvasItem}, it points at exactly
  * one surface — a side chat or a channel — and every member of that surface sees the same
- * schedule. See {@see \App\Http\Controllers\CalendarController} /
- * {@see \App\Http\Controllers\ChannelCalendarController}.
+ * schedule. See {@see CalendarController} /
+ * {@see ChannelCalendarController}.
  */
 class CalendarEvent extends Model
 {

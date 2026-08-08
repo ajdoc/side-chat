@@ -24,7 +24,16 @@ final class CreateGroupAction
             ]);
 
             $conversation->members()->attach(array_unique([$user->id, ...$data->user_ids]));
-            $conversation->channel()->create(['name' => 'group', 'type' => 'text']);
+            $channel = $conversation->channel()->create(['name' => 'group', 'type' => 'text']);
+
+            // The timeline is the General discussion under the channel, not the channel itself —
+            // see CreateChannelAction, which does the same for a server's channels.
+            $channel->discussions()->create([
+                'conversation_id' => $conversation->getKey(),
+                'name' => 'General',
+                'type' => 'text',
+                'position' => 0,
+            ]);
 
             return $conversation;
         });

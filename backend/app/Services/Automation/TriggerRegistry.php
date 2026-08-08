@@ -2,6 +2,8 @@
 
 namespace App\Services\Automation;
 
+use App\Support\Automation\Subject;
+
 /**
  * Every "when" a rule can be built on, and what each one puts in the context.
  *
@@ -43,7 +45,7 @@ final class TriggerRegistry
     public const SCHEDULE_DUE = 'schedule.due';
 
     /**
-     * The fields every trigger about a person supplies — see {@see \App\Support\Automation\Subject}.
+     * The fields every trigger about a person supplies — see {@see Subject}.
      *
      * One constant rather than the same four strings repeated per trigger, for the same
      * reason Subject exists: when they were written out by hand they drifted, and a field

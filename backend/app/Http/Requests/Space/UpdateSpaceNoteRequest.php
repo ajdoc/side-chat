@@ -2,6 +2,7 @@
 
 namespace App\Http\Requests\Space;
 
+use App\Http\Requests\SideChat\ViewSideChatRequest;
 use App\Models\SideChat;
 use Illuminate\Foundation\Http\FormRequest;
 
@@ -9,7 +10,7 @@ use Illuminate\Foundation\Http\FormRequest;
  * Saving a side chat's note is a taking-part power, not a reading one: you have to be on the
  * roster, exactly like posting a message or drawing on the board ({@see \App\Http\Requests\
  * Whiteboard\ManageWhiteboardRequest}). Reading the note only needs channel membership and
- * goes through {@see \App\Http\Requests\SideChat\ViewSideChatRequest}.
+ * goes through {@see ViewSideChatRequest}.
  */
 class UpdateSpaceNoteRequest extends FormRequest
 {

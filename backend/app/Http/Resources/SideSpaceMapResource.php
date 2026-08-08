@@ -2,6 +2,7 @@
 
 namespace App\Http\Resources;
 
+use App\Models\SideSpaceMap;
 use App\Support\SideSpace\Doors;
 use Illuminate\Http\Request;
 use Illuminate\Http\Resources\Json\JsonResource;
@@ -10,7 +11,7 @@ use Illuminate\Http\Resources\Json\JsonResource;
  * A Side Space's map, whole. There is no partial form of this: the browser has to draw every
  * tile and answer "is this solid" for every step, so it gets the entire grid or nothing.
  *
- * @mixin \App\Models\SideSpaceMap
+ * @mixin SideSpaceMap
  */
 class SideSpaceMapResource extends JsonResource
 {

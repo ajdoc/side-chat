@@ -2,6 +2,7 @@
 
 namespace App\Models;
 
+use App\Http\Controllers\ChannelCanvasController;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 
@@ -10,7 +11,7 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
  * a surface's 2D board. Like a {@see WhiteboardStroke}, a card points at exactly one surface
  * (a side chat or a channel) and its `content` is a free-form blob whose shape is the card
  * `kind`'s contract with its Vue renderer, not the API's. See {@see \App\Http\Controllers\
- * CanvasController} / {@see \App\Http\Controllers\ChannelCanvasController}.
+ * CanvasController} / {@see ChannelCanvasController}.
  */
 class CanvasItem extends Model
 {

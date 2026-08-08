@@ -2,6 +2,7 @@
 
 namespace App\Http\Requests\Widget;
 
+use App\Events\WidgetUpdated;
 use App\Http\Requests\MemberRequest;
 
 /**
@@ -9,8 +10,6 @@ use App\Http\Requests\MemberRequest;
  *
  * Clients call this after a reference-only WidgetUpdated / MessageSent tells them the
  * state moved without carrying it — the state is too big for Pusher's 10KB event cap
- * (see {@see \App\Events\WidgetUpdated}).
+ * (see {@see WidgetUpdated}).
  */
-class WidgetShowRequest extends MemberRequest
-{
-}
+class WidgetShowRequest extends MemberRequest {}

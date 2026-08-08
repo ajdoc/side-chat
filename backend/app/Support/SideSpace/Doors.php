@@ -103,7 +103,7 @@ final class Doors
      * A list rather than a name: a room can have several owners, which is the ordinary case for
      * anywhere a team works rather than a person.
      *
-     * @return array<int, int>  user ids
+     * @return array<int, int> user ids
      */
     public static function ownersOf(SideSpaceMap $map, ?string $zoneId): array
     {
@@ -161,7 +161,7 @@ final class Doors
      * They do still hold a key to the locks they set themselves, as the creator — which is the
      * same rule everybody else gets, not a privilege.
      *
-     * @return array<int, int>  user ids
+     * @return array<int, int> user ids
      */
     public static function granted(SideSpaceMap $map, SideSpaceLock $lock): array
     {
@@ -187,7 +187,7 @@ final class Doors
      * moment it is asked; the map sends the pass deadlines instead, so a room full of people can
      * watch the same pass run out at the same time without another broadcast.
      *
-     * @return array<int, int>  user ids
+     * @return array<int, int> user ids
      */
     public static function keyholders(SideSpaceMap $map, SideSpaceLock $lock): array
     {

@@ -68,6 +68,17 @@ export interface Channel {
   /** Null when this channel belongs to a conversation rather than a server. */
   server_id: number | null
   conversation_id: number | null
+  /**
+   * Null on a channel, set on a discussion.
+   *
+   * A channel is a container of discussions and a discussion is itself a channel — same type,
+   * same everything. The timeline, the Side Desk, the call and the map all hang off the
+   * discussion; the container holds only identity and access. Nesting is exactly one level, so
+   * a channel with `parent_id` set never has `discussions` of its own.
+   */
+  parent_id: number | null
+  /** A container's discussions. Present only on the sidebar listing, which nests them. */
+  discussions?: Channel[]
   name: string
   type: ChannelType
   position: number
@@ -75,6 +86,18 @@ export interface Channel {
   is_private?: boolean
   /** Who is on that allow-list. Only ever fetched by staff, from the access endpoint. */
   member_ids?: number[]
+  /**
+   * Which of this channel's discussions *you* land in. Your own preference, absent unless you
+   * have set one — everybody else opens the channel on its first discussion.
+   */
+  default_child_id?: number | null
+  /**
+   * How much has been said in this discussion, and when it was last said. Only present on the
+   * discussion directory, which is the one view that counts them — `last_message_at` is null,
+   * not absent, for a discussion nobody has posted in yet.
+   */
+  message_count?: number
+  last_message_at?: string | null
   /** Messages from other people you haven't read. Only present on the channel list. */
   unread_count?: number
   /** An unread here named you (by @you or @all) — badge it louder than a plain unread. */
@@ -150,6 +173,8 @@ export interface Server {
   is_staff?: boolean
   invite_code: string
   invite_url: string
+  /** Who may add a discussion to a channel here — 'everyone' (the default) or 'staff'. */
+  discussion_creation?: 'everyone' | 'staff'
   pending_requests_count?: number
   channels?: Channel[]
   created_at: string

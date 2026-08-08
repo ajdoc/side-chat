@@ -2,6 +2,7 @@
 
 namespace App\Models;
 
+use App\Http\Controllers\ChannelDocumentController;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Support\Facades\Storage;
@@ -11,7 +12,7 @@ use Illuminate\Support\Facades\URL;
  * A file uploaded to a Side Desk's Docs app — a PDF, Word or Excel document, hosted on a
  * private disk and served through short-lived signed URLs, exactly like {@see Attachment}.
  * Points at one surface (a side chat or a channel). See {@see \App\Http\Controllers\
- * DocumentController} / {@see \App\Http\Controllers\ChannelDocumentController}.
+ * DocumentController} / {@see ChannelDocumentController}.
  */
 class SpaceDocument extends Model
 {

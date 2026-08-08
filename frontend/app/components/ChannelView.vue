@@ -535,6 +535,10 @@ onBeforeUnmount(() => {
           </button>
           <slot name="icon" />
           <div class="min-w-0">
+            <!-- Which channel this conversation is a discussion of, and the way out to its
+                 siblings. Above the title rather than beside it: the discussion's name is what
+                 you're reading, and the channel is the context you're reading it in. -->
+            <slot name="breadcrumb" />
             <p class="truncate font-semibold leading-tight">{{ title }}</p>
             <p v-if="subtitle" class="truncate text-xs leading-tight text-muted-foreground">
               {{ subtitle }}

@@ -73,6 +73,18 @@ export function useServerLifecycle() {
         }
       })
       /*
+       * A channel or a discussion was just made.
+       *
+       * The payload names it and stops there, so this is a refetch rather than an insert — the
+       * same nudge-and-ask ChannelAccessUpdated uses, for the same reason. A discussion can be
+       * created inside a private channel, and the channel list is answered per viewer, so
+       * asking again is what makes the new row appear for the people allowed to see it without
+       * telling anybody else that it exists.
+       */
+      .listen('.ChannelCreated', async () => {
+        await refreshChannels(serverId)
+      })
+      /*
        * Somebody's role changed. Only *our own* matters here: `is_staff` gates the settings
        * this sidebar draws, and a freshly-promoted admin shouldn't have to reload to get
        * them (or keep them, having just been demoted). Everyone else's badge is read from
@@ -125,6 +137,7 @@ export function useServerLifecycle() {
       .stopListening('.VoiceEffectsUpdated')
       .stopListening('.ServerUpdated')
       .stopListening('.ChannelAccessUpdated')
+      .stopListening('.ChannelCreated')
       .stopListening('.ServerRoleUpdated')
       .stopListening('.ChannelDeleted')
       .stopListening('.ServerDeleted')

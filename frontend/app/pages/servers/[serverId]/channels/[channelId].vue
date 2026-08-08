@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { Hash, Info, LayoutPanelLeft, Map as MapIcon, MessagesSquare, Volume2 } from 'lucide-vue-next'
+import { Hash, Info, LayoutList, LayoutPanelLeft, Map as MapIcon, MessagesSquare, Volume2 } from 'lucide-vue-next'
 import { useLocalStorage } from '@vueuse/core'
 import { Button } from '~/components/ui/button'
 
@@ -19,10 +19,41 @@ definePageMeta({ middleware: 'auth', layout: 'app' })
  * Gather-style room adds three lines to this page.
  */
 const route = useRoute()
-const { channels, server } = useServer()
+const { findChannel, resolveDiscussion, server } = useServer()
 
 const channelId = computed(() => Number(route.params.channelId))
-const channel = computed(() => channels.value.find(c => c.id === channelId.value) ?? null)
+const channel = computed(() => findChannel(channelId.value))
+
+/**
+ * A container is not a place you can stand.
+ *
+ * It holds discussions and no timeline of its own, so a URL naming one resolves to the
+ * discussion inside it and replaces the entry — landing on a channel means landing in its
+ * General, and the back button shouldn't have to step through a page that draws nothing.
+ *
+ * Nothing else in the app has to know about this: every link into a channel, from the sidebar
+ * to search to a dropped pane, may name either level and arrives in the right place.
+ */
+watch([channel, () => route.params.channelId], () => {
+  const target = resolveDiscussion(channel.value)
+  if (!target || target.id === channelId.value) return
+
+  navigateTo(`/servers/${route.params.serverId}/channels/${target.id}`, { replace: true })
+}, { immediate: true })
+
+// The container this discussion hangs under — the `#channel` half of the header's breadcrumb.
+const parent = computed(() => findChannel(channel.value?.parent_id ?? null))
+
+/**
+ * What the header calls this place.
+ *
+ * A channel with one discussion is called by the channel's name, because that is what it is:
+ * "General" is an implementation detail nobody asked for and the person reading is simply in
+ * #announcements. Once there are two, the discussion's own name takes the title and the channel
+ * moves up into the breadcrumb above it.
+ */
+const hasSiblings = computed(() => (parent.value?.discussions?.length ?? 0) > 1)
+const title = computed(() => (hasSiblings.value ? channel.value?.name : parent.value?.name) ?? channel.value?.name ?? '')
 const isVoice = computed(() => channel.value?.type === 'voice')
 // A Side Space is the same room everywhere now — web, desktop and phone. It has no keyboard
 // requirement left: you walk by tapping and dragging the floor, and the stage folds its
@@ -74,10 +105,14 @@ function openDesk() {
     v-if="channel"
     :key="channel.id"
     :channel="channel"
-    :title="channel.name"
+    :title="title"
     :prefix="isVoice || isSpace ? '' : '#'"
     :collapse-timeline="isSpace && chatHidden"
   >
+    <template v-if="parent" #breadcrumb>
+      <DiscussionPicker :parent="parent" :current="channel" />
+    </template>
+
     <template #icon>
       <MapIcon v-if="isSpace" class="h-5 w-5 shrink-0 text-muted-foreground" />
       <Volume2 v-else-if="isVoice" class="h-5 w-5 shrink-0 text-muted-foreground" />
@@ -90,6 +125,19 @@ function openDesk() {
            then this channel's own surfaces. On a phone they all collapse to their icons: six labelled buttons plus a title
            do not fit across 390px, and the labels are the part you can do without. What still
            overflows scrolls sideways inside the strip (see ChannelView's header). -->
+      <!-- Only once a channel holds more than one conversation; before that there is no list to
+           see. The picker's menu carries the same link for anyone already up there. -->
+      <Button
+        v-if="hasSiblings"
+        variant="ghost"
+        size="sm"
+        class="gap-2 text-muted-foreground"
+        :class="narrow && 'px-2'"
+        title="All discussions"
+        @click="navigateTo(`/servers/${route.params.serverId}/discussions/${parent!.id}`)"
+      >
+        <LayoutList class="h-4 w-4" /> <span v-if="!narrow">Discussions</span>
+      </Button>
       <SideChatsButton :channel-id="channel.id" />
       <FavoriteAppButton :channel-id="channel.id" />
       <AppsButton :channel-id="channel.id" />

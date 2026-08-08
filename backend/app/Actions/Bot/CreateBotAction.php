@@ -18,6 +18,7 @@ final class CreateBotAction
      * The membership is the point of the whole transaction. Every read and write in the app
      * is gated on "is this user in this place" (MemberRequest, Channel::hasMember,
      * Channel::scopeVisibleTo), so a bot that isn't a member can't post, can't be
+     *
      * @mentioned, and doesn't appear in the member list — it would be a token with nothing
      * behind it. Joining as a plain member also means it inherits the ceiling every member
      * has: no private channel it hasn't been let into, nothing an admin can do.

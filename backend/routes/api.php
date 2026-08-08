@@ -6,13 +6,13 @@ use App\Http\Controllers\Auth\AuthController;
 use App\Http\Controllers\Auth\SocialAuthController;
 use App\Http\Controllers\AutomationController;
 use App\Http\Controllers\BadgeController;
-use App\Http\Controllers\BotCommandController;
 use App\Http\Controllers\BotAuditLogController;
+use App\Http\Controllers\BotCommandController;
 use App\Http\Controllers\BotController;
 use App\Http\Controllers\BotDashboardController;
-use App\Http\Controllers\BotScheduleController;
 use App\Http\Controllers\BotIdentityController;
 use App\Http\Controllers\BotMessageController;
+use App\Http\Controllers\BotScheduleController;
 use App\Http\Controllers\CalendarController;
 use App\Http\Controllers\CanvasController;
 use App\Http\Controllers\ChannelCalendarController;
@@ -25,11 +25,12 @@ use App\Http\Controllers\ChannelSpaceNoteController;
 use App\Http\Controllers\ChannelWhiteboardController;
 use App\Http\Controllers\ChunkedUploadController;
 use App\Http\Controllers\CommandCatalogueController;
-use App\Http\Controllers\CustomCommandController;
 use App\Http\Controllers\CommentController;
 use App\Http\Controllers\ConversationController;
+use App\Http\Controllers\CustomCommandController;
 use App\Http\Controllers\DecisionController;
 use App\Http\Controllers\DeskAppsController;
+use App\Http\Controllers\DiscussionController;
 use App\Http\Controllers\DocumentController;
 use App\Http\Controllers\FriendController;
 use App\Http\Controllers\GifController;
@@ -262,6 +263,21 @@ Route::middleware('auth:api')->group(function () {
     Route::put('channels/{channel}/access', [ChannelController::class, 'access']);
     // Owner only — deletes the channel's threads, messages and uploaded files.
     Route::delete('channels/{channel}', [ChannelController::class, 'destroy']);
+
+    /*
+     * Discussions: the conversations inside a channel. A discussion *is* a channel, so
+     * everything below this line in the file already works on one addressed by its own id —
+     * these three routes are only what a discussion has that a channel doesn't.
+     *
+     * Creating is open to anyone in the channel unless the server has narrowed it to staff;
+     * deleting is staff-only, because it takes other people's messages with it.
+     */
+    Route::get('channels/{channel}/discussions', [DiscussionController::class, 'index']);
+    Route::post('channels/{channel}/discussions', [DiscussionController::class, 'store']);
+    Route::delete('discussions/{channel}', [DiscussionController::class, 'destroy']);
+    // Per-person: which discussion this channel opens on for you.
+    Route::put('discussions/{channel}/default', [DiscussionController::class, 'setDefault']);
+    Route::delete('discussions/{channel}/default', [DiscussionController::class, 'clearDefault']);
 
     // Every `/command` callable here — what the composer's autocomplete is built from.
     Route::get('channels/{channel}/commands', CommandCatalogueController::class);

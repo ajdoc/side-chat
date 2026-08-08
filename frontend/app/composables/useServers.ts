@@ -55,11 +55,17 @@ export function useServers() {
     if (idx !== -1) servers.value.splice(idx, 1, { ...servers.value[idx]!, ...fields })
   }
 
-  /** Owner only. Renames it for everybody. */
-  async function renameServer(id: number, name: string) {
+  /**
+   * Staff only. Updates the server's settings for everybody.
+   *
+   * Still called renameServer because renaming is what it mostly does, and every caller passing
+   * only a name keeps working — `discussion_creation` is left alone when it isn't sent, which
+   * is what stops a rename from quietly resetting the policy.
+   */
+  async function renameServer(id: number, name: string, settings: Partial<Server> = {}) {
     const res = await api<{ data: Server }>(`/api/servers/${id}`, {
       method: 'PATCH',
-      body: { name },
+      body: { name, ...settings },
     })
     patch(id, res.data)
 

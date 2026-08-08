@@ -34,8 +34,10 @@ it('seeds a map when a Side Space channel is created', function () {
         'preset' => 'office',
     ])->assertCreated()->assertJsonPath('data.type', 'space');
 
+    // The map hangs off the channel's General discussion, not the channel: a container holds
+    // discussions, and each discussion is its own room.
     $channel = Channel::where('name', 'the-office')->sole();
-    $map = $channel->spaceMap;
+    $map = $channel->discussions()->sole()->spaceMap;
 
     expect($map)->not->toBeNull()
         ->and($map->width)->toBe(30)

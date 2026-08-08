@@ -171,7 +171,7 @@ final class LinkPreviewService
     private function parseHtml(string $html, string $url): array
     {
         $previous = libxml_use_internal_errors(true); // real-world HTML is not valid XML
-        $doc = new DOMDocument();
+        $doc = new DOMDocument;
         $doc->loadHTML($html, LIBXML_NOWARNING | LIBXML_NOERROR);
         libxml_clear_errors();
         libxml_use_internal_errors($previous);

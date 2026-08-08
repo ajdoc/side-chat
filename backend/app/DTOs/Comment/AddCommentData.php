@@ -8,6 +8,7 @@ use WendellAdriel\ValidatedDTO\ValidatedDTO;
 final class AddCommentData extends ValidatedDTO
 {
     public string $body;
+
     public ?string $emoji;
 
     /**

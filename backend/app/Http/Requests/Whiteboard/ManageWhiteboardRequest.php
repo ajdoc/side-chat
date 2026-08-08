@@ -2,6 +2,7 @@
 
 namespace App\Http\Requests\Whiteboard;
 
+use App\Http\Requests\SideChat\ViewSideChatRequest;
 use App\Models\SideChat;
 use Illuminate\Foundation\Http\FormRequest;
 
@@ -9,7 +10,7 @@ use Illuminate\Foundation\Http\FormRequest;
  * Drawing on a side chat's whiteboard is a taking-part power, not a reading one: you have
  * to be on the roster, exactly like posting a message ({@see \App\Http\Requests\SideChat\
  * StoreSideChatMessageRequest}). Reading the board only needs channel membership and goes
- * through {@see \App\Http\Requests\SideChat\ViewSideChatRequest}.
+ * through {@see ViewSideChatRequest}.
  *
  * The base clears the roster gate; store adds the per-stroke validation on top.
  */

@@ -7,7 +7,9 @@ use WendellAdriel\ValidatedDTO\ValidatedDTO;
 final class RegisterUserData extends ValidatedDTO
 {
     public string $name;
+
     public string $email;
+
     public string $password;
 
     /**

@@ -7,6 +7,7 @@ use WendellAdriel\ValidatedDTO\ValidatedDTO;
 final class CreateThreadData extends ValidatedDTO
 {
     public string $name;
+
     public ?int $message_id;
 
     /**

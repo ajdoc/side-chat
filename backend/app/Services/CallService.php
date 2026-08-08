@@ -10,6 +10,7 @@ use App\Events\ConversationUpdated;
 use App\Models\Channel;
 use App\Models\Conversation;
 use App\Models\User;
+use App\Models\VoiceParticipant;
 use Illuminate\Database\Eloquent\Collection;
 
 /**
@@ -129,7 +130,7 @@ final class CallService
     /**
      * Who is in this chat's call right now. Empty when nobody is.
      *
-     * @return Collection<int, \App\Models\VoiceParticipant>
+     * @return Collection<int, VoiceParticipant>
      */
     public function participants(Conversation $conversation): Collection
     {

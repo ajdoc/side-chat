@@ -39,8 +39,8 @@ class SafeUrlFetcher
     private const USER_AGENT = 'SideChatBot/1.0 (+link-preview)';
 
     /**
-     * @return array{url: string, content_type: string, body: string}|null  null if the URL
-     *                                                                      is unsafe, unreachable, or not worth previewing
+     * @return array{url: string, content_type: string, body: string}|null null if the URL
+     *                                                                     is unsafe, unreachable, or not worth previewing
      */
     public function get(string $url): ?array
     {
@@ -130,7 +130,7 @@ class SafeUrlFetcher
      * (including the pinning, which is what closes the DNS-rebinding window) rather than a
      * second, subtly weaker copy of them. See App\Jobs\DeliverBotEvent.
      *
-     * @return array{0: string, 1: int, 2: string}|null  [host, port, ip]
+     * @return array{0: string, 1: int, 2: string}|null [host, port, ip]
      */
     public function pin(string $url): ?array
     {

@@ -2,8 +2,8 @@
 
 namespace App\Services\Widgets;
 
-use App\Models\Widget;
 use App\Models\User;
+use App\Models\Widget;
 use App\Support\Commands\ParsedCommand;
 
 /**

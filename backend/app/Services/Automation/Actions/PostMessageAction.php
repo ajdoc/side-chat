@@ -9,6 +9,7 @@ use App\Services\Automation\AutomationActionHandler;
 use App\Support\Automation\ActionResult;
 use App\Support\Automation\AutomationContext;
 use App\Support\Automation\Template;
+use Illuminate\Support\Collection;
 
 /**
  * Say something in a channel.
@@ -139,7 +140,7 @@ final class PostMessageAction implements AutomationActionHandler
      * extra is a room somebody named, so a rule that names none has none.
      *
      * @param  array<string, mixed>  $config
-     * @return \Illuminate\Support\Collection<int, Channel>
+     * @return Collection<int, Channel>
      */
     private function channels(array $config, AutomationContext $context, int $serverId)
     {

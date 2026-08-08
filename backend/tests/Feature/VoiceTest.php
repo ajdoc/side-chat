@@ -248,7 +248,10 @@ it('badges unread messages in a voice channel', function () {
     $member = User::factory()->create();
     $server->members()->attach($member->id, ['role' => 'member']);
 
-    Message::factory()->count(2)->create(['channel_id' => $channel->id, 'user_id' => $owner->id]);
+    Message::factory()->count(2)->create([
+        'channel_id' => $channel->discussions()->sole()->id,
+        'user_id' => $owner->id,
+    ]);
 
     Passport::actingAs($member);
 

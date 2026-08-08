@@ -92,8 +92,7 @@ class BotSchedule extends Model
             $next = (new CronExpression($this->cron))->getNextRunDate($from);
 
             return Carbon::instance($next)->setTimezone($zone)->utc();
-        }
-        catch (Throwable) {
+        } catch (Throwable) {
             return null;
         }
     }

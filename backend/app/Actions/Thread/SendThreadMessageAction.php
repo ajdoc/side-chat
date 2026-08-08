@@ -10,6 +10,7 @@ use App\Models\Thread;
 use App\Models\User;
 use App\Services\AttachmentService;
 use App\Services\LinkPreviewService;
+use Illuminate\Http\UploadedFile;
 
 final class SendThreadMessageAction
 {
@@ -18,7 +19,7 @@ final class SendThreadMessageAction
         private readonly LinkPreviewService $links,
     ) {}
 
-    /** @param  array<int, \Illuminate\Http\UploadedFile>  $files */
+    /** @param  array<int, UploadedFile>  $files */
     public function handle(Thread $thread, User $user, SendMessageData $data, array $files = [], array $uploadIds = []): Message
     {
         $message = $thread->messages()->create([

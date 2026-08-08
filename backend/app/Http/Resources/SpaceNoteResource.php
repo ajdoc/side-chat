@@ -2,6 +2,7 @@
 
 namespace App\Http\Resources;
 
+use App\Models\SpaceNote;
 use Illuminate\Http\Request;
 use Illuminate\Http\Resources\Json\JsonResource;
 
@@ -12,7 +13,7 @@ use Illuminate\Http\Resources\Json\JsonResource;
  *
  * `version` is the revision the body belongs to; an editor echoes it back as `base_version`
  * on its next save so a concurrent edit is merged instead of overwritten
- * ({@see \App\Models\SpaceNote::applyEdit()}).
+ * ({@see SpaceNote::applyEdit()}).
  */
 class SpaceNoteResource extends JsonResource
 {

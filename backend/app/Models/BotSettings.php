@@ -2,6 +2,7 @@
 
 namespace App\Models;
 
+use App\Support\Commands\CommandParser;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Support\Facades\Cache;
@@ -74,7 +75,7 @@ class BotSettings extends Model
      * because the value changes roughly never and a TTL would just mean re-reading it for
      * no reason.
      *
-     * Callers should still gate on {@see \App\Support\Commands\CommandParser::mightBePrefixed}
+     * Callers should still gate on {@see CommandParser::mightBePrefixed}
      * first: this is cheap, but not free, and the answer is irrelevant for a message that
      * couldn't be a command anyway.
      */

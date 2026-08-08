@@ -3,8 +3,9 @@ import {
   AudioLines,
   Bot,
   Check, ChevronDown, ChevronRight, Copy, DoorOpen, Hash, HeadphoneOff, Lock, LogOut,
+  LayoutList,
   Map as MapIcon,
-  MessageSquarePlus, MicOff, Monitor, Moon, Pencil, Phone, Plus, ScreenShare, Search, Shield, Sun, Trash2,
+  MessageSquarePlus, MessagesSquare, MicOff, Monitor, Moon, Pencil, Phone, Plus, ScreenShare, Search, Shield, Sun, Trash2,
   User, UserPlus, Users, Volume2, Zap,
 } from 'lucide-vue-next'
 import { useLocalStorage } from '@vueuse/core'
@@ -54,7 +55,7 @@ import { Input } from '~/components/ui/input'
  */
 const route = useRoute()
 const { servers, hasMore: hasMoreServers, fetchServers, loadMore: loadMoreServers, renameServer, deleteServer, leaveServer } = useServers()
-const { server, channels, openServer, loadMoreChannels, renameChannel, deleteChannel, patchServer } = useServer()
+const { server, channels, findChannel, resolveDiscussion, openServer, loadMoreChannels, renameChannel, deleteChannel, patchServer } = useServer()
 const { conversations, hasMore: hasMoreChats, fetchConversations, loadMore: loadMoreChats } = useConversations()
 // Only the incoming half is a badge — a request you sent is not news you need chasing.
 const { incoming: incomingFriends, load: loadFriends } = useFriends()
@@ -64,7 +65,7 @@ const { hasDraft } = useDrafts()
 const { nameFor } = useNicknames()
 const { mode, color, setMode, setColor } = useTheme()
 const { participantsIn } = useVoiceRoster()
-const { expandedIds, isExpanded, isLoading, expand: expandServer, toggle: toggleServer, loadChannels, cache: cacheChannels, channelsFor, isSectionOpen, toggleSection } = useSidebarChannels()
+const { expandedIds, isExpanded, isLoading, expand: expandServer, toggle: toggleServer, loadChannels, cache: cacheChannels, channelsFor, isSectionOpen, toggleSection, isBranchOpen, toggleBranch } = useSidebarChannels()
 
 /**
  * Split view: the second conversation docked beside the page. See useSplitView for why the
@@ -162,7 +163,7 @@ function promotePane() {
 
 /** The page you're standing on, as a pane — or null if it isn't a conversation. */
 function currentPaneTarget() {
-  const channel = channels.value.find(c => c.id === activeChannelId.value)
+  const channel = findChannel(activeChannelId.value)
   if (channel && server.value) {
     return {
       channelId: channel.id,
@@ -256,6 +257,15 @@ const { width: sidebarWidth, startResize: startSidebarResize } = useResizable('s
 const activeServerId = computed(() => Number(route.params.serverId) || null)
 const activeChannelId = computed(() => Number(route.params.channelId) || null)
 const activeConversationId = computed(() => Number(route.params.conversationId) || null)
+// The channel whose discussion you're reading — the one branch that stays unfolded whether or
+// not you unfolded it. Read from the tree rather than the route, because the route names a
+// discussion on a channel page and the *container* on the discussion directory; resolving both
+// to the container is what keeps the branch open across the hop between them.
+const activeParent = computed(() => {
+  const channel = findChannel(activeChannelId.value)
+
+  return channel ? (channel.parent_id ?? channel.id) : null
+})
 
 // Browser tab: "Side Chat - <server>" (a chat page sets its own).
 useHead({ title: computed(() => server.value?.name ?? '') })
@@ -414,14 +424,47 @@ const rows = computed(() => {
         if (!open) continue
 
         for (const c of groupChannels) {
+          const discussions = c.discussions ?? []
+          // Unfolded either because you unfolded it or because you're standing in it. A lone
+          // discussion never gets a branch: that channel is a channel exactly as it was before
+          // discussions existed, and drawing "General" under it would be a row that says
+          // nothing.
+          const branched = discussions.length > 1
+          const open = branched && isBranchOpen(c.id, activeParent.value)
+
           list.push({
             id: `c-${c.id}`,
             kind: 'channel',
             channel: c,
+            // Clicking a channel opens a conversation, and the container has none — so the row
+            // points at the discussion you'd land in anyway: the one you pinned, else the first.
+            target: resolveDiscussion(c) ?? c,
+            branched,
+            open,
             // Only the rooms have occupants to draw; a text channel's list is always empty.
-            voice: group.type === 'text' ? [] : participantsIn(c.id),
+            // Folded shut, the channel row carries everyone in every discussion of it, because
+            // "is anybody in there" is the question a collapsed room has to answer. Unfolded,
+            // each face moves to the discussion it's actually in.
+            voice: group.type === 'text' || open ? [] : discussions.flatMap(d => participantsIn(d.id)),
             isOwner: canEdit,
           })
+
+          if (!open) continue
+
+          for (const d of discussions) {
+            list.push({
+              id: `d-${d.id}`,
+              kind: 'discussion',
+              channel: d,
+              voice: group.type === 'text' ? [] : participantsIn(d.id),
+              // Renaming and deleting a discussion are staff's, like a channel's — and like a
+              // channel's, only on the server you're standing in, whose tree is the live one.
+              isOwner: canEdit,
+              // Never the last one: a channel with no discussions is a channel you can open but
+              // not read. The server refuses it too; this just doesn't offer it.
+              canDelete: canEdit && discussions.length > 1,
+            })
+          }
         }
       }
       list.push({ id: `add-channel-${s.id}`, kind: 'add-channel', server: s })
@@ -507,9 +550,17 @@ const botsServer = ref<Server | null>(null)
 // configuring what the bot *does* is running the place, not holding its credential.
 const botDashboardServer = ref<Server | null>(null)
 const showProfile = ref(false)
+// Which channel the new-discussion dialog is about. Held apart from the open flag for the same
+// reason the delete dialogs are — see the note above.
+const newDiscussionParent = ref<Channel | null>(null)
+const showNewDiscussion = ref(false)
+const { canCreate: canCreateDiscussions, remove: removeDiscussion } = useDiscussions()
 const targetChannel = ref<Channel | null>(null)
 const targetServer = ref<Server | null>(null)
 const nameDraft = ref('')
+// Who may start a discussion in this server's channels. Open by default — a discussion is a
+// conversation somebody wanted to have — with the switch here for the servers that outgrow that.
+const discussionPolicyDraft = ref<'everyone' | 'staff'>('everyone')
 const working = ref(false)
 const actionError = ref('')
 
@@ -538,6 +589,7 @@ async function confirm(open: Ref<boolean>, run: () => Promise<void>, fallback: s
 function askRenameServer(s: Server) {
   targetServer.value = s
   nameDraft.value = s.name
+  discussionPolicyDraft.value = s.discussion_creation ?? 'everyone'
   actionError.value = ''
   showRenameServer.value = true
 }
@@ -551,6 +603,22 @@ function askRenameChannel(channel: Channel) {
 
 function askChannelAccess(channel: Channel) {
   accessChannel.value = channel
+}
+
+/**
+ * Start a discussion in this channel.
+ *
+ * Unfolds the branch on the way, so the new one lands somewhere visible — making a thing and
+ * not being shown where it went is how people conclude nothing happened.
+ */
+function askNewDiscussion(channel: Channel) {
+  newDiscussionParent.value = channel
+  showNewDiscussion.value = true
+}
+
+function onDiscussionCreated(discussion: Channel) {
+  if (discussion.parent_id && !isBranchOpen(discussion.parent_id)) toggleBranch(discussion.parent_id)
+  navigateTo(`/servers/${discussion.server_id}/channels/${discussion.id}`)
 }
 
 function askDeleteChannel(channel: Channel) {
@@ -594,7 +662,9 @@ function askEditProfile() {
 const onRenameServer = () => confirm(showRenameServer, async () => {
   const name = nameDraft.value.trim()
   if (!name || !targetServer.value) return
-  const updated = await renameServer(targetServer.value.id, name)
+  const updated = await renameServer(targetServer.value.id, name, {
+    discussion_creation: discussionPolicyDraft.value,
+  })
   // renameServer patches the list; the open server is a separate ref.
   patchServer(updated.id, updated)
 }, 'Could not rename the server.')
@@ -626,12 +696,19 @@ const onDeleteServer = () => confirm(showDeleteServer, async () => {
 const onDeleteChannel = () => confirm(showDeleteChannel, async () => {
   const channel = targetChannel.value
   if (!channel) return
-  await deleteChannel(channel.id)
-  // Standing in the channel you just deleted: step back out to the server.
+
+  // One dialog for both, dispatching on what the row actually is. They are different endpoints
+  // — a discussion's refuses to remove the last one in a channel — but they ask the same
+  // question of the same person, and two dialogs would be two places to keep that wording.
+  if (channel.parent_id) await removeDiscussion(channel)
+  else await deleteChannel(channel.id)
+
+  // Standing in the thing you just deleted: step back out. For a discussion that means its
+  // channel, which resolves to whichever sibling is left.
   if (activeChannelId.value === channel.id) {
-    await navigateTo(`/servers/${channel.server_id}`)
+    await navigateTo(`/servers/${channel.server_id}/channels/${channel.parent_id ?? ''}`.replace(/\/$/, ''))
   }
-}, 'Could not delete the channel.')
+}, 'Could not delete it.')
 
 onMounted(async () => {
   // Your own stream first: it's the only subscription that outlives every navigation, and
@@ -955,27 +1032,45 @@ onBeforeUnmount(() => { userStream.unsubscribe(); stopPresence() })
                          still navigates on a plain click; both are the other gesture the same
                          row already invited. See `openBeside`. -->
                     <NuxtLink
-                      :to="`/servers/${item.channel.server_id}/channels/${item.channel.id}`"
+                      :to="`/servers/${item.channel.server_id}/channels/${item.target.id}`"
                       draggable="true"
-                      class="mx-2 flex items-center gap-2 rounded py-1.5 pl-7 pr-2 text-sm hover:bg-muted"
+                      class="mx-2 flex items-center gap-2 rounded py-1.5 pr-2 text-sm hover:bg-muted"
                       @dragstart="writeDragPayload($event, {
-                        channelId: item.channel.id,
+                        channelId: item.target.id,
                         title: item.channel.name,
                         type: item.channel.type,
-                        path: `/servers/${item.channel.server_id}/channels/${item.channel.id}`,
+                        path: `/servers/${item.channel.server_id}/channels/${item.target.id}`,
                       })"
                       v-on="openBeside({
-                        channelId: item.channel.id,
+                        channelId: item.target.id,
                         title: item.channel.name,
                         type: item.channel.type,
-                        path: `/servers/${item.channel.server_id}/channels/${item.channel.id}`,
+                        path: `/servers/${item.channel.server_id}/channels/${item.target.id}`,
                       })"
-                      :class="item.channel.id === activeChannelId
-                        ? 'bg-muted font-medium text-foreground'
-                        : item.channel.unread_count
-                          ? 'font-semibold text-foreground'
-                          : 'text-muted-foreground'"
+                      :class="[
+                        // A chevron takes the indent the icon would otherwise sit in.
+                        item.branched ? 'pl-4' : 'pl-7',
+                        // Highlighted for its discussions *and* for its directory, which names
+                        // the container rather than anything inside it.
+                        item.target.id === activeChannelId || item.channel.id === activeChannelId
+                          ? 'bg-muted font-medium text-foreground'
+                          : item.channel.unread_count
+                            ? 'font-semibold text-foreground'
+                            : 'text-muted-foreground',
+                      ]"
                     >
+                      <!-- Unfolds the discussions without navigating: seeing what else is in a
+                           channel shouldn't cost you the conversation you're reading. -->
+                      <button
+                        v-if="item.branched"
+                        type="button"
+                        class="-my-1 shrink-0 rounded p-0.5 text-muted-foreground hover:bg-background hover:text-foreground"
+                        :title="item.open ? 'Hide discussions' : `Show ${item.channel.discussions.length} discussions`"
+                        @click.prevent.stop="toggleBranch(item.channel.id)"
+                      >
+                        <ChevronDown v-if="item.open" class="h-3 w-3" />
+                        <ChevronRight v-else class="h-3 w-3" />
+                      </button>
                       <MapIcon v-if="item.channel.type === 'space'" class="h-4 w-4 shrink-0" />
                       <Volume2 v-else-if="item.channel.type === 'voice'" class="h-4 w-4 shrink-0" />
                       <Hash v-else class="h-4 w-4 shrink-0" />
@@ -1007,11 +1102,36 @@ onBeforeUnmount(() => { userStream.unsubscribe(); stopPresence() })
                     <!-- Owner-only rename/delete. Hover-revealed for a mouse; always present
                          on touch, where there is no hover to reveal them with. -->
                     <span
-                      v-if="item.isOwner"
+                      v-if="item.isOwner || canCreateDiscussions || item.branched"
                       class="absolute right-3 top-1/2 -translate-y-1/2 items-center gap-0.5 rounded bg-muted px-0.5"
                       :class="coarse ? 'flex' : 'hidden group-hover/ch:flex'"
                     >
+                      <!-- The one entry point that works for a channel with a single discussion,
+                           where the header shows no picker to put it in. Open to anyone the
+                           server lets start one, which is why it isn't inside `isOwner`. -->
+                      <!-- The searchable, sortable list of everything in this channel. Only
+                           once there's more than one conversation to list. -->
+                      <NuxtLink
+                        v-if="item.branched"
+                        :to="`/servers/${item.channel.server_id}/discussions/${item.channel.id}`"
+                        class="rounded text-muted-foreground hover:text-foreground"
+                        :class="coarse ? 'p-2' : 'p-1'"
+                        :title="`All discussions in ${item.channel.name}`"
+                        @click.stop
+                      >
+                        <LayoutList class="h-3.5 w-3.5" />
+                      </NuxtLink>
                       <button
+                        v-if="canCreateDiscussions"
+                        class="rounded text-muted-foreground hover:text-foreground"
+                        :class="coarse ? 'p-2' : 'p-1'"
+                        :title="`New discussion in ${item.channel.name}`"
+                        @click.prevent="askNewDiscussion(item.channel)"
+                      >
+                        <MessageSquarePlus class="h-3.5 w-3.5" />
+                      </button>
+                      <button
+                        v-if="item.isOwner"
                         class="rounded text-muted-foreground hover:text-foreground"
                         :class="coarse ? 'p-2' : 'p-1'"
                         :title="`Rename ${item.channel.name}`"
@@ -1020,6 +1140,7 @@ onBeforeUnmount(() => { userStream.unsubscribe(); stopPresence() })
                         <Pencil class="h-3.5 w-3.5" />
                       </button>
                       <button
+                        v-if="item.isOwner"
                         class="rounded text-muted-foreground hover:text-foreground"
                         :class="coarse ? 'p-2' : 'p-1'"
                         :title="`Who can see ${item.channel.name}`"
@@ -1028,6 +1149,7 @@ onBeforeUnmount(() => { userStream.unsubscribe(); stopPresence() })
                         <component :is="item.channel.is_private ? Lock : Users" class="h-3.5 w-3.5" />
                       </button>
                       <button
+                        v-if="item.isOwner"
                         class="rounded text-muted-foreground hover:text-destructive"
                         :class="coarse ? 'p-2' : 'p-1'"
                         :title="`Delete ${item.channel.name}`"
@@ -1042,7 +1164,7 @@ onBeforeUnmount(() => { userStream.unsubscribe(); stopPresence() })
                   <NuxtLink
                     v-for="p in item.voice"
                     :key="p.user.id"
-                    :to="`/servers/${item.channel.server_id}/channels/${item.channel.id}`"
+                    :to="`/servers/${item.channel.server_id}/channels/${p.channel_id}`"
                     class="mx-2 flex items-center gap-2 rounded py-0.5 pl-12 pr-2 text-xs text-muted-foreground hover:bg-muted"
                   >
                     <span class="grid h-5 w-5 shrink-0 place-items-center rounded-full bg-secondary text-[9px] font-semibold text-secondary-foreground">
@@ -1059,6 +1181,103 @@ onBeforeUnmount(() => { userStream.unsubscribe(); stopPresence() })
                       well, so the two travel together most of the time — but they aren't the
                       same fact, and only one of them means "can't hear you either".
                     -->
+                    <span class="ml-auto flex shrink-0 items-center gap-1">
+                      <ScreenShare v-if="p.screen_sharing" class="h-3 w-3 text-primary" :title="`${nameFor(p.user)} is sharing their screen`" />
+                      <AudioLines v-if="p.audio_sharing" class="h-3 w-3 text-primary" :title="`${nameFor(p.user)} is sharing audio`" />
+                      <MicOff v-if="p.muted" class="h-3 w-3 text-destructive" :title="`${nameFor(p.user)} is muted`" />
+                      <HeadphoneOff v-if="p.deafened" class="h-3 w-3 text-destructive" :title="`${nameFor(p.user)} is deafened — they can't hear the call`" />
+                    </span>
+                  </NuxtLink>
+                </div>
+
+                <!-- A discussion inside an unfolded channel. Indented past the channel's icon,
+                     and deliberately plainer than a channel row: no rename/delete, no lock
+                     column, no second chevron. The branch is a list of conversations, not a
+                     second sidebar. -->
+                <div v-else-if="item.kind === 'discussion'">
+                  <div class="group/disc relative">
+                    <NuxtLink
+                      :to="`/servers/${item.channel.server_id}/channels/${item.channel.id}`"
+                      draggable="true"
+                      class="mx-2 flex items-center gap-2 rounded py-1 pl-12 pr-2 text-sm hover:bg-muted"
+                      @dragstart="writeDragPayload($event, {
+                        channelId: item.channel.id,
+                        title: item.channel.name,
+                        type: item.channel.type,
+                        path: `/servers/${item.channel.server_id}/channels/${item.channel.id}`,
+                      })"
+                      v-on="openBeside({
+                        channelId: item.channel.id,
+                        title: item.channel.name,
+                        type: item.channel.type,
+                        path: `/servers/${item.channel.server_id}/channels/${item.channel.id}`,
+                      })"
+                      :class="item.channel.id === activeChannelId
+                        ? 'bg-muted font-medium text-foreground'
+                        : item.channel.unread_count
+                          ? 'font-semibold text-foreground'
+                          : 'text-muted-foreground'"
+                    >
+                      <MessagesSquare class="h-3.5 w-3.5 shrink-0" />
+                      <span class="truncate">{{ item.channel.name }}</span>
+                      <Lock v-if="item.channel.is_private" class="h-3 w-3 shrink-0 text-muted-foreground" title="Only chosen members" />
+                      <span
+                        v-if="hasDraft(item.channel.id) && item.channel.id !== activeChannelId"
+                        class="ml-auto shrink-0 text-[10px] font-medium italic text-primary"
+                        title="You have an unsent draft here"
+                      >Draft</span>
+                      <span
+                        v-if="item.channel.unread_count"
+                        class="ml-auto shrink-0 rounded-full bg-primary px-1.5 py-0.5 text-[10px] font-semibold tabular-nums text-primary-foreground"
+                        :class="item.channel.mention ? 'ring-2 ring-primary/30' : ''"
+                        :title="item.channel.mention ? 'You were mentioned' : `${item.channel.unread_count} unread`"
+                      ><span v-if="item.channel.mention" aria-hidden="true">@</span>{{ item.channel.unread_count > 99 ? '99+' : item.channel.unread_count }}</span>
+                      <span
+                        v-else-if="item.voice.length"
+                        class="ml-auto shrink-0 text-[10px] tabular-nums text-muted-foreground"
+                      >{{ item.voice.length }}</span>
+                    </NuxtLink>
+
+                    <!-- Staff-only rename/delete, the same pair a channel row carries. Hover-
+                         revealed for a mouse; always present on touch, where there is no hover
+                         to reveal them with. -->
+                    <span
+                      v-if="item.isOwner"
+                      class="absolute right-3 top-1/2 -translate-y-1/2 items-center gap-0.5 rounded bg-muted px-0.5"
+                      :class="coarse ? 'flex' : 'hidden group-hover/disc:flex'"
+                    >
+                      <button
+                        class="rounded text-muted-foreground hover:text-foreground"
+                        :class="coarse ? 'p-2' : 'p-1'"
+                        :title="`Rename ${item.channel.name}`"
+                        @click.prevent="askRenameChannel(item.channel)"
+                      >
+                        <Pencil class="h-3.5 w-3.5" />
+                      </button>
+                      <button
+                        v-if="item.canDelete"
+                        class="rounded text-muted-foreground hover:text-destructive"
+                        :class="coarse ? 'p-2' : 'p-1'"
+                        :title="`Delete ${item.channel.name}`"
+                        @click.prevent="askDeleteChannel(item.channel)"
+                      >
+                        <Trash2 class="h-3.5 w-3.5" />
+                      </button>
+                    </span>
+                  </div>
+
+                  <!-- Whoever is already talking in this discussion's call. -->
+                  <NuxtLink
+                    v-for="p in item.voice"
+                    :key="p.user.id"
+                    :to="`/servers/${item.channel.server_id}/channels/${item.channel.id}`"
+                    class="mx-2 flex items-center gap-2 rounded py-0.5 pl-16 pr-2 text-xs text-muted-foreground hover:bg-muted"
+                  >
+                    <span class="grid h-5 w-5 shrink-0 place-items-center rounded-full bg-secondary text-[9px] font-semibold text-secondary-foreground">
+                      <img v-if="p.user.avatar" :src="p.user.avatar" :alt="nameFor(p.user)" class="h-full w-full rounded-full object-cover">
+                      <span v-else>{{ initialsOf(nameFor(p.user)) }}</span>
+                    </span>
+                    <span class="truncate">{{ nameFor(p.user) }}</span>
                     <span class="ml-auto flex shrink-0 items-center gap-1">
                       <ScreenShare v-if="p.screen_sharing" class="h-3 w-3 text-primary" :title="`${nameFor(p.user)} is sharing their screen`" />
                       <AudioLines v-if="p.audio_sharing" class="h-3 w-3 text-primary" :title="`${nameFor(p.user)} is sharing audio`" />
@@ -1342,11 +1561,25 @@ onBeforeUnmount(() => { userStream.unsubscribe(); stopPresence() })
     <Dialog v-model:open="showRenameServer">
       <DialogContent>
         <DialogHeader>
-          <DialogTitle>Rename server</DialogTitle>
-          <DialogDescription>Everyone in the server sees the new name.</DialogDescription>
+          <DialogTitle>Server settings</DialogTitle>
+          <DialogDescription>Everyone in the server sees these.</DialogDescription>
         </DialogHeader>
         <form class="space-y-3" @submit.prevent="onRenameServer">
-          <Input v-model="nameDraft" placeholder="Server name" maxlength="100" autofocus />
+          <label class="block space-y-1">
+            <span class="text-sm font-medium">Name</span>
+            <Input v-model="nameDraft" placeholder="Server name" maxlength="100" autofocus />
+          </label>
+          <label class="block space-y-1">
+            <span class="text-sm font-medium">Who can start discussions</span>
+            <select v-model="discussionPolicyDraft" class="h-9 w-full rounded-md border bg-background px-2 text-sm">
+              <option value="everyone">Anyone in the server</option>
+              <option value="staff">Only the owner and admins</option>
+            </select>
+            <span class="block text-xs text-muted-foreground">
+              A discussion is a separate conversation inside a channel, with its own messages,
+              threads and Side Desk.
+            </span>
+          </label>
           <p v-if="actionError" class="text-sm text-destructive">{{ actionError }}</p>
           <div class="flex justify-end gap-2">
             <Button type="button" variant="outline" :disabled="working" @click="showRenameServer = false">
@@ -1361,10 +1594,16 @@ onBeforeUnmount(() => { userStream.unsubscribe(); stopPresence() })
     </Dialog>
 
     <!-- Rename a channel (owner) -->
+    <NewDiscussionDialog
+      v-model:open="showNewDiscussion"
+      :parent="newDiscussionParent"
+      @created="onDiscussionCreated"
+    />
+
     <Dialog v-model:open="showRenameChannel">
       <DialogContent>
         <DialogHeader>
-          <DialogTitle>Rename channel</DialogTitle>
+          <DialogTitle>Rename {{ targetChannel?.parent_id ? 'discussion' : 'channel' }}</DialogTitle>
           <DialogDescription>Everyone in the server sees the new name.</DialogDescription>
         </DialogHeader>
         <form class="space-y-3" @submit.prevent="onRenameChannel">
@@ -1435,15 +1674,19 @@ onBeforeUnmount(() => { userStream.unsubscribe(); stopPresence() })
         <AlertDialogHeader>
           <AlertDialogTitle>Delete {{ targetChannel?.name }}?</AlertDialogTitle>
           <AlertDialogDescription>
-            This can’t be undone. The channel’s messages, threads and uploaded files are
-            permanently deleted, for everyone.
+            This can’t be undone. The
+            {{ targetChannel?.parent_id ? 'discussion’s' : 'channel’s' }} messages, threads and
+            uploaded files are permanently deleted, for everyone.
+            <template v-if="targetChannel?.parent_id">
+              The channel’s other discussions are untouched.
+            </template>
           </AlertDialogDescription>
         </AlertDialogHeader>
         <p v-if="actionError" class="text-sm text-destructive">{{ actionError }}</p>
         <AlertDialogFooter>
           <AlertDialogCancel :disabled="working">Cancel</AlertDialogCancel>
           <Button variant="destructive" :disabled="working" @click="onDeleteChannel">
-            {{ working ? 'Deleting…' : 'Delete channel' }}
+            {{ working ? 'Deleting…' : targetChannel?.parent_id ? 'Delete discussion' : 'Delete channel' }}
           </Button>
         </AlertDialogFooter>
       </AlertDialogContent>

@@ -11,7 +11,7 @@ final class DeclineJoinRequestsAction
      * Declining simply deletes the request (for now - no record is kept).
      *
      * @param  array<int, int>  $requestIds
-     * @return int  number of requests removed
+     * @return int number of requests removed
      */
     public function handle(Server $server, array $requestIds): int
     {

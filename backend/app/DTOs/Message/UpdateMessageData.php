@@ -7,6 +7,7 @@ use WendellAdriel\ValidatedDTO\ValidatedDTO;
 final class UpdateMessageData extends ValidatedDTO
 {
     public ?string $body;
+
     public ?array $remove_attachment_ids;
 
     /**

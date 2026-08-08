@@ -2,6 +2,8 @@
 
 namespace App\Models;
 
+use App\Http\Controllers\ChannelWhiteboardController;
+use Database\Factories\WhiteboardStrokeFactory;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
@@ -11,11 +13,11 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
  * sticky note. A board is just every stroke pointing at its surface (a side chat or a
  * channel); there is no board row. The live drag and the moving cursor never become
  * strokes: they ride over whispers and expire. See {@see \App\Http\Controllers\
- * WhiteboardController} / {@see \App\Http\Controllers\ChannelWhiteboardController}.
+ * WhiteboardController} / {@see ChannelWhiteboardController}.
  */
 class WhiteboardStroke extends Model
 {
-    /** @use HasFactory<\Database\Factories\WhiteboardStrokeFactory> */
+    /** @use HasFactory<WhiteboardStrokeFactory> */
     use HasFactory;
 
     protected $fillable = ['side_chat_id', 'channel_id', 'user_id', 'kind', 'payload', 'client_id'];

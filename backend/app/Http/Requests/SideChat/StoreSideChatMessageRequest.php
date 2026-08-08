@@ -3,9 +3,9 @@
 namespace App\Http\Requests\SideChat;
 
 use App\DTOs\Message\SendMessageData;
+use App\Http\Requests\Message\UploadRules;
 use App\Models\SideChat;
 use Illuminate\Foundation\Http\FormRequest;
-use App\Http\Requests\Message\UploadRules;
 use Illuminate\Validation\Rule;
 
 /**

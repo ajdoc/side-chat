@@ -3,9 +3,11 @@
 namespace App\Services;
 
 use App\Models\Channel;
+use App\Models\Message;
 use App\Models\SideChat;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Database\Eloquent\Collection;
+use Illuminate\Database\Eloquent\Relations\Relation;
 
 final class SideChatService
 {
@@ -40,7 +42,7 @@ final class SideChatService
      * Untyped param on purpose: it's handed either an Eloquent Builder (the list query) or
      * a Relation (an eager-load closure) — both understand with/withCount/withMax.
      *
-     * @param  Builder<SideChat>|\Illuminate\Database\Eloquent\Relations\Relation<SideChat>  $query
+     * @param  Builder<SideChat>|Relation<SideChat>  $query
      * @return mixed
      */
     public function applyCardData($query)
@@ -66,7 +68,7 @@ final class SideChatService
      * newest first. These can be older than the loaded message window, so the panel fetches
      * them on their own rather than filtering what it happens to have on screen.
      *
-     * @return array{decisions: Collection<int, \App\Models\Message>, pinned: Collection<int, \App\Models\Message>}
+     * @return array{decisions: Collection<int, Message>, pinned: Collection<int, Message>}
      */
     public function highlights(SideChat $sideChat): array
     {

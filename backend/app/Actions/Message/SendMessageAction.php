@@ -5,21 +5,22 @@ namespace App\Actions\Message;
 use App\DTOs\Message\SendMessageData;
 use App\Events\ChannelActivity;
 use App\Events\MessageSent;
-use App\Models\Channel;
-use App\Models\Message;
 use App\Models\BotSettings;
+use App\Models\Channel;
 use App\Models\CustomCommand;
+use App\Models\Message;
 use App\Models\User;
 use App\Services\AttachmentService;
-use App\Services\LinkPreviewService;
-use App\Services\NicknameService;
 use App\Services\Commands\CustomCommandService;
 use App\Services\Commands\SlashCommandService;
+use App\Services\LinkPreviewService;
+use App\Services\NicknameService;
 use App\Services\Widgets\WidgetService;
 use App\Support\Commands\CommandParser;
 use App\Support\Commands\EphemeralMessage;
 use App\Support\Commands\SlashOutcome;
 use App\Support\MentionParser;
+use Illuminate\Http\UploadedFile;
 
 final class SendMessageAction
 {
@@ -32,7 +33,7 @@ final class SendMessageAction
         private readonly CustomCommandService $custom,
     ) {}
 
-    /** @param  array<int, \Illuminate\Http\UploadedFile>  $files */
+    /** @param  array<int, UploadedFile>  $files */
     public function handle(Channel $channel, User $user, SendMessageData $data, array $files = [], array $uploadIds = []): Message
     {
         // A message that's really a widget command (`m!p …`, `k!add …`) never lands as chat:
@@ -58,8 +59,7 @@ final class SendMessageAction
             // the instruction, so a roll or an emote is a real message in every respect:
             // it broadcasts, it can be replied to, it survives a reload. See SlashOutcome.
             $body = $outcome->body;
-        }
-        elseif ($isPlainText && ($outcome = $this->prefixed($channel, $user, $body)) !== null) {
+        } elseif ($isPlainText && ($outcome = $this->prefixed($channel, $user, $body)) !== null) {
             if ($outcome->ephemeral !== null) {
                 return EphemeralMessage::make($channel, $user, $outcome->ephemeral);
             }

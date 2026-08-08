@@ -2,6 +2,8 @@
 
 namespace App\Http\Requests\Canvas;
 
+use App\Support\DeskApps;
+
 /**
  * The validation rules for an Open Canvas card, shared by the channel and side chat requests
  * so the two gates ({@see ChannelCanvasItemRequest}, {@see CanvasItemRequest}) validate the
@@ -30,7 +32,7 @@ final class CanvasItemRules
             // column needs; it just stops an empty one counting as missing.
             'content' => [$creating ? 'present' : 'sometimes', 'array'],
             // A `widget` card names which widget to place; every other kind leaves this out.
-            'content.type' => ['required_if:kind,widget', 'string', 'in:'.implode(',', \App\Support\DeskApps::WIDGET_APPS)],
+            'content.type' => ['required_if:kind,widget', 'string', 'in:'.implode(',', DeskApps::WIDGET_APPS)],
             'x' => ['sometimes', 'integer', 'min:0', 'max:100000'],
             'y' => ['sometimes', 'integer', 'min:0', 'max:100000'],
             'w' => ['sometimes', 'integer', 'min:120', 'max:4000'],

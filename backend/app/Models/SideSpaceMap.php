@@ -4,6 +4,7 @@ namespace App\Models;
 
 use App\Support\SideSpace\Decorations;
 use App\Support\SideSpace\Tiles;
+use Database\Factories\SideSpaceMapFactory;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
@@ -25,7 +26,7 @@ use Illuminate\Database\Eloquent\Relations\HasMany;
  */
 class SideSpaceMap extends Model
 {
-    /** @use HasFactory<\Database\Factories\SideSpaceMapFactory> */
+    /** @use HasFactory<SideSpaceMapFactory> */
     use HasFactory;
 
     /**

@@ -7,6 +7,7 @@ use WendellAdriel\ValidatedDTO\ValidatedDTO;
 final class UpdatePreferencesData extends ValidatedDTO
 {
     public ?string $theme_mode;
+
     public ?string $theme_color;
 
     /**
