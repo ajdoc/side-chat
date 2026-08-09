@@ -53,7 +53,7 @@ const emit = defineEmits<{ read: [] }>()
 const surface = useSurfaceRoute()
 const query = surface.query
 const { user } = useAuth()
-const { messages, hasMore, hasNewer, loadingOlder, encrypted, load, loadOlder, ensureLoaded, jumpTo, returnToLatest, send, edit, remove, toggleReaction, togglePin, subscribe, unsubscribe } = useMessages()
+const { messages, hasMore, hasNewer, loadingOlder, encrypted, encryptFiles, load, loadOlder, ensureLoaded, jumpTo, returnToLatest, send, edit, remove, toggleReaction, togglePin, subscribe, unsubscribe } = useMessages()
 const {
   readersByMessage,
   load: loadReads,
@@ -729,9 +729,10 @@ onBeforeUnmount(() => {
         >
           <LockKeyhole class="size-3 shrink-0" />
           <span>
-            End-to-end encrypted — files included. Search, bots and link previews are off for
-            new messages, and a GIF from the picker is a link to its provider rather than an
-            encrypted file.
+            <template v-if="encryptFiles">End-to-end encrypted — files included.</template>
+            <template v-else>End-to-end encrypted. <strong>Files are not encrypted</strong> on this server.</template>
+            Search, bots and link previews are off for new messages, and a GIF from the picker
+            is a link to its provider rather than an encrypted file.
           </span>
         </p>
         <TypingIndicator :label="typingLabel" />
@@ -739,7 +740,7 @@ onBeforeUnmount(() => {
           :placeholder="`Message ${prefix ?? ''}${title}`"
           :sending="sending"
           :channel-id="channelId"
-          :encrypted="encrypted"
+          :encrypted="encrypted && encryptFiles"
           :mention-members="mentionMembers"
           :commands="slashCommands"
           @submit="onSend"

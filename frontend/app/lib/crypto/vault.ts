@@ -29,7 +29,7 @@
  * — which is the realistic threat for a laptop that gets stolen or a phone that gets sold.
  */
 
-import { generateAesKey, exportAesKey, importAesKey, open, seal, toBase64, fromBase64, type Sealed } from './primitives'
+import { generateAesKey, exportAesKey, importAesKey, open, randomBytes, seal, toBase64, fromBase64, type Sealed } from './primitives'
 
 /** The name the vault key is filed under in the OS store. */
 const VAULT_KEY_NAME = 'side-chat.vault-key'
@@ -117,6 +117,20 @@ export async function openVault(): Promise<Vault> {
 
     const key = await loadOrCreateVaultKey(native)
 
+    /*
+     * Prove the round trip before trusting it with anything.
+     *
+     * `available()` says the OS is *willing* to encrypt, which is not the same as this key
+     * being usable — the store may have accepted a write and returned something else, or the
+     * key may have come back mangled. Finding that out later is catastrophic in a way most
+     * failures here are not: chains would be written wrapped under a key that cannot open
+     * them, and every message on the device becomes unreadable *and* unsendable at once.
+     *
+     * A wrap-and-unwrap of eight random bytes costs microseconds and turns that whole class
+     * of failure into "no protection this session", which is survivable and honest.
+     */
+    if (!(await roundTripWorks(key))) return passthrough
+
     return {
       protecting: true,
       async wrap(bytes) {
@@ -138,6 +152,19 @@ export async function openVault(): Promise<Vault> {
     }
   } catch {
     return passthrough
+  }
+}
+
+/** Does this key actually seal and open again? See the note at the call site. */
+async function roundTripWorks(key: CryptoKey): Promise<boolean> {
+  try {
+    const probe = randomBytes(8)
+    const sealed = await seal(key, probe, VAULT_CONTEXT)
+    const opened = await open(key, sealed, VAULT_CONTEXT)
+
+    return opened.length === probe.length && opened.every((byte, i) => byte === probe[i])
+  } catch {
+    return false
   }
 }
 

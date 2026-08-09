@@ -249,22 +249,40 @@ class IndexedDbKeyStore implements KeyStore {
   }
 
   async saveChain(chain: StoredChain): Promise<void> {
+    /*
+     * Seal *before* the transaction is opened. This order is not a style choice.
+     *
+     * An IndexedDB transaction stays alive only for the task that created it: it deactivates
+     * as soon as control returns to the event loop with no request outstanding. Awaiting
+     * another IDB request is fine — the promise settles inside that request's event — but
+     * awaiting anything else is not, and `conceal` calls `crypto.subtle.encrypt`, which is a
+     * genuine trip out to the event loop. Opening the transaction first and sealing second
+     * means `put` runs against a transaction that has already finished.
+     *
+     * It failed only where the vault is active, which is what made it look like an encryption
+     * bug: with no OS keychain, `conceal` awaits nothing but already-resolved promises, never
+     * yields, and the transaction survives. In Electron it yields every time — so every chain
+     * write threw, no sender key could be stored, and the device could neither send nor read.
+     */
+    const row = await this.conceal(chain)
+
     const store = await this.store(CHAIN_STORE, 'readwrite')
-    await promisify(store.put(await this.conceal(chain)))
+    await promisify(store.put(row))
   }
 
   async chainsForChannel(channelId: number): Promise<StoredChain[]> {
     const store = await this.store(CHAIN_STORE, 'readonly')
     const rows: StoredChain[] = await promisify(store.index('channelId').getAll(channelId))
 
-    return Promise.all(rows.map(row => this.reveal(row)))
+    // Rows this device can no longer unwrap are dropped rather than surfaced empty — see reveal().
+    return (await Promise.all(rows.map(row => this.reveal(row)))).filter((c): c is StoredChain => c !== null)
   }
 
   async allChains(): Promise<StoredChain[]> {
     const store = await this.store(CHAIN_STORE, 'readonly')
     const rows: StoredChain[] = await promisify(store.getAll())
 
-    return Promise.all(rows.map(row => this.reveal(row)))
+    return (await Promise.all(rows.map(row => this.reveal(row)))).filter((c): c is StoredChain => c !== null)
   }
 
   /**
@@ -291,7 +309,7 @@ class IndexedDbKeyStore implements KeyStore {
    * chain comes back empty, decryption of those messages fails, and the timeline draws
    * "can't read this" on them exactly as it does for a missing key.
    */
-  private async reveal(chain: StoredChain): Promise<StoredChain> {
+  private async reveal(chain: StoredChain): Promise<StoredChain | null> {
     if (!chain.sealed) return chain
 
     const vault = await this.vault
@@ -299,7 +317,20 @@ class IndexedDbKeyStore implements KeyStore {
     try {
       return { ...chain, chainKey: await vault.unwrap(chain.chainKey), sealed: false }
     } catch {
-      return { ...chain, chainKey: new Uint8Array(0), sealed: false }
+      /*
+       * Null, not a chain with an empty key.
+       *
+       * An earlier version returned `new Uint8Array(0)` here, reasoning that one unreadable
+       * row shouldn't take the store with it. That was worse than the problem: a zero-length
+       * key is still a *chain*, so the sender picks it up and every send throws deep inside
+       * the ratchet — the device stops being able to write as well as read, which is a far
+       * bigger failure than the one row that was actually lost.
+       *
+       * Absent is the honest answer and the one every caller already handles: a sending chain
+       * that isn't there gets replaced and redistributed, and a missing receive chain draws
+       * "can't read this" on those messages alone.
+       */
+      return null
     }
   }
 

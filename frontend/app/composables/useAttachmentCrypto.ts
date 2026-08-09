@@ -53,11 +53,24 @@ export function useAttachmentCrypto() {
 
     if (!message.encrypted || attachments.length === 0) return attachments
 
+    /*
+     * Only the sealed ones. An encrypted *message* can carry unsealed attachments — a
+     * deployment that turned file encryption off (see config/uploads.php), or a history
+     * spanning the moment somebody did. Those arrive with their real name and a working URL
+     * already, and running them through the key path would mark them undecryptable for want
+     * of a key that was never made.
+     */
+    if (!attachments.some(attachment => attachment.encrypted)) return attachments
+
     // Order is the only link between a key and its file — see sealFiles in useMessages.
     const meta = await crypto.decryptFileMeta(message)
+    let sealedIndex = -1
 
-    return Promise.all(attachments.map(async (attachment, index) => {
-      const file = meta[index]
+    return Promise.all(attachments.map(async (attachment) => {
+      if (!attachment.encrypted) return attachment
+
+      // Counted across the sealed ones only, since those are the only ones with keys.
+      const file = meta[++sealedIndex]
 
       if (!file) return { ...attachment, undecryptable: true }
 

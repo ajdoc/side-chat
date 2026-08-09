@@ -28,7 +28,7 @@ const props = defineProps<{
 }>()
 
 const { user } = useAuth()
-const { messages, hasMore, loadingOlder, encrypted, load, loadOlder, ensureLoaded, send, edit, remove, toggleReaction, togglePin, subscribe, unsubscribe } = useMessages()
+const { messages, hasMore, loadingOlder, encrypted, encryptFiles, load, loadOlder, ensureLoaded, send, edit, remove, toggleReaction, togglePin, subscribe, unsubscribe } = useMessages()
 const { members: mentionMembers, names: mentionNames, badges: memberBadges, load: loadMembers } = useChannelMembers()
 const { commands: slashCommands, load: loadCommands } = useSlashCommands()
 provide(mentionNamesKey, mentionNames)
@@ -174,7 +174,7 @@ onBeforeUnmount(() => { if (openedId) closeChannel(openedId) })
         :placeholder="`Message ${title}`"
         :sending="sending"
         :channel-id="channelId"
-        :encrypted="encrypted"
+        :encrypted="encrypted && encryptFiles"
         :mention-members="mentionMembers"
         :commands="slashCommands"
         @submit="onSend"

@@ -359,6 +359,50 @@ it('leaves attachments alone in an unencrypted channel', function () {
         ->assertJsonPath('data.attachments.0.name', 'holiday.png');
 });
 
+it('leaves attachments in the clear when the deployment turns file encryption off', function () {
+    /*
+     * The escape hatch for an object store. Encrypted files cannot be streamed or
+     * range-requested and have to be fetched by JavaScript, which is the wrong trade on some
+     * deployments — see config/uploads.php.
+     *
+     * What must *not* change is the message itself: the body stays encrypted. Only the file
+     * travels readable, and the attachment says so on its own row rather than the app
+     * inferring it from a setting that may have changed since.
+     */
+    config()->set('uploads.encrypt_attachments', false);
+
+    [$owner, , $channel] = encryptedChannel();
+    Passport::actingAs($owner);
+
+    $this->postJson("/api/channels/{$channel->id}/messages", [
+        'body' => 'envelope-stand-in',
+        'attachments' => [UploadedFile::fake()->create('holiday.png', 20, 'image/png')],
+    ])->assertCreated()
+        // The message is still ciphertext…
+        ->assertJsonPath('data.encrypted', true)
+        // …and the file is not, with its real name and type intact.
+        ->assertJsonPath('data.attachments.0.encrypted', false)
+        ->assertJsonPath('data.attachments.0.name', 'holiday.png')
+        ->assertJsonPath('data.attachments.0.is_image', true);
+});
+
+it('tells the client whether files are encrypted', function () {
+    // The composer seals big files at pick time, long before the send, so it has to know
+    // this up front rather than discovering it on the way out.
+    [$owner, , $channel] = encryptedChannel();
+    Passport::actingAs($owner);
+
+    $this->getJson("/api/channels/{$channel->id}/messages")
+        ->assertOk()
+        ->assertJsonPath('encryption.files', true);
+
+    config()->set('uploads.encrypt_attachments', false);
+
+    $this->getJson("/api/channels/{$channel->id}/messages")
+        ->assertOk()
+        ->assertJsonPath('encryption.files', false);
+});
+
 it('does not treat an encrypted body as a command', function () {
     [$owner, , $channel] = encryptedChannel();
     Passport::actingAs($owner);

@@ -14,7 +14,7 @@ interface MessagePage {
   data: Message[]
   has_more: boolean
   has_newer?: boolean
-  encryption?: { encrypted: boolean, epoch: number }
+  encryption?: { encrypted: boolean, epoch: number, files?: boolean }
 }
 
 /**
@@ -115,6 +115,15 @@ export function useMessages() {
    */
   const encrypted = ref(false)
   const epoch = ref(0)
+  /**
+   * Whether *files* are sealed as well as messages.
+   *
+   * A deployment setting rather than a per-channel one — see config/uploads.php. Off means
+   * message text is still end-to-end encrypted and attachments are not, which is a real
+   * weakening and is said out loud in the composer and the encryption dialog rather than
+   * left for somebody to discover.
+   */
+  const encryptFiles = ref(true)
   const encryption = useEncryption()
   const crypto = useMessageCrypto()
   const hasMore = ref(false) // older messages exist above the loaded window
@@ -228,6 +237,7 @@ export function useMessages() {
 
     encrypted.value = res.encryption?.encrypted ?? false
     epoch.value = res.encryption?.epoch ?? 0
+    encryptFiles.value = res.encryption?.files ?? true
 
     // Collect whatever sender keys were addressed to this device before rendering. Doing it
     // after would draw a screen of "can't read this" and then quietly fix itself, which reads
@@ -391,7 +401,9 @@ export function useMessages() {
      * not bytes we hold. Picking one in an encrypted channel tells that CDN, and anybody
      * watching, what was sent. The composer should say so — see the note in ChannelView.
      */
-    const outgoing = encrypted.value ? await sealFiles(files) : { files, meta: [] as SealedFile[] }
+    const outgoing = encrypted.value && encryptFiles.value
+      ? await sealFiles(files)
+      : { files, meta: [] as SealedFile[] }
 
     /*
      * Direct files first, then staged uploads — the order the server attaches them in.
@@ -696,5 +708,5 @@ export function useMessages() {
     release(`channel.${id}`)
   }
 
-  return { messages, hasMore, hasNewer, loadingOlder, encrypted, epoch, load, loadOlder, ensureLoaded, jumpTo, returnToLatest, send, edit, remove, removeAttachment, toggleReaction, togglePin, subscribe, unsubscribe }
+  return { messages, hasMore, hasNewer, loadingOlder, encrypted, encryptFiles, epoch, load, loadOlder, ensureLoaded, jumpTo, returnToLatest, send, edit, remove, removeAttachment, toggleReaction, togglePin, subscribe, unsubscribe }
 }

@@ -25,6 +25,29 @@
  * uploads bypass all of that, so it doesn't constrain them.
  */
 return [
+    /**
+     * Encrypt attachments in an encrypted channel, or leave the bytes readable.
+     *
+     * On by default, because a padlock over a conversation whose files anyone can open is a
+     * padlock that misleads. It is a switch rather than a certainty because encrypted
+     * attachments cost real things, and on some deployments the cost is the wrong trade:
+     *
+     *  - **No streaming.** One authentication tag covers the whole file, so a video cannot
+     *    start playing until every byte has arrived and been decrypted. Range requests — the
+     *    thing an object store like R2 is best at — stop being usable.
+     *  - **Memory.** Decryption happens in the browser with the whole file in memory twice.
+     *  - **CORS.** The bytes are fetched by JavaScript rather than handed to an `<img>` or a
+     *    download, so a bucket on another origin has to allow the app's origin explicitly.
+     *
+     * Turning it off does *not* turn off message encryption: what people write stays
+     * end-to-end encrypted, and only the files travel in the clear. The UI says so plainly —
+     * see EncryptionDialog — because "encrypted" meaning two different things depending on a
+     * server setting is precisely the sort of quiet weakening that makes the padlock worthless.
+     *
+     * Only affects new uploads. Files already encrypted stay that way and keep working.
+     */
+    'encrypt_attachments' => (bool) env('ENCRYPT_ATTACHMENTS', true),
+
     'disk' => env('ATTACHMENT_DISK', 'local'),
     'max_bytes' => (int) env('MAX_UPLOAD_MB', 2048) * 1024 * 1024,
     'chunk_kb' => (int) env('MAX_UPLOAD_CHUNK_KB', 8192),

@@ -29,6 +29,20 @@ final class AttachmentService
     }
 
     /**
+     * Are attachments encrypted in encrypted channels?
+     *
+     * Read at call time for the same reason as {@see disk()} — under Octane a worker outlives
+     * the request that first asked. See config/uploads.php for what turning it off costs, and
+     * note it changes only new uploads: files already sealed stay sealed and keep working,
+     * which is why every attachment carries its own `encrypted` flag rather than the app
+     * inferring one from this setting.
+     */
+    public static function encryptsAttachments(): bool
+    {
+        return (bool) config('uploads.encrypt_attachments', true);
+    }
+
+    /**
      * Store uploaded files against a message.
      *
      * @param  array<int, UploadedFile>  $files
@@ -70,7 +84,7 @@ final class AttachmentService
      */
     private function describe(Message $message, string $name, ?string $mime, ?string $extension): array
     {
-        if ($message->isEncrypted()) {
+        if ($message->isEncrypted() && self::encryptsAttachments()) {
             return [
                 'name' => 'Encrypted file',
                 'mime_type' => 'application/octet-stream',

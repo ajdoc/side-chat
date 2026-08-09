@@ -16,6 +16,7 @@ use App\Http\Requests\Message\UpdateMessageRequest;
 use App\Http\Resources\MessageResource;
 use App\Models\Channel;
 use App\Models\Message;
+use App\Services\AttachmentService;
 use App\Services\MessageService;
 use Illuminate\Http\Resources\Json\AnonymousResourceCollection;
 use Illuminate\Http\Response;
@@ -50,6 +51,10 @@ class MessageController extends Controller
                 'encryption' => [
                     'encrypted' => $channel->isEncrypted(),
                     'epoch' => (int) $channel->encryption_epoch,
+                    // Whether *files* are sealed too. A deployment can turn this off — see
+                    // config/uploads.php — and the composer has to know, because it seals
+                    // large files at pick time long before the send.
+                    'files' => AttachmentService::encryptsAttachments(),
                 ],
             ]);
     }
