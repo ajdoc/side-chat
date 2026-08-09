@@ -2,6 +2,7 @@
 
 namespace App\Services;
 
+use App\Models\ChannelRead;
 use App\Models\Conversation;
 use App\Models\Message;
 use App\Models\User;
@@ -109,8 +110,22 @@ final class ConversationService
 
         $counts = $this->reads->unreadCounts($user, $channelIds);
 
-        $conversations->each(function (Conversation $conversation) use ($counts): void {
-            $conversation->unread_count = (int) ($counts[$conversation->channel?->id] ?? 0);
+        // How loud each chat is allowed to be, from the same user-by-channel row the counts
+        // came from. It travels with the list rather than being asked for per chat, because
+        // the client needs it the instant a message arrives — deciding whether to alert
+        // can't be a round trip.
+        $prefs = ChannelRead::where('user_id', $user->getKey())
+            ->whereIn('channel_id', $channelIds)
+            ->get(['channel_id', 'notify_level', 'muted_until'])
+            ->keyBy('channel_id');
+
+        $conversations->each(function (Conversation $conversation) use ($counts, $prefs): void {
+            $channelId = $conversation->channel?->id;
+            $pref = $channelId === null ? null : $prefs->get($channelId);
+
+            $conversation->unread_count = (int) ($counts[$channelId] ?? 0);
+            $conversation->notify_level = $pref?->notify_level;
+            $conversation->muted_until = $pref?->muted_until;
         });
     }
 }

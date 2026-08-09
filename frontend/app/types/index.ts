@@ -47,8 +47,22 @@ export interface User {
   space_pet: PetKind | null
   /** The short line they've left hanging over their head, or null for none. */
   space_shout: string | null
+  /**
+   * Notification defaults, and yours alone — the API sends these only on your own record,
+   * since this type also describes every message author in the room.
+   *
+   * Two defaults because the honest answer differs by kind of room: a channel of two
+   * hundred people is noise unless it names you, a DM was addressed to you by definition.
+   */
+  notify_channel_default?: NotifyLevel
+  notify_dm_default?: NotifyLevel
+  /** The master switch for push specifically, independent of the levels above. */
+  push_enabled?: boolean
   created_at: string
 }
+
+/** How loud a place is allowed to be. Mirrors App\Support\Notifications\NotifyLevel. */
+export type NotifyLevel = 'all' | 'mentions' | 'none'
 
 export interface AuthResponse {
   user: User
@@ -109,6 +123,15 @@ export interface Channel {
   unread_count?: number
   /** An unread here named you (by @you or @all) — badge it louder than a plain unread. */
   mention?: boolean
+  /**
+   * How loud this place is *for you*, and null when you've never said — which is not the
+   * same as 'all'. Null inherits (from the parent channel, then from your account default)
+   * and has to keep inheriting as those change, so it must survive as null. See
+   * useNotifyPolicy, which resolves the two together.
+   */
+  notify_level?: NotifyLevel | null
+  /** Quiet until this moment passes, whatever `notify_level` says. */
+  muted_until?: string | null
   created_at: string
 }
 
@@ -156,6 +179,9 @@ export interface Conversation {
   unread_count?: number
   /** An unread here named you (by @you or @all). */
   mention?: boolean
+  /** Your override for this chat, null to follow your account default. See useNotifyPolicy. */
+  notify_level?: NotifyLevel | null
+  muted_until?: string | null
   last_message_at?: string | null
   created_at: string
 }

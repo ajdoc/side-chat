@@ -44,6 +44,10 @@ class ConversationResource extends JsonResource
             'call_started_at' => $this->call_started_at,
             'call_started_by' => $this->call_started_by,
             'unread_count' => $this->whenNotNull($this->unread_count),
+            // Your override for this chat, null when you've never set one — and null has to
+            // survive as null, since it means "follow my account default" rather than "all".
+            'notify_level' => $this->whenNotNull($this->notify_level),
+            'muted_until' => $this->whenNotNull($this->muted_until),
             // Set by ConversationService when the list is fetched — it's what the list is
             // sorted by, and what the sidebar shows as "3:42pm" next to the name.
             'last_message_at' => $this->whenNotNull($this->last_message_at ?? null),

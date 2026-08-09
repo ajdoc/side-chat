@@ -68,16 +68,24 @@ final class ChannelService
             fn (Channel $channel) => $channel->unread_count = (int) $channel->discussions->sum('unread_count')
         );
 
-        // Which discussion each channel opens on *for this person*. One query for the page, and
-        // absent for every channel they haven't chosen one in — which is nearly all of them.
-        $defaults = ChannelRead::where('user_id', $user->getKey())
-            ->whereIn('channel_id', $channels->pluck('id')->all())
-            ->whereNotNull('default_child_id')
-            ->pluck('default_child_id', 'channel_id');
+        // Which discussion each channel opens on *for this person*, and how loud each place is
+        // allowed to be. Both live on the same user-by-channel row, so they come back together
+        // — and the notify half covers the discussions too, since a muted discussion inside an
+        // unmuted channel still has to draw itself as muted.
+        $ids = $channels->pluck('id')->merge($discussions->pluck('id'))->all();
 
-        $channels->getCollection()->each(
-            fn (Channel $channel) => $channel->default_child_id = $defaults[$channel->id] ?? null
-        );
+        $prefs = ChannelRead::where('user_id', $user->getKey())
+            ->whereIn('channel_id', $ids)
+            ->get(['channel_id', 'default_child_id', 'notify_level', 'muted_until'])
+            ->keyBy('channel_id');
+
+        $channels->getCollection()->concat($discussions)->each(function (Channel $channel) use ($prefs) {
+            $pref = $prefs->get($channel->id);
+
+            $channel->default_child_id = $pref?->default_child_id;
+            $channel->notify_level = $pref?->notify_level;
+            $channel->muted_until = $pref?->muted_until;
+        });
 
         return $channels;
     }

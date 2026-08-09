@@ -25,6 +25,14 @@ class UserResource extends JsonResource
             'provider' => $this->provider,
             'theme_mode' => $this->theme_mode,
             'theme_color' => $this->theme_color,
+            // Yours only. Unlike the theme, which shows up on everyone you can see, what
+            // somebody chose to be notified about is nobody else's business — and this
+            // resource serialises every message author in the room.
+            $this->mergeWhen($request->user()?->getKey() === $this->id, fn () => [
+                'notify_channel_default' => $this->notify_channel_default,
+                'notify_dm_default' => $this->notify_dm_default,
+                'push_enabled' => (bool) $this->push_enabled,
+            ]),
             // How this person is drawn in a Side Space. Always a complete look, never null:
             // every client draws a sprite for everybody, so "hasn't chosen" has to arrive as
             // something drawable rather than as an absence each of them handles differently.

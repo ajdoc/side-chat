@@ -30,6 +30,7 @@ use App\Http\Controllers\ConversationController;
 use App\Http\Controllers\CustomCommandController;
 use App\Http\Controllers\DecisionController;
 use App\Http\Controllers\DeskAppsController;
+use App\Http\Controllers\DeviceTokenController;
 use App\Http\Controllers\DiscussionController;
 use App\Http\Controllers\DocumentController;
 use App\Http\Controllers\EncryptionController;
@@ -42,6 +43,7 @@ use App\Http\Controllers\LyricsController;
 use App\Http\Controllers\MessageController;
 use App\Http\Controllers\MessageInfoController;
 use App\Http\Controllers\NicknameController;
+use App\Http\Controllers\NotificationSettingController;
 use App\Http\Controllers\PinController;
 use App\Http\Controllers\PreferencesController;
 use App\Http\Controllers\ProfileController;
@@ -98,6 +100,14 @@ Route::middleware('auth:api')->group(function () {
     // What you look like walking around a Side Space, and which starter follows you. Yours,
     // not a room's — hence no channel in the path.
     Route::patch('space/appearance', [SpaceAppearanceController::class, 'update']);
+
+    /*
+     * Push. The registry is one row per install (see the device_tokens migration): the app
+     * posts its FCM token on every launch, because FCM rotates them without asking, and
+     * deletes it on sign-out so a shared phone stops receiving the last person's messages.
+     */
+    Route::post('device-tokens', [DeviceTokenController::class, 'store']);
+    Route::delete('device-tokens', [DeviceTokenController::class, 'destroy']);
 
     // Spotify account linking, for real Premium playback in the music widget.
     Route::get('spotify/connect', [SpotifyController::class, 'connect']);
@@ -370,6 +380,17 @@ Route::middleware('auth:api')->group(function () {
     // Read receipts.
     Route::get('channels/{channel}/reads', [ReadReceiptController::class, 'index']);
     Route::post('channels/{channel}/read', [ReadReceiptController::class, 'store']);
+
+    /*
+     * How loud one place is, for one person. Addressable by channel *or* by conversation,
+     * because the DM list holds conversation ids and never sees the channel inside one —
+     * both land on the same row. Muting a container quiets its discussions too, which is
+     * NotificationPolicy's inheritance rule rather than anything these routes do.
+     */
+    Route::get('channels/{channel}/notifications', [NotificationSettingController::class, 'show']);
+    Route::put('channels/{channel}/notifications', [NotificationSettingController::class, 'update']);
+    Route::get('conversations/{conversation}/notifications', [NotificationSettingController::class, 'showForConversation']);
+    Route::put('conversations/{conversation}/notifications', [NotificationSettingController::class, 'updateForConversation']);
 
     // Invites & join requests.
     Route::get('invites/{code}', [InviteController::class, 'show']);

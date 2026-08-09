@@ -15,7 +15,7 @@ use Illuminate\Foundation\Auth\User as Authenticatable;
 use Illuminate\Notifications\Notifiable;
 use Laravel\Passport\HasApiTokens;
 
-#[Fillable(['name', 'email', 'password', 'is_bot', 'avatar', 'provider', 'provider_id', 'theme_mode', 'theme_color', 'space_avatar', 'space_pet', 'space_shout', 'spotify_id', 'spotify_access_token', 'spotify_refresh_token', 'spotify_token_expires_at', 'spotify_product'])]
+#[Fillable(['name', 'email', 'password', 'is_bot', 'avatar', 'provider', 'provider_id', 'theme_mode', 'theme_color', 'space_avatar', 'space_pet', 'space_shout', 'spotify_id', 'spotify_access_token', 'spotify_refresh_token', 'spotify_token_expires_at', 'spotify_product', 'notify_channel_default', 'notify_dm_default', 'push_enabled'])]
 #[Hidden(['password', 'remember_token'])]
 class User extends Authenticatable
 {
@@ -30,6 +30,11 @@ class User extends Authenticatable
     protected $attributes = [
         'theme_mode' => 'system',
         'theme_color' => 'blue',
+        // Quieter in a room full of people, louder when someone addressed you directly.
+        // See the migration that added them for why these two differ.
+        'notify_channel_default' => 'mentions',
+        'notify_dm_default' => 'all',
+        'push_enabled' => true,
     ];
 
     /**
@@ -43,6 +48,7 @@ class User extends Authenticatable
             'email_verified_at' => 'datetime',
             'password' => 'hashed',
             'is_bot' => 'boolean',
+            'push_enabled' => 'boolean',
             // How you're drawn in a Side Space — see App\Support\SideSpace\Avatars. One setting
             // with five parts, never queried by, so it rides as JSON rather than five columns.
             'space_avatar' => 'array',
@@ -65,6 +71,12 @@ class User extends Authenticatable
     public function ownedServers(): HasMany
     {
         return $this->hasMany(Server::class, 'owner_id');
+    }
+
+    /** Installs we can push to when this person isn't looking at the app. */
+    public function deviceTokens(): HasMany
+    {
+        return $this->hasMany(DeviceToken::class);
     }
 
     /** Outstanding requests this user has made to join servers. */

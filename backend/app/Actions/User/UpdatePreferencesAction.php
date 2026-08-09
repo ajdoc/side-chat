@@ -12,6 +12,9 @@ final class UpdatePreferencesAction
         $payload = array_filter([
             'theme_mode' => $data->theme_mode,
             'theme_color' => $data->theme_color,
+            'notify_channel_default' => $data->notify_channel_default,
+            'notify_dm_default' => $data->notify_dm_default,
+            'push_enabled' => $data->push_enabled,
         ], static fn ($value): bool => $value !== null);
 
         if ($payload !== []) {

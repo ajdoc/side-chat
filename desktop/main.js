@@ -20,7 +20,7 @@
 // 3. Screen sharing needs a source picker. Chromium's own picker isn't available to an
 //    Electron app, so `setDisplayMediaRequestHandler` supplies one.
 
-const { app, BrowserWindow, desktopCapturer, ipcMain, net, protocol, safeStorage, session, shell } = require('electron')
+const { app, BrowserWindow, desktopCapturer, ipcMain, Menu, nativeImage, net, protocol, safeStorage, session, shell, Tray } = require('electron')
 const http = require('node:http')
 const fs = require('node:fs')
 const fsp = require('node:fs/promises')
@@ -89,12 +89,9 @@ if (!gotLock) app.quit()
 /** Where the bundle is being served from, once the server is up. Set before any window opens. */
 let appOrigin = 'app://side-chat'
 
-app.on('second-instance', () => {
-  const win = BrowserWindow.getAllWindows()[0]
-  if (!win) return
-  if (win.isMinimized()) win.restore()
-  win.focus()
-})
+// A second launch raises what we already have — including from the tray, which is the
+// normal way back in once the window has been closed.
+app.on('second-instance', showWindow)
 
 app.whenReady().then(async () => {
   const partition = session.defaultSession
@@ -107,15 +104,71 @@ app.whenReady().then(async () => {
   provideUploads()
   provideSecrets()
   createWindow()
+  createTray()
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow()
   })
 })
 
-app.on('window-all-closed', () => {
-  if (process.platform !== 'darwin') app.quit()
-})
+/**
+ * Closing the window hides it. Quitting is a deliberate act.
+ *
+ * This is the whole of the desktop notification story, and the reason alerts used to stop
+ * arriving for people who "closed" the app: an Electron process that exits takes its
+ * websocket with it, and a chat client with no connection cannot be told anything. There
+ * is no push channel that would fix that — no Electron equivalent of FCM — so the fix is
+ * simply not to die. The app goes to the tray, the socket stays up, and the same code that
+ * raises a notification while you're in another tab raises it while you're in another app.
+ *
+ * `isQuitting` is what separates "the user closed the window" from "the user chose Quit",
+ * since both arrive here as a close.
+ */
+let tray = null
+let isQuitting = false
+
+app.on('before-quit', () => { isQuitting = true })
+
+// Deliberately empty of the usual `app.quit()`. macOS already worked this way; this makes
+// Windows and Linux behave the same, which is what every chat app on the platform does.
+app.on('window-all-closed', () => {})
+
+/**
+ * The tray icon, and the only visible way back to a hidden window.
+ *
+ * Built once. Without it, hiding the window on close would strand the app in a state with
+ * no UI and no way to reach it short of the task manager — which is a far worse bug than
+ * the one being fixed.
+ */
+function createTray() {
+  if (tray) return
+
+  const icon = nativeImage.createFromPath(path.join(BUNDLE, 'icon-512.png'))
+  // 16px is the tray's own idiom; handing it a 512px bitmap gets a blurry mess on Windows
+  // and a comically large icon on some Linux panels.
+  tray = new Tray(icon.resize({ width: 16, height: 16 }))
+
+  tray.setToolTip('Side Chat')
+  tray.setContextMenu(Menu.buildFromTemplate([
+    { label: 'Open Side Chat', click: showWindow },
+    { type: 'separator' },
+    { label: 'Quit', click: () => { isQuitting = true; app.quit() } },
+  ]))
+
+  // Clicking the icon itself is what most people try first, so it does the obvious thing.
+  tray.on('click', showWindow)
+}
+
+/** Raise the window, whatever it was doing — hidden, minimised, or behind everything. */
+function showWindow() {
+  const win = BrowserWindow.getAllWindows()[0]
+
+  if (!win) return createWindow()
+
+  if (!win.isVisible()) win.show()
+  if (win.isMinimized()) win.restore()
+  win.focus()
+}
 
 function createWindow() {
   const win = new BrowserWindow({
@@ -141,6 +194,15 @@ function createWindow() {
   })
 
   win.once('ready-to-show', () => win.show())
+
+  // The close button hides rather than destroys, so the connection — and therefore every
+  // notification that depends on it — outlives the window. Quit is what actually exits.
+  win.on('close', (event) => {
+    if (isQuitting) return
+
+    event.preventDefault()
+    win.hide()
+  })
 
   // Anything that isn't the app itself belongs in the user's browser — an OAuth flow, a
   // link somebody posted. Spotify's link popup is the one exception the app opens itself.

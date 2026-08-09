@@ -64,6 +64,10 @@ export function useAuth() {
    * addressable in the new session.
    */
   async function logout() {
+    // Before the token goes: revoking needs a valid session to authenticate, and the phone
+    // has to stop receiving this account's messages the moment somebody else signs in on it.
+    await usePushNotifications().unregister()
+
     try {
       await api('/api/auth/logout', { method: 'POST' })
     } catch {
@@ -94,5 +98,18 @@ export function useAuth() {
     return res.data
   }
 
-  return { user, token, isLoggedIn, register, login, logout, fetchUser, setToken, updateProfile }
+  /**
+   * Save account preferences and keep the local user in step.
+   *
+   * The local update is the important half: the notification defaults are the bottom of the
+   * resolution chain that useNotifyPolicy consults on *every* arriving message, so a saved
+   * default that hadn't landed here yet would go on alerting by the old rule until reload.
+   */
+  async function updatePreferences(payload: Record<string, unknown>) {
+    const res = await api<{ data: User }>('/api/preferences', { method: 'PATCH', body: payload })
+    user.value = res.data
+    return res.data
+  }
+
+  return { user, token, isLoggedIn, register, login, logout, fetchUser, setToken, updateProfile, updatePreferences }
 }

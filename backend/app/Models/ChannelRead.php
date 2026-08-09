@@ -19,11 +19,17 @@ class ChannelRead extends Model
      * the user-by-channel row that preference needs, and a table of its own would be the same
      * unique key written twice. Set only on a *container's* row.
      */
-    protected $fillable = ['channel_id', 'user_id', 'last_read_message_id', 'read_at', 'default_child_id'];
+    protected $fillable = [
+        'channel_id', 'user_id', 'last_read_message_id', 'read_at', 'default_child_id',
+        // Nor is this one about reading: how loud this channel is allowed to be, for this
+        // person. Same justification as `default_child_id` — it's the user-by-channel row
+        // the preference needs, already keyed exactly right. See NotificationPolicy.
+        'notify_level', 'muted_until',
+    ];
 
     protected function casts(): array
     {
-        return ['read_at' => 'datetime'];
+        return ['read_at' => 'datetime', 'muted_until' => 'datetime'];
     }
 
     public function channel(): BelongsTo

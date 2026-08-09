@@ -5,6 +5,8 @@ namespace App\Actions\Message;
 use App\DTOs\Message\SendMessageData;
 use App\Events\ChannelActivity;
 use App\Events\MessageSent;
+use App\Jobs\SendPushNotifications;
+use App\Services\Notifications\FcmSender;
 use App\Models\BotSettings;
 use App\Models\Channel;
 use App\Models\CustomCommand;
@@ -102,11 +104,25 @@ final class SendMessageAction
 
         $message->load('user', 'replyTo.user', 'attachments', 'reactions.user', 'linkPreviews');
 
+        $mentioned = $this->mentioned($channel, $message, $user);
+
         broadcast(new MessageSent($message));
         // Wakes up the unread badge on this channel for everyone who isn't in it — and marks
         // that badge as a *mention* for anyone this message named (by @all or by name), so
         // their sidebar can call it out rather than treat it as one more unread.
-        broadcast(new ChannelActivity($message, ...$this->mentioned($channel, $message, $user)));
+        broadcast(new ChannelActivity($message, ...$mentioned));
+        // Same audience, different reach: the badge only lands on a client that's connected,
+        // and the whole point of a push is the people who aren't. Who actually gets one is
+        // NotificationPolicy's call, not this one's.
+        //
+        // Guarded on push being configured at all, so an install without FCM credentials
+        // doesn't queue a job per message for a sender that would immediately give up.
+        SendPushNotifications::dispatchIf(
+            FcmSender::enabled(),
+            $message->id,
+            $mentioned['mentionedUserIds'],
+            $mentioned['mentionsAll'],
+        );
 
         return $message;
     }

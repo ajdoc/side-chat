@@ -14,6 +14,7 @@ export function useUnread() {
   const { user } = useAuth()
   const { findChannel, patchChannel } = useServer()
   const { notify } = useDesktopNotifications()
+  const { shouldAlert } = useNotifyPolicy()
 
   const activeChannelId = computed(() => Number(route.params.channelId) || null)
 
@@ -51,18 +52,19 @@ export function useUnread() {
         const mentionsMe = !!a.mentions_all || !!a.mentioned_user_ids?.includes(user.value?.id ?? -1)
         bump(a.channel_id, mentionsMe)
 
-        // A mention in a channel you're not reading is worth a system notification (notify()
-        // itself stays quiet unless the tab is in the background).
-        if (mentionsMe) {
-          const channel = findChannel(a.channel_id)
-          if (channel) {
-            notify({
-              title: `#${channel.name}`,
-              body: 'You were mentioned',
-              tag: `mention-channel-${channel.id}`,
-              to: `/servers/${channel.server_id}/channels/${channel.id}`,
-            })
-          }
+        // Whether this is worth an alert is the channel's setting to answer, not this
+        // handler's — the same resolution the server runs before sending a push, so the
+        // two can't disagree about a muted channel. (notify() itself stays quiet unless the
+        // window is actually in the background.)
+        const channel = findChannel(a.channel_id)
+
+        if (channel && shouldAlert(channel, mentionsMe)) {
+          notify({
+            title: `#${channel.name}`,
+            body: mentionsMe ? 'You were mentioned' : 'New message',
+            tag: `channel-${channel.id}`,
+            to: `/servers/${channel.server_id}/channels/${channel.id}`,
+          })
         }
       })
   }

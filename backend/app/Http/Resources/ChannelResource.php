@@ -37,6 +37,11 @@ class ChannelResource extends JsonResource
             // Which of this channel's discussions *you* land in. A preference, not a setting:
             // it is read from your own row and means nothing to anybody else.
             'default_child_id' => $this->whenNotNull($this->default_child_id),
+            // Your override for this place, and null when you haven't set one — which is not
+            // the same as 'all' and must survive the round trip as null, or the sidebar would
+            // show every untouched channel as explicitly pinned. See NotificationPolicy.
+            'notify_level' => $this->whenNotNull($this->notify_level),
+            'muted_until' => $this->whenNotNull($this->muted_until),
             // A container's discussions, when the listing loaded them. Absent — not empty —
             // wherever a channel is serialised on its own, so the sidebar can tell "this channel
             // has no discussions" (impossible) from "you didn't ask for them" (routine).

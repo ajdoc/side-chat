@@ -4,6 +4,8 @@ namespace App\Actions\Message;
 
 use App\Events\ChannelActivity;
 use App\Events\MessageSent;
+use App\Jobs\SendPushNotifications;
+use App\Services\Notifications\FcmSender;
 use App\Models\Channel;
 use App\Models\Message;
 use App\Models\User;
@@ -45,8 +47,16 @@ final class ForwardMessageAction
 
         $message->load('user', 'forwardedFrom.user', 'attachments', 'reactions.user', 'linkPreviews');
 
+        $mentioned = $this->mentioned($target, $message, $user);
+
         broadcast(new MessageSent($message));
-        broadcast(new ChannelActivity($message, ...$this->mentioned($target, $message, $user)));
+        broadcast(new ChannelActivity($message, ...$mentioned));
+        SendPushNotifications::dispatchIf(
+            FcmSender::enabled(),
+            $message->id,
+            $mentioned['mentionedUserIds'],
+            $mentioned['mentionsAll'],
+        );
 
         return $message;
     }

@@ -23,6 +23,7 @@ export function useUserStream() {
   const { conversations, upsert, patch, forget, byChannel } = useConversations()
   const { incoming, ringingFor, stopRinging } = useCall()
   const { notify } = useDesktopNotifications()
+  const { shouldAlert } = useNotifyPolicy()
   const { channelId: callChannelId, disconnect, disconnectedByModerator, mutedByModerator } = useVoice()
   const { applyEvent: applyFriendship, removeEvent: removeFriendship } = useFriends()
 
@@ -84,16 +85,19 @@ export function useUserStream() {
         const mentionsMe = !!a.mentions_all || !!a.mentioned_user_ids?.includes(user.value?.id ?? -1)
         bumpUnread(a.conversation_id, mentionsMe)
 
-        if (mentionsMe) {
-          const conversation = conversations.value.find(c => c.id === a.conversation_id)
-          if (conversation) {
-            notify({
-              title: conversationTitle(conversation, user.value),
-              body: 'You were mentioned',
-              tag: `mention-chat-${conversation.id}`,
-              to: `/chats/${conversation.id}`,
-            })
-          }
+        // A chat defaults to alerting on every message, not only on mentions — someone
+        // opened a DM to say something to *you*. Muting it, or setting it to mentions-only,
+        // is what quiets it, and that's the same resolution the server runs before it
+        // pushes to your phone. See useNotifyPolicy.
+        const conversation = conversations.value.find(c => c.id === a.conversation_id)
+
+        if (conversation && shouldAlert(conversation, mentionsMe)) {
+          notify({
+            title: conversationTitle(conversation, user.value),
+            body: mentionsMe ? 'You were mentioned' : 'New message',
+            tag: `chat-${conversation.id}`,
+            to: `/chats/${conversation.id}`,
+          })
         }
       })
 

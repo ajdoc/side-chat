@@ -35,10 +35,18 @@ return [
         ],
     ],
 
+    // Socialite sign-in *and* the Drive/YouTube data key, in one array on purpose: PHP keeps
+    // the last of two literals with the same key, so declaring `google` twice silently threw
+    // the OAuth credentials away and broke "sign in with Google" with a null client_id.
     'google' => [
         'client_id' => env('GOOGLE_CLIENT_ID'),
         'client_secret' => env('GOOGLE_CLIENT_SECRET'),
         'redirect' => env('GOOGLE_REDIRECT_URI'),
+        // Only ever buys *metadata* for a Drive video link (its name, length and thumbnail).
+        // Playback needs no key at all: a file shared as "anyone with the link" plays from
+        // Drive's own preview iframe either way. Defaults to the YouTube key, which is the
+        // same kind of key — it works once the Drive API is enabled on that project.
+        'key' => env('GOOGLE_API_KEY', env('YOUTUBE_API_KEY')),
     ],
 
     // YouTube Data API key — powers the music widget's playlist expansion and search
@@ -47,14 +55,6 @@ return [
     // with a nudge to paste a video link. See App\Services\Widgets\YouTubeResolver.
     'youtube' => [
         'key' => env('YOUTUBE_API_KEY'),
-    ],
-
-    // Google Drive API key — only ever buys *metadata* for a Drive video link (its name,
-    // length and thumbnail). Playback needs no key at all: a file shared as "anyone with the
-    // link" plays from Drive's own preview iframe either way. Defaults to the YouTube key,
-    // which is the same kind of key — it works once the Drive API is enabled on that project.
-    'google' => [
-        'key' => env('GOOGLE_API_KEY', env('YOUTUBE_API_KEY')),
     ],
 
     // GIF picker providers. The picker fans out to *every* provider with a key and merges the
@@ -80,6 +80,23 @@ return [
         // OAuth redirect for *user* account linking (real Premium playback). Must match a
         // Redirect URI registered in the Spotify app dashboard. See App\Services\SpotifyOAuth.
         'redirect' => env('SPOTIFY_REDIRECT_URI', 'http://localhost:8000/api/spotify/callback'),
+    ],
+
+    /*
+     * Firebase Cloud Messaging — the only way to reach a phone whose app is closed.
+     *
+     * One variable holds the whole service-account JSON (the "Generate new private key"
+     * download from Firebase → Project settings → Service accounts), rather than a path to
+     * a file: local dev and a hosted deploy then configure identically, and neither needs
+     * a secret checked into the image. Base64 is accepted for dashboards that mangle
+     * multi-line or quote-heavy values.
+     *
+     * The project id is read out of the credentials, since it's a field of that same JSON
+     * and two sources for one fact is one source too many. Unset means push is simply off:
+     * see App\Services\Notifications\FcmSender::configured().
+     */
+    'fcm' => [
+        'credentials' => env('FCM_CREDENTIALS'),
     ],
 
 ];

@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import {
   AudioLines,
+  Bell,
   Bot,
   Check, ChevronDown, ChevronRight, Copy, DoorOpen, Hash, HeadphoneOff, Lock, LogOut,
   KeyRound,
@@ -230,6 +231,20 @@ const CHANNEL_SECTIONS = [
 ] as const
 const userStream = useUserStream()
 const { ensurePermission: ensureNotifyPermission } = useDesktopNotifications()
+const { register: registerPush, bindForeground: bindForegroundPush } = usePushNotifications()
+// Only for the sidebar's "is this chat silenced" test — the alert decisions themselves are
+// made inside useUnread and useUserStream, which own the events.
+const { muted: chatMuted } = useNotifyPolicy()
+
+/**
+ * The channel a discussion would fall back to, named for its notification menu.
+ *
+ * "Use my default" means something different one level down — a discussion inherits its
+ * channel first, and only then the account setting — so the menu has to say which.
+ */
+function parentChannelName(channel: Channel): string | null {
+  return channel.parent_id ? findChannel(channel.parent_id)?.name ?? null : null
+}
 // Global online/idle presence — joined once here, since this layout is the one thing mounted
 // for the whole of a signed-in session. Every avatar's status dot reads from it.
 const { start: startPresence, stop: stopPresence } = usePresence()
@@ -544,6 +559,7 @@ const showRenameChannel = ref(false)
 // that only the people who can open it are allowed to see.
 const accessChannel = ref<Channel | null>(null)
 const showKeyBackup = ref(false)
+const showNotifyDefaults = ref(false)
 const rolesServer = ref<Server | null>(null)
 // Bots, likewise its own component: it fetches tokens' worth of settings only the owner
 // may see, and it's the one screen where a secret is shown.
@@ -721,6 +737,10 @@ onMounted(async () => {
   // Ask once, so a mention can reach you while you're in another tab. Declined is fine —
   // the sidebar badge still does its job.
   ensureNotifyPermission()
+  // And on a phone, the same question asked of the OS: a closed app has no socket to be
+  // told over, so FCM is the only thing that can reach it. A no-op everywhere else.
+  registerPush()
+  bindForegroundPush()
 
   // Friends load with the sidebar, not with the friends page: the badge on the row is the
   // whole reason you'd click it, and a badge that only appears once you're already there
@@ -820,7 +840,7 @@ onBeforeUnmount(() => { userStream.unsubscribe(); stopPresence() })
                   v-else-if="item.kind === 'chat'"
                   :to="`/chats/${item.conversation.id}`"
                   draggable="true"
-                  class="mx-2 flex items-center gap-2 rounded px-2 py-1.5 text-sm hover:bg-muted"
+                  class="group/chat mx-2 flex items-center gap-2 rounded px-2 py-1.5 text-sm hover:bg-muted"
                   @dragstart="writeDragPayload($event, {
                     channelId: item.conversation.channel_id,
                     title: chatTitle(item.conversation),
@@ -879,6 +899,27 @@ onBeforeUnmount(() => { userStream.unsubscribe(); stopPresence() })
                     :class="item.conversation.mention ? 'ring-2 ring-primary/30' : ''"
                     :title="item.conversation.mention ? 'You were mentioned' : `${item.conversation.unread_count} unread`"
                   ><span v-if="item.conversation.mention" aria-hidden="true">@</span>{{ item.conversation.unread_count > 99 ? '99+' : item.conversation.unread_count }}</span>
+
+                  <!-- How loud this chat is. Addressed by conversation, since that's the id
+                       this row holds — the server resolves it to the channel underneath.
+                       Always drawn when silenced, so a muted chat says so without being
+                       hovered; otherwise it waits for a hover like the channel actions do. -->
+                  <span
+                    class="ml-auto shrink-0"
+                    :class="[
+                      coarse || item.conversation.notify_level === 'none' || chatMuted(item.conversation)
+                        ? 'flex'
+                        : 'hidden group-hover/chat:flex',
+                    ]"
+                  >
+                    <NotificationSettingsMenu
+                      :conversation-id="item.conversation.id"
+                      :notify-level="item.conversation.notify_level"
+                      :muted-until="item.conversation.muted_until"
+                      :target="item.conversation"
+                      compact
+                    />
+                  </span>
                 </NuxtLink>
 
                 <NuxtLink
@@ -1101,10 +1142,14 @@ onBeforeUnmount(() => { userStream.unsubscribe(); stopPresence() })
                       >{{ item.voice.length }}</span>
                     </NuxtLink>
 
-                    <!-- Owner-only rename/delete. Hover-revealed for a mouse; always present
-                         on touch, where there is no hover to reveal them with. -->
+                    <!-- Per-channel actions. Hover-revealed for a mouse; always present on
+                         touch, where there is no hover to reveal them with.
+
+                         No `v-if` on the strip itself any more: it used to appear only for
+                         people who could rename or delete the channel, but notification
+                         settings belong to every member, so there is now always at least one
+                         button inside. The individual entries keep their own gates. -->
                     <span
-                      v-if="item.isOwner || canCreateDiscussions || item.branched"
                       class="absolute right-3 top-1/2 -translate-y-1/2 items-center gap-0.5 rounded bg-muted px-0.5"
                       :class="coarse ? 'flex' : 'hidden group-hover/ch:flex'"
                     >
@@ -1159,6 +1204,15 @@ onBeforeUnmount(() => { userStream.unsubscribe(); stopPresence() })
                       >
                         <Trash2 class="h-3.5 w-3.5" />
                       </button>
+                      <!-- Open to every member, unlike the four above it: how loud a channel
+                           is for you is your business, not the server owner's. -->
+                      <NotificationSettingsMenu
+                        :channel-id="item.channel.id"
+                        :notify-level="item.channel.notify_level"
+                        :muted-until="item.channel.muted_until"
+                        :target="item.channel"
+                        compact
+                      />
                     </span>
                   </div>
 
@@ -1240,15 +1294,19 @@ onBeforeUnmount(() => { userStream.unsubscribe(); stopPresence() })
                       >{{ item.voice.length }}</span>
                     </NuxtLink>
 
-                    <!-- Staff-only rename/delete, the same pair a channel row carries. Hover-
-                         revealed for a mouse; always present on touch, where there is no hover
-                         to reveal them with. -->
+                    <!-- Rename/delete for staff, notification settings for everyone — the same
+                         strip a channel row carries. Hover-revealed for a mouse; always present
+                         on touch, where there is no hover to reveal them with.
+
+                         Ungated, like the channel row's: a discussion carries its own
+                         notification row, so it can be muted on its own while the channel around
+                         it stays loud. That's the reason this is here and not only one level up. -->
                     <span
-                      v-if="item.isOwner"
                       class="absolute right-3 top-1/2 -translate-y-1/2 items-center gap-0.5 rounded bg-muted px-0.5"
                       :class="coarse ? 'flex' : 'hidden group-hover/disc:flex'"
                     >
                       <button
+                        v-if="item.isOwner"
                         class="rounded text-muted-foreground hover:text-foreground"
                         :class="coarse ? 'p-2' : 'p-1'"
                         :title="`Rename ${item.channel.name}`"
@@ -1257,7 +1315,7 @@ onBeforeUnmount(() => { userStream.unsubscribe(); stopPresence() })
                         <Pencil class="h-3.5 w-3.5" />
                       </button>
                       <button
-                        v-if="item.canDelete"
+                        v-if="item.isOwner && item.canDelete"
                         class="rounded text-muted-foreground hover:text-destructive"
                         :class="coarse ? 'p-2' : 'p-1'"
                         :title="`Delete ${item.channel.name}`"
@@ -1265,6 +1323,17 @@ onBeforeUnmount(() => { userStream.unsubscribe(); stopPresence() })
                       >
                         <Trash2 class="h-3.5 w-3.5" />
                       </button>
+                      <!-- `inherits-from` names what "use my default" would fall back to here,
+                           which for a discussion is its channel rather than the account setting
+                           — otherwise the menu offers a choice whose effect you can't predict. -->
+                      <NotificationSettingsMenu
+                        :channel-id="item.channel.id"
+                        :notify-level="item.channel.notify_level"
+                        :muted-until="item.channel.muted_until"
+                        :inherits-from="parentChannelName(item.channel)"
+                        :target="item.channel"
+                        compact
+                      />
                     </span>
                   </div>
 
@@ -1380,6 +1449,11 @@ onBeforeUnmount(() => { userStream.unsubscribe(); stopPresence() })
             -->
             <DropdownMenuItem @select="showKeyBackup = true">
               <KeyRound class="mr-2 h-4 w-4" /> Encryption keys
+            </DropdownMenuItem>
+            <!-- Account-wide defaults. Per-place overrides live on the rows themselves, where
+                 the place you're deciding about is in front of you. -->
+            <DropdownMenuItem @select="showNotifyDefaults = true">
+              <Bell class="mr-2 h-4 w-4" /> Notifications
             </DropdownMenuItem>
             <DropdownMenuItem class="text-destructive focus:text-destructive" @select="logout">
               <LogOut class="mr-2 h-4 w-4" /> Sign out
@@ -1499,6 +1573,8 @@ onBeforeUnmount(() => { userStream.unsubscribe(); stopPresence() })
          beside the shelf so they survive the sidebar row that opened them being re-rendered. -->
     <ChannelAccessDialog v-if="accessChannel" :channel="accessChannel" @close="accessChannel = null" />
     <KeyBackupDialog v-if="showKeyBackup" @close="showKeyBackup = false" />
+
+    <NotificationDefaultsDialog v-model="showNotifyDefaults" />
     <ServerRolesDialog v-if="rolesServer" :server="rolesServer" :channel-id="activeChannelId ?? channels[0]?.id ?? null" @close="rolesServer = null" />
     <ServerBotsDialog v-if="botsServer" :server="botsServer" @close="botsServer = null" />
     <ServerBotDashboard
