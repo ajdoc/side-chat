@@ -19,15 +19,26 @@ export function usePushNotifications() {
 
   let bound = false
 
-  /** Only a real device build has any of this. Everything below is guarded on it. */
-  async function plugin() {
+  /**
+   * Only a real device build has any of this. Everything below is guarded on it.
+   *
+   * The wrapper object is load-bearing, not tidiness. A Capacitor plugin is a Proxy that
+   * turns *any* property access into a native call, and resolving a promise inspects its
+   * value for a `.then` — so returning the plugin bare from an `async` function makes the
+   * runtime ask Android to run a plugin method called `then`, which fails with
+   * "PushNotifications.then() is not implemented on android" and takes registration down
+   * with it before `register()` is ever reached. Boxing it hides the proxy from the
+   * promise machinery.
+   */
+  async function plugin(): Promise<{ push: any } | null> {
     if (!import.meta.client) return null
 
     const { Capacitor } = await import('@capacitor/core')
     if (!Capacitor.isNativePlatform()) return null
 
     const { PushNotifications } = await import('@capacitor/push-notifications')
-    return PushNotifications
+
+    return { push: PushNotifications }
   }
 
   /**
@@ -39,8 +50,10 @@ export function usePushNotifications() {
    * The server upserts on the token, so repeating this costs nothing.
    */
   async function register(): Promise<boolean> {
-    const push = await plugin()
-    if (!push) return false
+    const loaded = await plugin()
+    if (!loaded) return false
+
+    const { push } = loaded
 
     // Android 13+ makes this a runtime permission like any other. Declined is a final
     // answer for this launch — asking again on the next tick just annoys people.
@@ -121,10 +134,10 @@ export function usePushNotifications() {
    * `notification` block would have gone to the system tray before we ever saw it.
    */
   async function bindForeground() {
-    const push = await plugin()
-    if (!push) return
+    const loaded = await plugin()
+    if (!loaded) return
 
-    push.addListener('pushNotificationReceived', () => {})
+    loaded.push.addListener('pushNotificationReceived', () => {})
   }
 
   /** Where a push points. Mirrors the routes the sidebar builds for the same places. */

@@ -17,11 +17,22 @@ use Illuminate\Support\Facades\Log;
  * rather than by pulling in google/apiclient, because the whole of what we need from that
  * library is thirty lines and one HTTP round trip.
  *
- * Messages go out **data-only** — no `notification` block. With a `notification` block
- * Android hands the payload straight to the system tray whenever the app is backgrounded
- * and our code never runs, which costs us the two things that matter: collapsing repeat
- * messages from one channel into one alert, and staying silent when the user already has
- * that channel open. Data-only wakes the app's own handler every time and lets it decide.
+ * Messages carry **both** a `notification` block and a `data` block, and the split is the
+ * whole point.
+ *
+ * The first instinct is data-only, so the app can decide whether to alert. That is wrong
+ * here, and quietly so: Capacitor's plugin does not call `pushNotificationReceived` once
+ * the app has been killed (its README says as much), and Android draws nothing on its own
+ * for a data-only message — so the one case this feature exists for, a closed app, would
+ * be silent while FCM reported every send as accepted.
+ *
+ * With a `notification` block Android draws it itself when the app is backgrounded or
+ * gone, and — the part that makes this safe — deliberately does *not* draw it while the
+ * app is in the foreground, handing it to our listener instead. So the suppression we
+ * wanted still happens, in the only state where we're alive to want it.
+ *
+ * `data` rides along regardless: it survives the tap and is what routes you to the right
+ * channel. `android.notification.tag` is what collapses a chatty channel into one alert.
  */
 final class FcmSender
 {
@@ -62,6 +73,8 @@ final class FcmSender
      *
      * @param  iterable<int, DeviceToken>  $devices
      * @param  array<string, string>  $data  Values must be strings; FCM rejects anything else.
+     *                                       Carries `title`, `body` and `tag`, which are read
+     *                                       back out here to build the visible notification.
      * @return int How many were accepted.
      */
     public function send(iterable $devices, array $data): int
@@ -100,13 +113,24 @@ final class FcmSender
             ->post($url, [
                 'message' => [
                     'token' => $device->token,
+                    // Routing, and everything the app needs on tap. Survives whether the
+                    // notification was drawn by Android or handed to our listener.
                     'data' => $data,
+                    'notification' => [
+                        'title' => $data['title'] ?? 'Side Chat',
+                        'body' => $data['body'] ?? '',
+                    ],
                     'android' => [
                         // A chat message is worthless five minutes late, and `high` is also
-                        // what wakes a dozing device out of Doze to run our handler at all.
+                        // what wakes a dozing device out of Doze to deliver at all.
                         'priority' => 'high',
                         // Anything undelivered after a day is history, not news.
                         'ttl' => '86400s',
+                        'notification' => [
+                            // Same tag replaces rather than stacks, so a busy channel is one
+                            // alert you can act on instead of forty you swipe away.
+                            'tag' => $data['tag'] ?? 'side-chat',
+                        ],
                     ],
                 ],
             ]);

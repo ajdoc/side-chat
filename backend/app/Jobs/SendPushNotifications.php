@@ -119,6 +119,9 @@ class SendPushNotifications implements ShouldQueue
             'channel_id' => (string) $channel->id,
             'conversation_id' => (string) ($channel->conversation_id ?? ''),
             'server_id' => (string) ($channel->server_id ?? ''),
+            // Also read back out by FcmSender to build the visible notification — Android
+            // draws that itself for a backgrounded app, which is the only reason a closed
+            // app ever shows anything. See that class for why it isn't data-only.
             'title' => $this->title($message),
             'body' => $this->body($message),
             // Collapses repeat messages from one place into a single alert on the device.

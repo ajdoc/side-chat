@@ -176,6 +176,33 @@ it('sends no preview for an encrypted message', function () {
     });
 });
 
+it('sends a drawable notification, not just data', function () {
+    [$owner, , $channel, $member] = pushFixture();
+    $message = Message::factory()->create([
+        'channel_id' => $channel->id,
+        'user_id' => $owner->id,
+        'body' => 'ship it',
+    ]);
+
+    runPushFor($message, [$member->id]);
+
+    Http::assertSent(function ($request) {
+        if (! str_contains($request->url(), 'fcm.googleapis.com')) {
+            return true;
+        }
+
+        $message = $request->data()['message'];
+
+        // The notification block is what Android draws for a backgrounded or killed app —
+        // without it the push arrives, is accepted, and shows nothing at all. The data
+        // block still has to be there too, since that's what routes the tap.
+        return ($message['notification']['body'] ?? null) === 'ship it'
+            && ($message['notification']['title'] ?? null) !== null
+            && ($message['android']['notification']['tag'] ?? null) === 'channel-'.$message['data']['channel_id']
+            && ($message['data']['channel_id'] ?? null) !== null;
+    });
+});
+
 it('prunes a token FCM says is dead', function () {
     [$owner, , $channel, $member] = pushFixture();
 
