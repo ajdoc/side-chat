@@ -266,7 +266,7 @@ export function useEncryption() {
       // Catch up with anybody who has appeared since this chain was last handed out. Cheap
       // when nothing has changed — one GET that consumes nothing — and it is what keeps a
       // device that joined mid-conversation from being permanently deaf to us.
-      await topUpDistribution(channelId, chain, stored.distributedTo ?? [])
+      await topUpDistribution(channelId, chain)
 
       return chain
     }
@@ -317,23 +317,26 @@ export function useEncryption() {
    * nothing (see EncryptionKeyService). Only the diff goes to `bundles`, so the one-time
    * prekeys spent are one per genuinely new device rather than one per device in the channel.
    */
-  async function topUpDistribution(
-    channelId: number,
-    chain: SenderChain,
-    alreadySent: number[],
-  ): Promise<void> {
+  async function topUpDistribution(channelId: number, chain: SenderChain): Promise<void> {
     try {
-      const identities = await api<{ data: Array<{ device_key_id: number, device_id: string }> }>(
-        `/api/channels/${channelId}/encryption/identities`,
+      /*
+       * Ask the server who is actually missing our chain, rather than consulting our own
+       * notes about who we have sent to.
+       *
+       * Local bookkeeping cannot know when a delivery was destroyed at the far end — a
+       * recipient that consumed its one-time prekey and then failed to store the result is
+       * still ticked off on our list, and would never be sent to again. The rows on the
+       * server are the record of what was really delivered, and a recipient that gave up on
+       * its copy removes itself from them (see the reject call in collectInbox).
+       */
+      const pending = await api<{ data: number[] }>(
+        `/api/channels/${channelId}/encryption/pending`,
+        { method: 'POST', body: { device_id: deviceId.value, epoch: chain.epoch } },
       )
 
-      const missing = identities.data
-        .filter(row => row.device_id !== deviceId.value && !alreadySent.includes(row.device_key_id))
-        .map(row => row.device_key_id)
+      if (pending.data.length === 0) return
 
-      if (missing.length === 0) return
-
-      await distribute(channelId, chain, missing)
+      await distribute(channelId, chain, pending.data)
     } catch {
       // Never block a send on this. Failing here means one device stays unable to read us
       // until the next attempt, which is the situation we were already in.
@@ -341,11 +344,11 @@ export function useEncryption() {
   }
 
   /**
-   * Wrap our chain key once per other device in the channel, and post the lot.
+   * Wrap our chain key once per recipient device, and post the lot.
    *
-   * The bundle fetch consumes a one-time prekey from every device it returns, so this is not
-   * something to do speculatively or on a timer — only when there is actually a new chain to
-   * hand out.
+   * `only` narrows it to devices the server says are still missing it; left off for a
+   * brand-new chain, which has reached nobody. The bundle fetch consumes a one-time prekey
+   * from every device it returns, so this is never speculative.
    *
    * A device whose bundle fails verification is **skipped, not fatal**. It is the one case
    * where the server may be lying about somebody's keys, and the right response is to leave
@@ -362,8 +365,6 @@ export function useEncryption() {
       `/api/channels/${channelId}/encryption/bundles`,
       {
         method: 'POST',
-        // `only` narrows this to devices we know we haven't reached. Left off for a brand-new
-        // chain, which has reached nobody.
         body: { device_id: deviceId.value, ...(only.length ? { device_key_ids: only } : {}) },
       },
     )
@@ -393,18 +394,6 @@ export function useEncryption() {
       method: 'POST',
       body: { device_id: deviceId.value, epoch: chain.epoch, keys: wrapped },
     })
-
-    /*
-     * Record who now has it, so the next send only has to reach genuinely new devices.
-     *
-     * Written after the post succeeds, never before: a device recorded as reached but never
-     * actually sent to would be skipped forever, which is a silent permanent failure. Getting
-     * it wrong the other way merely costs a redundant wrap.
-     */
-    const reached = wrapped.map(entry => (entry as { recipient_device_key_id: number }).recipient_device_key_id)
-    const existing = await requireStore().loadChain(channelId, chain.epoch, chain.deviceId)
-
-    await saveChain(channelId, chain, [...new Set([...(existing?.distributedTo ?? []), ...reached])])
   }
 
   /**
@@ -463,10 +452,29 @@ export function useEncryption() {
         }
       }
 
-      // Nothing opened it: a prekey rotated out of the window, a one-time key already
-      // consumed, or an impostor. That one sender's messages stay unreadable and everybody
-      // else's still work — which is why this loop never rethrows.
-      if (!chainKey) continue
+      /*
+       * Nothing opened it. Give the row back so the sender wraps a fresh one.
+       *
+       * The common cause is our own doing: an earlier attempt consumed the one-time prekey
+       * this key was wrapped against and then failed to store the result, so the key is
+       * intact on the server and permanently unusable here. Left alone it looks delivered
+       * forever and this device stays deaf to that sender — which is exactly what happened
+       * when a storage bug made every chain write throw.
+       *
+       * Fire-and-forget, and never fatal: a failed reject just means trying again next time.
+       */
+      if (!chainKey) {
+        void api(`/api/channels/${channelId}/encryption/reject`, {
+          method: 'POST',
+          body: {
+            device_id: deviceId.value,
+            epoch: entry.epoch,
+            sender_device_id: entry.sender_device_id,
+          },
+        }).catch(() => {})
+
+        continue
+      }
 
       await keyStore.saveChain({
         id: chainKeyFor(channelId, entry.epoch, entry.sender_device_id),
@@ -530,7 +538,6 @@ export function useEncryption() {
     await topUpDistribution(
       channelId,
       { epoch, deviceId: deviceId.value!, chainKey: stored.chainKey, index: stored.index },
-      stored.distributedTo ?? [],
     )
   }
 

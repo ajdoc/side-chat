@@ -291,6 +291,11 @@ Route::middleware('auth:api')->group(function () {
     // Read-only, and consumes nothing — what the safety-number screen asks for. Pointing that
     // screen at `bundles` above would drain a one-time prekey per glance.
     Route::get('channels/{channel}/encryption/identities', [EncryptionController::class, 'identities']);
+    // Who still needs my chain, and giving up on a key I can't open. The pair is what makes
+    // distribution self-healing: the server knows what was actually delivered, and a recipient
+    // that can't use its copy can put itself back on the list. See EncryptionKeyService.
+    Route::post('channels/{channel}/encryption/pending', [EncryptionController::class, 'pending']);
+    Route::post('channels/{channel}/encryption/reject', [EncryptionController::class, 'rejectKey']);
     Route::post('channels/{channel}/encryption/sender-keys', [EncryptionController::class, 'distribute']);
     Route::post('channels/{channel}/encryption/inbox', [EncryptionController::class, 'inbox']);
 

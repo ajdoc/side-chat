@@ -440,6 +440,102 @@ it('stays quiet when a distribution stored nothing', function () {
     Event::assertNotDispatched(SenderKeysDistributed::class);
 });
 
+it('names the devices that still need a sender’s chain', function () {
+    [$owner, $member, $server] = twoMembers();
+    $channel = Channel::factory()->create(['server_id' => $server->id])->discussions()->first();
+
+    registerDeviceFor($member, 'member-phone');
+    registerDeviceFor($member, 'member-laptop');
+    registerDeviceFor($owner, 'owner-laptop');
+    Passport::actingAs($owner);
+    $this->putJson("/api/channels/{$channel->id}/encryption", ['encrypted' => true])->assertOk();
+
+    $phone = DeviceKey::where('device_id', 'member-phone')->first();
+    $laptop = DeviceKey::where('device_id', 'member-laptop')->first();
+
+    // Nothing delivered yet: both of the other devices are pending, and never our own.
+    expect($this->postJson("/api/channels/{$channel->id}/encryption/pending", [
+        'device_id' => 'owner-laptop', 'epoch' => 1,
+    ])->assertOk()->json('data'))->toEqualCanonicalizing([$phone->id, $laptop->id]);
+
+    $this->postJson("/api/channels/{$channel->id}/encryption/sender-keys", [
+        'device_id' => 'owner-laptop',
+        'epoch' => 1,
+        'keys' => [wrappedKeyFor($phone)],
+    ])->assertOk();
+
+    expect($this->postJson("/api/channels/{$channel->id}/encryption/pending", [
+        'device_id' => 'owner-laptop', 'epoch' => 1,
+    ])->assertOk()->json('data'))->toBe([$laptop->id]);
+});
+
+it('puts a device back in the queue when it gives up on a key it cannot open', function () {
+    /*
+     * The recovery path for the worst failure this system had.
+     *
+     * Unwrapping a sender key consumes the one-time prekey it was wrapped against. If the
+     * attempt then fails to store the result — as it did when every chain write threw — the
+     * prekey is spent, the key is unopenable forever, and the row still looks delivered. The
+     * device is permanently deaf to that sender and no amount of retrying helps, because the
+     * sender has no reason to send again.
+     */
+    [$owner, $member, $server] = twoMembers();
+    $channel = Channel::factory()->create(['server_id' => $server->id])->discussions()->first();
+
+    registerDeviceFor($member, 'member-phone');
+    registerDeviceFor($owner, 'owner-laptop');
+    Passport::actingAs($owner);
+    $this->putJson("/api/channels/{$channel->id}/encryption", ['encrypted' => true])->assertOk();
+
+    $phone = DeviceKey::where('device_id', 'member-phone')->first();
+    $this->postJson("/api/channels/{$channel->id}/encryption/sender-keys", [
+        'device_id' => 'owner-laptop', 'epoch' => 1, 'keys' => [wrappedKeyFor($phone)],
+    ])->assertOk();
+
+    // The recipient can't open it, and says so.
+    Passport::actingAs($member);
+    $this->postJson("/api/channels/{$channel->id}/encryption/reject", [
+        'device_id' => 'member-phone',
+        'epoch' => 1,
+        'sender_device_id' => 'owner-laptop',
+    ])->assertOk()->assertJsonPath('data.discarded', 1);
+
+    expect(SenderKey::where('channel_id', $channel->id)->count())->toBe(0);
+
+    // …and the sender is told to send again, which is the whole point.
+    Passport::actingAs($owner);
+    expect($this->postJson("/api/channels/{$channel->id}/encryption/pending", [
+        'device_id' => 'owner-laptop', 'epoch' => 1,
+    ])->assertOk()->json('data'))->toBe([$phone->id]);
+});
+
+it('will not let one member discard a key addressed to somebody else', function () {
+    // Deleting another device's inbound key would be a way to cut them out of the
+    // conversation quietly — they would simply stop being able to read.
+    [$owner, $member, $server] = twoMembers();
+    $channel = Channel::factory()->create(['server_id' => $server->id])->discussions()->first();
+
+    registerDeviceFor($member, 'member-phone');
+    registerDeviceFor($owner, 'owner-laptop');
+    Passport::actingAs($owner);
+    $this->putJson("/api/channels/{$channel->id}/encryption", ['encrypted' => true])->assertOk();
+
+    $this->postJson("/api/channels/{$channel->id}/encryption/sender-keys", [
+        'device_id' => 'owner-laptop',
+        'epoch' => 1,
+        'keys' => [wrappedKeyFor(DeviceKey::where('device_id', 'member-phone')->first())],
+    ])->assertOk();
+
+    // The owner names their *own* device, so the key addressed to the member is untouched.
+    $this->postJson("/api/channels/{$channel->id}/encryption/reject", [
+        'device_id' => 'owner-laptop',
+        'epoch' => 1,
+        'sender_device_id' => 'owner-laptop',
+    ])->assertOk()->assertJsonPath('data.discarded', 0);
+
+    expect(SenderKey::where('channel_id', $channel->id)->count())->toBe(1);
+});
+
 it('refuses to seed an era that has not started', function () {
     // Naming a future epoch would let somebody pre-place a key for an era nobody has begun,
     // and confuse every client about which key is current the moment it does.

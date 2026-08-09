@@ -7,6 +7,8 @@ use App\Events\SenderKeysDistributed;
 use App\Http\Requests\Channel\ToggleEncryptionRequest;
 use App\Http\Requests\Encryption\ChannelDeviceRequest;
 use App\Http\Requests\Encryption\DistributeSenderKeyRequest;
+use App\Http\Requests\Encryption\DistributionTargetRequest;
+use App\Http\Requests\Encryption\RejectSenderKeyRequest;
 use App\Http\Requests\Encryption\RegisterDeviceRequest;
 use App\Http\Requests\Encryption\StoreKeyBackupRequest;
 use App\Http\Requests\Encryption\StorePrekeysRequest;
@@ -122,6 +124,44 @@ class EncryptionController extends Controller
         }
 
         return response()->json(['data' => ['stored' => $stored]]);
+    }
+
+    /**
+     * Which devices this sender still owes its chain to, for one era.
+     *
+     * Server-answered rather than tracked by the client, because a sender's own notes about
+     * who it has reached cannot know when a delivery was destroyed at the far end. See
+     * EncryptionKeyService::pendingRecipients.
+     */
+    public function pending(DistributionTargetRequest $request, Channel $channel): JsonResponse
+    {
+        $device = $this->ownDevice($request->user()->id, $request->string('device_id'));
+
+        return response()->json([
+            'data' => $this->keys->pendingRecipients($channel, $device, $request->integer('epoch')),
+        ]);
+    }
+
+    /**
+     * Discard a sender key this device cannot open, so its sender wraps a fresh one.
+     *
+     * The recovery path for a delivery that arrived but could not be used — most often
+     * because the one-time prekey it was wrapped against was consumed by an attempt that then
+     * failed to store the result. Without this the row looks delivered forever and the device
+     * is permanently deaf to that sender.
+     */
+    public function rejectKey(RejectSenderKeyRequest $request, Channel $channel): JsonResponse
+    {
+        $device = $this->ownDevice($request->user()->id, $request->string('device_id'));
+
+        $deleted = $this->keys->rejectSenderKey(
+            $channel,
+            $device,
+            $request->integer('epoch'),
+            $request->string('sender_device_id'),
+        );
+
+        return response()->json(['data' => ['discarded' => $deleted]]);
     }
 
     /** Everything addressed to this device in this channel, across every era. */

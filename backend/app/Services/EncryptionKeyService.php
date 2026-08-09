@@ -212,6 +212,55 @@ final class EncryptionKeyService
     }
 
     /**
+     * Which devices still have no sender key from this sender, for this era.
+     *
+     * The server can answer this and the client cannot, which is the whole point. A sender
+     * tracking "who I have already sent to" in its own storage is right until it isn't: a
+     * recipient whose copy was destroyed — an interrupted write, a cleared profile, a key it
+     * could not open — is still on the sender's list forever, and the sender never sends
+     * again. The rows are the truth about what has actually been delivered, and they live
+     * here.
+     *
+     * @return Collection<int, int>
+     */
+    public function pendingRecipients(Channel $channel, DeviceKey $sender, int $epoch): Collection
+    {
+        $delivered = SenderKey::query()
+            ->where('channel_id', $channel->id)
+            ->where('epoch', $epoch)
+            ->where('sender_device_id', $sender->id)
+            ->pluck('recipient_device_id');
+
+        return DeviceKey::query()
+            ->whereIn('user_id', $this->memberIds($channel))
+            ->where('id', '!=', $sender->id)
+            ->whereNotIn('id', $delivered)
+            ->pluck('id');
+    }
+
+    /**
+     * Throw away a sender key this device cannot open, so it gets sent again.
+     *
+     * The recipient is the only party that can know a wrapped key is useless to it, and until
+     * it says so the row looks delivered to everybody. Deleting it puts that device back on
+     * {@see pendingRecipients()}, and the next distribution wraps a fresh copy against a
+     * prekey that hasn't been spent.
+     *
+     * Scoped to rows addressed to the caller's own device: this deletes somebody else's
+     * outbound message, and being able to do that for an arbitrary recipient would be a way
+     * to cut a third party out of a conversation.
+     */
+    public function rejectSenderKey(Channel $channel, DeviceKey $recipient, int $epoch, string $senderDeviceId): int
+    {
+        return SenderKey::query()
+            ->where('channel_id', $channel->id)
+            ->where('epoch', $epoch)
+            ->where('recipient_device_id', $recipient->id)
+            ->whereHas('senderDevice', fn ($query) => $query->where('device_id', $senderDeviceId))
+            ->delete();
+    }
+
+    /**
      * Every sender key addressed to this device in this channel, across all eras.
      *
      * All eras, not just the current one, because a timeline is striped and a client opening
