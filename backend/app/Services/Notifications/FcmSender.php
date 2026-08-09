@@ -229,6 +229,13 @@ final class FcmSender
 
         $raw = trim($raw);
 
+        // A hosting dashboard's env field is not a .env file: quotes you typed around the
+        // value are kept as part of it, and the result is a "valid" variable holding JSON
+        // that starts with an apostrophe. Silent, and indistinguishable from a bad key.
+        if (strlen($raw) >= 2 && ($raw[0] === '"' || $raw[0] === "'") && $raw[-1] === $raw[0]) {
+            $raw = substr($raw, 1, -1);
+        }
+
         if (! str_starts_with($raw, '{')) {
             $decoded = base64_decode($raw, true);
             $raw = $decoded === false ? $raw : $decoded;

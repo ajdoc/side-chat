@@ -6,6 +6,7 @@ use App\Models\Conversation;
 use App\Models\DeviceToken;
 use App\Models\Message;
 use App\Models\User;
+use App\Services\Notifications\FcmSender;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Queue;
 use Laravel\Passport\Passport;
@@ -195,6 +196,19 @@ it('keeps a token through a server-side wobble', function () {
     runPushFor($message, [$member->id]);
 
     expect(DeviceToken::where('user_id', $member->id)->exists())->toBeTrue();
+});
+
+it('accepts credentials however the host mangled them', function () {
+    $json = fakeFcmCredentials();
+
+    // Raw, base64 (for dashboards that eat newlines), and with the quotes an env field
+    // keeps around a value you typed quoted — the last one being the failure that looks
+    // exactly like a bad key.
+    foreach ([$json, base64_encode($json), "'{$json}'", "\"{$json}\""] as $form) {
+        config()->set('services.fcm.credentials', $form);
+
+        expect(app(FcmSender::class)->configured())->toBeTrue();
+    }
 });
 
 it('does nothing at all when push is not configured', function () {
