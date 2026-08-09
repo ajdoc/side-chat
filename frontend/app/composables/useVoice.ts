@@ -830,11 +830,15 @@ export function useVoice() {
    */
   const voiceEffects = useState<VoiceEffects>('voice:channelEffects', () => ({ ...NO_EFFECTS }))
   /**
-   * Which shared screen is on the stage right now — a peer id, `'self'`, or null when you're
-   * watching nobody. Only this screen's audio is allowed to play (see applyAudio); the stage
-   * UI keeps it in step via setWatchedScreen.
+   * Which shared screens are on the stage right now — peer ids and/or `'self'`, empty when
+   * you're watching nobody. Only these screens' audio is allowed to play (see applyAudio); the
+   * stage UI keeps it in step via setWatchedScreens.
+   *
+   * A list rather than a single owner since the stage became a grid: several screens can be in
+   * front of you at once, and each of them is something you asked to see, so each of them is
+   * allowed to be heard.
    */
-  const watchedScreen = useState<number | 'self' | null>('voice:watchedScreen', () => null)
+  const watchedScreens = useState<(number | 'self')[]>('voice:watchedScreens', () => [])
 
   // --- device & quality settings (yours, remembered across calls) ---
 
@@ -1224,7 +1228,7 @@ export function useVoice() {
     // It also plays *only while you're watching that screen*: clicking "Stop watching" (or
     // switching the stage to someone else) hides the picture, and this is what stops the
     // sound coming with it — otherwise a screen you'd closed kept playing audio out of a
-    // stream you couldn't see. See setWatchedScreen.
+    // stream you couldn't see. See setWatchedScreens.
     //
     // An audio-only share is exempt, and has to be: there is no picture, so there is nothing
     // to be watching, and gating it on the stage would mean nobody ever heard it. Someone
@@ -1245,7 +1249,7 @@ export function useVoice() {
     handle.screenAudio.muted = muted
       || peer.screenMuted
       || outOfEarshot(peer)
-      || (peer.screenSharing && watchedScreen.value !== id)
+      || (peer.screenSharing && !watchedScreens.value.includes(id))
 
     // And the same two decisions again, onto the echo canceller's copy of them, so that what it
     // subtracts is what your speakers are being asked to play. Only ever present mid-share; see
@@ -2752,8 +2756,8 @@ export function useVoice() {
    * audio, which lives one layer down per peer. Re-applying every peer settles both sides of
    * a switch in one pass — the screen you left goes quiet, the one you moved to speaks up.
    */
-  function setWatchedScreen(key: number | 'self' | null) {
-    watchedScreen.value = key
+  function setWatchedScreens(keys: (number | 'self')[]) {
+    watchedScreens.value = [...keys]
     for (const id of handles.keys()) applyAudio(id)
   }
 
@@ -3627,7 +3631,7 @@ export function useVoice() {
     setPeerVolume,
     setPeerScreenVolume,
     togglePeerScreenMute,
-    setWatchedScreen,
+    setWatchedScreens,
     // Proximity — a Side Space's distance rules, driven from the stage each frame.
     setProximityMode,
     setPeerProximity,

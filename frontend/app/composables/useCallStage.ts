@@ -32,6 +32,18 @@ import type { Peer } from '~/types'
  * `owner:kind` rather than a bare id, because one person can be showing you two things at once
  * — their screen and their face — and the stage has to be able to tell which of them you asked
  * for. `owner` is a user id or the string `self`.
+ *
+ * ## The stage holds several things at once
+ *
+ * It used to hold exactly one, and switching between two shared screens meant losing sight of
+ * the first — which is the wrong shape for the case that produces two screens in the first
+ * place (someone demoing while someone else follows along). So `watching` is now an ordered
+ * list of keys and the surface lays them out as a grid, the way Discord does.
+ *
+ * Capped at {@link MAX_WATCHING}. The ceiling is a decode cost, not a layout one: in a mesh
+ * every screen you watch is its own video decode, and four 720p screens is already more work
+ * than a laptop on battery wants to be doing beside the call's own encoding. Past four the
+ * tiles are too small to read anyway, so the cap costs nothing that was worth having.
  */
 export type WatchKind = 'screen' | 'camera'
 export type WatchOwner = number | 'self'
@@ -48,6 +60,9 @@ export interface Watchable {
 export function watchKey(owner: WatchOwner, kind: WatchKind): string {
   return `${owner}:${kind}`
 }
+
+/** How many things can be on the stage at once. See the note above on why it's a decode budget. */
+export const MAX_WATCHING = 4
 
 interface Options {
   /** Who is eligible — everybody in a voice channel, everybody in earshot in a Side Space. */
@@ -69,7 +84,7 @@ interface Options {
 }
 
 export function useCallStage(options: Options) {
-  const { setWatchedScreen } = useVoice()
+  const { setWatchedScreens } = useVoice()
   const { nameFor } = useNicknames()
 
   /** Everything you could put on the stage: every screen being shared, then every camera on. */
@@ -102,24 +117,50 @@ export function useCallStage(options: Options) {
     return list
   })
 
-  const watching: Ref<string | null> = ref(null)
+  /**
+   * What's on the stage, in the order you added it — first one first, so a grid never reshuffles
+   * the thing you were already reading when a second screen joins it.
+   */
+  const watching: Ref<string[]> = ref([])
 
-  const stage = computed(() => watchables.value.find(w => w.key === watching.value) ?? null)
+  /** The watchables actually on the stage, in `watching` order. Empty means the stage is down. */
+  const stages = computed(() => {
+    const live = watchables.value
+
+    return watching.value
+      .map(key => live.find(w => w.key === key))
+      .filter((w): w is Watchable => !!w)
+  })
 
   /**
-   * The peer whose *screen* is on the stage, when it's somebody else's.
+   * The one at the front.
+   *
+   * Kept because plenty of questions are still singular even with a grid up — "is anything
+   * showing", and what to call it in a one-line summary like the Side Space's "showing over the
+   * room" button.
+   */
+  const stage = computed(() => stages.value[0] ?? null)
+
+  const isWatching = (key: string) => watching.value.includes(key)
+
+  /** Room for one more? Surfaces grey out their watch buttons on this rather than fail silently. */
+  const stageFull = computed(() => watching.value.length >= MAX_WATCHING)
+
+  /**
+   * The peer whose *screen* this is, when it's somebody else's.
    *
    * Everything that reads this is screen-only — the shared-screen volume, its mute, and remote
    * control — so the kind is part of the question rather than a check each caller has to
    * remember. Null for your own screen too: none of those three mean anything pointed at
    * yourself.
+   *
+   * Takes the watchable now that several are on the stage at once; each tile asks about itself.
    */
-  const stageScreenPeer = computed(() => {
-    const on = stage.value
+  function screenPeerFor(on: Watchable | null): Peer | null {
     if (on?.kind !== 'screen' || typeof on.owner !== 'number') return null
 
     return options.peers().find(p => p.id === on.owner) ?? null
-  })
+  }
 
   /*
    * The watchable set as a string.
@@ -138,19 +179,32 @@ export function useCallStage(options: Options) {
 
     if (started.some(k => k.endsWith(':screen'))) options.onScreenStarted?.()
 
-    // Whatever you were watching has stopped. Clearing rather than falling through to the next
-    // thing: the alternative puts a stranger's face on your main screen because the screen you
-    // were reading ended, which nobody asked for. A new *screen* still claims it, below.
-    if (watching.value !== null && !current.includes(watching.value)) watching.value = null
+    // Drop whatever has stopped, and only that — the rest of the grid is untouched, so one
+    // person ending their share doesn't disturb the screen you were reading beside it.
+    const kept = watching.value.filter(k => current.includes(k))
 
-    if (watching.value !== null) return
+    /*
+     * New screens join the grid.
+     *
+     * The old single stage *replaced* what you were watching; with room for several, a second
+     * share is added instead, which is the whole point of the grid. Faces still never claim the
+     * stage by themselves (see the note at the top) unless they're spotlit.
+     *
+     * Nothing is evicted to make room: once the stage is full, a new share is announced by the
+     * sharer's tile and the picker and waits to be asked for. Shoving aside a screen somebody is
+     * mid-sentence about is worse than making them click.
+     */
+    const claims = [
+      ...started.filter(k => k.endsWith(':screen')),
+      ...started.filter(k => spotlit(k)),
+    ]
 
-    // An empty stage, and something worth putting on it. Screens first — the deliberate act
-    // outranks the automatic one.
-    const claim = started.find(k => k.endsWith(':screen'))
-      ?? started.find(k => spotlit(k))
+    const next = [...kept, ...claims.filter(k => !kept.includes(k))].slice(0, MAX_WATCHING)
 
-    if (claim) watching.value = claim
+    // Only when it actually differs. This watcher fires on every arrival and departure in the
+    // call, and a fresh array each time would re-run the audio gate and repaint the grid for
+    // somebody else's camera going off across the room.
+    if (next.join('|') !== watching.value.join('|')) watching.value = next
   })
 
   /** Is this key a camera belonging to somebody whose camera is an announcement? See `priority`. */
@@ -171,34 +225,51 @@ export function useCallStage(options: Options) {
    * far as anybody watching is concerned, so both should claim an empty stage.
    */
   watch(() => options.priority?.().join('|') ?? '', () => {
-    if (watching.value !== null) return
+    // Only ever an *empty* stage, as before: somebody stepping up shouldn't push aside screens
+    // you deliberately gathered, and with a grid there's usually something up.
+    if (watching.value.length) return
 
     const claim = watchables.value.find(w => spotlit(w.key))
-    if (claim) watching.value = claim.key
+    if (claim) watching.value = [claim.key]
   })
 
   /*
    * Keep the audio layer in step with the stage.
    *
-   * Only the screen actually on the stage is allowed to make a sound, which is what makes
-   * "stop watching" silence it too. A *camera* on the stage therefore means no screen is being
-   * watched, and any share audio goes quiet — correct rather than merely convenient: the share
-   * is no longer on your screen, and a soundtrack to a picture you closed is a mystery noise.
+   * Only screens actually on the stage are allowed to make a sound, which is what makes "stop
+   * watching" silence one. With several up you hear all of them — they're all on your screen, and
+   * silencing all but one would be a rule nobody could see; the per-screen volume and mute are
+   * there for the moment two soundtracks is one too many.
    */
-  watch(stage, (on) => {
-    setWatchedScreen(on?.kind === 'screen' ? on.owner : null)
+  // Driven off the owners as a string rather than the watchables themselves: `stages` is rebuilt
+  // whenever a peer is patched (constantly — the speaking rings alone), and a deep watch on it
+  // would be a deep watch over live MediaStreams.
+  const watchedScreenOwners = computed(() =>
+    stages.value.filter(w => w.kind === 'screen').map(w => w.owner))
+
+  watch(() => watchedScreenOwners.value.join('|'), () => {
+    setWatchedScreens(watchedScreenOwners.value)
   }, { immediate: true })
 
   /**
    * Put something on the stage, or take it off if it's already there.
    *
    * One function for both, because every surface that offers this is a toggle: a tile's pin
-   * button, the picker row, the close button on the stage itself.
+   * button, the picker row, the close button on the stage itself. A no-op when the stage is
+   * full and this would be an addition — the surfaces disable the control, and this is the
+   * backstop for the ones that can't.
    */
   function toggleWatch(owner: WatchOwner, kind: WatchKind) {
     const key = watchKey(owner, kind)
-    watching.value = watching.value === key ? null : key
+
+    if (isWatching(key)) watching.value = watching.value.filter(k => k !== key)
+    else if (!stageFull.value) watching.value = [...watching.value, key]
   }
 
-  return { watchables, watching, stage, stageScreenPeer, toggleWatch }
+  /** Take everything off the stage — the "hide the screens, keep the call" button. */
+  function clearWatching() {
+    watching.value = []
+  }
+
+  return { watchables, watching, stages, stage, stageFull, isWatching, screenPeerFor, toggleWatch, clearWatching }
 }

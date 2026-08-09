@@ -30,6 +30,14 @@ export function useSearch() {
 
   const results = ref<SearchResults>({ ...EMPTY })
   const messages = ref<SearchMessage[]>([])
+  /**
+   * Messages the search could not look inside, because they're encrypted.
+   *
+   * Reported rather than quietly omitted. Somebody searching for a thing they definitely said
+   * needs to know the search had a blind spot — otherwise the honest answer ("it's in here,
+   * but only your own device can read it") looks identical to "you never said that".
+   */
+  const encryptedSkipped = ref(0)
   // Named places matching the same term — the strip above the message results.
   const surfaces = ref<SearchSurface[]>([])
   const loading = ref(false)
@@ -115,7 +123,12 @@ export function useSearch() {
     const next = append ? page.value + 1 : 1
     loading.value = true
     try {
-      const res = await api<{ data: SearchMessage[], meta: { current_page: number, last_page: number } }>(
+      const res = await api<{
+        data: SearchMessage[]
+        meta: { current_page: number, last_page: number }
+        /** How many messages in scope were encrypted and therefore not looked inside. */
+        encrypted_skipped?: number
+      }>(
         `/api/search?${params(trimmed, filters, { type: 'messages', page: next })}`,
       )
       if (ticket !== sequence) return
@@ -127,6 +140,7 @@ export function useSearch() {
         : res.data
       page.value = res.meta.current_page
       lastPage.value = res.meta.last_page
+      encryptedSkipped.value = res.encrypted_skipped ?? 0
     } catch {
       if (ticket === sequence && !append) messages.value = []
     } finally {
@@ -149,6 +163,7 @@ export function useSearch() {
     results.value = { ...EMPTY }
     messages.value = []
     surfaces.value = []
+    encryptedSkipped.value = 0
     loading.value = false
     page.value = 1
     lastPage.value = 1
@@ -156,7 +171,7 @@ export function useSearch() {
 
   onScopeDispose(() => clearTimeout(timer))
 
-  return { results, messages, surfaces, loading, hasMore, palette, searchMessages, searchSurfaces, debounced, reset, MIN_TERM }
+  return { results, messages, surfaces, encryptedSkipped, loading, hasMore, palette, searchMessages, searchSurfaces, debounced, reset, MIN_TERM }
 }
 
 /**

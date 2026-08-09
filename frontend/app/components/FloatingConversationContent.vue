@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ArrowDown, Loader2 } from 'lucide-vue-next'
+import type { SealedFile } from '~/lib/crypto/envelope'
 import type { GifResult, Message } from '~/types'
 import { memberBadgesKey, mentionNamesKey, useChannelMembers } from '~/composables/useChannelMembers'
 
@@ -27,7 +28,7 @@ const props = defineProps<{
 }>()
 
 const { user } = useAuth()
-const { messages, hasMore, loadingOlder, load, loadOlder, ensureLoaded, send, edit, remove, toggleReaction, togglePin, subscribe, unsubscribe } = useMessages()
+const { messages, hasMore, loadingOlder, encrypted, load, loadOlder, ensureLoaded, send, edit, remove, toggleReaction, togglePin, subscribe, unsubscribe } = useMessages()
 const { members: mentionMembers, names: mentionNames, badges: memberBadges, load: loadMembers } = useChannelMembers()
 const { commands: slashCommands, load: loadCommands } = useSlashCommands()
 provide(mentionNamesKey, mentionNames)
@@ -80,11 +81,18 @@ async function onJumpToReply(id: number) {
   highlightTimer = setTimeout(() => { highlightedId.value = null }, 1500)
 }
 
-async function onSend(body: string, files: File[], gif?: GifResult, uploadIds: string[] = []) {
+async function onSend(
+  body: string,
+  files: File[],
+  gif?: GifResult,
+  uploadIds: string[] = [],
+  // Keys for files the composer sealed and staged before the send — see its stage().
+  uploadMeta: SealedFile[] = [],
+) {
   if (sending.value) return
   sending.value = true
   try {
-    await send(body, replyingTo.value?.id ?? null, files, gif, uploadIds)
+    await send(body, replyingTo.value?.id ?? null, files, gif, uploadIds, uploadMeta)
     replyingTo.value = null
     scrollToBottom()
   } finally {
@@ -166,6 +174,7 @@ onBeforeUnmount(() => { if (openedId) closeChannel(openedId) })
         :placeholder="`Message ${title}`"
         :sending="sending"
         :channel-id="channelId"
+        :encrypted="encrypted"
         :mention-members="mentionMembers"
         :commands="slashCommands"
         @submit="onSend"

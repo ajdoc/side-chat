@@ -84,6 +84,13 @@ export interface Channel {
   position: number
   /** Restricted to an allow-list rather than open to the whole server. */
   is_private?: boolean
+  /** Whether messages sent *now* are encrypted before they leave the sender's device. */
+  encrypted?: boolean
+  /**
+   * Which key era the channel is in. Increments on every turn-on and is never reused, so a
+   * channel that has been encrypted and un-encrypted twice sits at 2 with encryption off.
+   */
+  encryption_epoch?: number
   /** Who is on that allow-list. Only ever fetched by staff, from the access endpoint. */
   member_ids?: number[]
   /**
@@ -209,6 +216,26 @@ export interface Attachment {
   download_url: string
   uploaded_by?: string | null
   created_at: string
+  /**
+   * The bytes on disk are ciphertext.
+   *
+   * When true, `name` and `mime_type` as they arrive from the server are placeholders and
+   * every `is_*` flag is false — the server genuinely cannot tell. {@link useAttachmentCrypto}
+   * replaces all of them with the real values from the message envelope before anything
+   * renders, so components downstream never see this set *and* the fields lying.
+   */
+  encrypted?: boolean
+  /** Where the ciphertext lives, kept when `url` is swapped for a decrypted blob URL. */
+  cipher_url?: string
+  /** This file's AES key, base64, out of the message envelope. Client-side only. */
+  encryptedKey?: string
+  /**
+   * The key is missing, or the bytes failed authentication.
+   *
+   * Rendered as a locked card. Distinct from "not decrypted yet" — a large attachment waiting
+   * to be asked for has no URL either, but is perfectly readable once somebody clicks.
+   */
+  undecryptable?: boolean
 }
 
 /** One GIF from a picker provider (Giphy, Klipy), as returned by /api/gifs/*. */
@@ -286,6 +313,32 @@ export interface Message {
    * for `'user'` looks equivalent and silently matches nothing.
    */
   type: 'user' | 'system' | 'widget' | null
+  /**
+   * Whether `body` arrived as ciphertext.
+   *
+   * Per message, not per channel: encryption is a toggle, so a timeline is striped with
+   * plaintext and encrypted runs and stays that way permanently. Never decide how to render
+   * a row from the channel's current setting — ask the row.
+   */
+  encrypted?: boolean
+  /** The key era this message was written under. Null on plaintext. */
+  epoch?: number | null
+  /**
+   * The original envelope, kept after `body` has been swapped for the decrypted text.
+   *
+   * Client-side only, and not decoration: the envelope carries the attachment keys as well as
+   * the message, so decrypting in place would otherwise throw away the only copy of them. See
+   * {@link useMessageCrypto.decryptIncoming}.
+   */
+  cipher_body?: string | null
+  /**
+   * How decryption went, filled in client-side and never sent by the server.
+   *
+   * Absent on plaintext. `'ok'` means `body` has been replaced with the real text; `'failed'`
+   * means it hasn't and the UI must say so rather than render base64 at somebody. See
+   * {@link useMessageCrypto}.
+   */
+  decryption?: 'ok' | 'failed'
   /**
    * A top-level reply to the side chat *post* — addressed at its title, not at another
    * message. Distinct from `reply_to`, which names a message and shows its author and body.

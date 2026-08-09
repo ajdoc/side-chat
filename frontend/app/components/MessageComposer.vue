@@ -3,6 +3,9 @@ import { Mic, Paperclip, SendHorizontal, X } from 'lucide-vue-next'
 import type { ChannelMember, GifResult, SlashCommand } from '~/types'
 import { Button } from '~/components/ui/button'
 import { CHUNK_THRESHOLD, useChunkedUpload } from '~/composables/useChunkedUpload'
+import type { SealedFile } from '~/lib/crypto/envelope'
+import { encryptFile, generateFileKey } from '~/lib/crypto/attachment'
+import { toBase64 } from '~/lib/crypto/primitives'
 import { chunkMessage, MESSAGE_LIMIT } from '~/lib/chunkMessage'
 
 const props = defineProps<{
@@ -15,11 +18,30 @@ const props = defineProps<{
   commands?: SlashCommand[]
   /** The channel this composer belongs to — the key its unsent draft is remembered under. */
   channelId?: number
+  /**
+   * Whether this channel encrypts what is sent into it.
+   *
+   * The composer needs to know, which is not obvious: encryption normally happens further
+   * down, in useMessages. But a file over CHUNK_THRESHOLD starts uploading the moment it is
+   * *picked*, long before send() runs — so if the sealing waited for the send, big files
+   * would go up in the clear. See stage().
+   */
+  encrypted?: boolean
 }>()
 
 const emit = defineEmits<{
   /** `uploadIds` names files already staged through the chunked path — see useChunkedUpload. */
-  submit: [body: string, files: File[], gif?: GifResult, uploadIds?: string[]]
+  submit: [
+    body: string,
+    files: File[],
+    gif?: GifResult,
+    uploadIds?: string[],
+    /**
+     * For each staged upload, in the same order — the real name, type and key of the file
+     * whose ciphertext is already on the server. Empty in an unencrypted channel.
+     */
+    uploadMeta?: SealedFile[],
+  ]
   /** Fires on every edit to the draft; the listener rate-limits it into a whisper. */
   typing: []
 }>()
@@ -41,6 +63,14 @@ interface Pending {
     failed: boolean
     error: string // why it failed, when the reason is worth reading (a size limit, say)
     abort: AbortController
+    /**
+     * The real name, type and key of the file whose ciphertext was staged.
+     *
+     * Only in an encrypted channel, and only on this card until the send collects it — it is
+     * the one copy of the key, and losing it before the message goes out would leave a file
+     * on the server that nobody can ever open.
+     */
+    meta?: SealedFile
   } | null
 }
 
@@ -132,7 +162,24 @@ function addFiles(list: FileList | File[] | null) {
 async function stage(item: Pending) {
   const state = item.upload!
   try {
-    const id = await uploadInChunks(item.file, {
+    /*
+     * Seal before a single byte goes up.
+     *
+     * This is the whole reason the composer knows about encryption. Staging starts at pick
+     * time, so leaving the sealing to the send path — where every other file is handled —
+     * would put every file over 2MB on the server as plaintext, in a channel showing a
+     * padlock. The key is kept on the card and handed to the send, which puts it in the
+     * message envelope alongside the ones for the small files.
+     */
+    let body = item.file
+
+    if (props.encrypted) {
+      const { key, raw } = await generateFileKey()
+      body = await encryptFile(item.file, key)
+      state.meta = { n: item.file.name, m: item.file.type || 'application/octet-stream', k: toBase64(raw) }
+    }
+
+    const id = await uploadInChunks(body, {
       signal: state.abort.signal,
       onProgress: (fraction) => { state.progress = fraction },
     })
@@ -198,8 +245,13 @@ function submit() {
   // Two kinds of attachment leave here: small files travelling inside the request, and the
   // ids of big ones already sitting on the server.
   const direct = pending.value.filter(p => !p.upload).map(p => p.file)
-  const staged = pending.value.map(p => p.upload?.id).filter((id): id is string => !!id)
-  emit('submit', draft.value.trim(), direct, undefined, staged)
+  // Ids and their keys, kept in step: the server attaches staged uploads in the order it is
+  // given them, so this order is what pairs a key with its file. See sealFiles in useMessages.
+  const stagedCards = pending.value.filter(p => p.upload?.id)
+  const staged = stagedCards.map(p => p.upload!.id!)
+  const stagedMeta = stagedCards.map(p => p.upload!.meta).filter((m): m is SealedFile => !!m)
+
+  emit('submit', draft.value.trim(), direct, undefined, staged, stagedMeta)
   // The staged files are claimed by the send now, so their cards must not cancel them.
   pending.value.forEach(p => revoke({ ...p, upload: null }))
   draft.value = ''

@@ -1,4 +1,55 @@
 import type { CommentSummary, GifResult, LinkPreview, Message, Reaction, SideChat, SideChatForum, SideDeskAppId, StartedThread, Thread, Widget } from '~/types'
+import type { SealedFile } from '~/lib/crypto/envelope'
+import { encryptFile, generateFileKey } from '~/lib/crypto/attachment'
+import { toBase64 } from '~/lib/crypto/primitives'
+
+/**
+ * A page of a channel's timeline.
+ *
+ * `encryption` describes the channel *now* — what the next message sent would be — and says
+ * nothing about the messages in `data`, each of which carries its own flag. See the two
+ * different questions in {@link useMessageCrypto}.
+ */
+interface MessagePage {
+  data: Message[]
+  has_more: boolean
+  has_newer?: boolean
+  encryption?: { encrypted: boolean, epoch: number }
+}
+
+/**
+ * Encrypt a batch of files, keeping keys and metadata in the same order as the files.
+ *
+ * Order is the only thing linking a key to its file. The server stores attachments in the
+ * order they were posted and hands them back the same way, so `meta[i]` describes
+ * `attachments[i]` — there is no id to match on, because the keys are sealed before any row
+ * exists and the server must never learn which is which anyway.
+ */
+async function sealFiles(files: File[]): Promise<{ files: File[], meta: SealedFile[] }> {
+  const sealed: File[] = []
+  const meta: SealedFile[] = []
+
+  for (const file of files) {
+    const { key, raw } = await generateFileKey()
+
+    sealed.push(await encryptFile(file, key))
+    meta.push({ n: file.name, m: file.type || 'application/octet-stream', k: toBase64(raw) })
+  }
+
+  return { files: sealed, meta }
+}
+
+/**
+ * The text out of a built payload, whichever shape it took.
+ *
+ * Encryption happens after chunking, so it has to read back the body the builder just put in
+ * — and that is a form field when there are files and a plain property when there aren't.
+ */
+function bodyOf(payload: FormData | Record<string, unknown>): string | null {
+  if (isFormData(payload)) return (payload.get('body') as string | null) ?? null
+
+  return (payload.body as string | null | undefined) ?? null
+}
 
 /**
  * Somebody just added a reaction, worked out from the two lists either side of the change.
@@ -56,6 +107,16 @@ export function useMessages() {
   const echo: any = useNuxtApp().$echo
   const messages = ref<Message[]>([])
   const channelId = ref<number | null>(null)
+  /**
+   * Whether the *channel* is encrypted right now, and which era it is in.
+   *
+   * About sending only. Reading asks each message, because a timeline is striped: these two
+   * describe what the next message will be, never what the ones already on screen are.
+   */
+  const encrypted = ref(false)
+  const epoch = ref(0)
+  const encryption = useEncryption()
+  const crypto = useMessageCrypto()
   const hasMore = ref(false) // older messages exist above the loaded window
   // …and, after a jump to a search result, unloaded messages *below* it. False everywhere
   // else: an ordinary page always ends at the newest message. See jumpTo().
@@ -151,13 +212,72 @@ export function useMessages() {
     else sideChats.value = [sideChat, ...sideChats.value]
   }
 
+  /**
+   * Open a channel's timeline.
+   *
+   * The encryption state comes back *with* the page rather than from the caller. Every caller
+   * has a channel id and only some have the channel — a popped-out conversation window is
+   * opened by id alone — and a composer that guessed "not encrypted" because nobody told it
+   * would post in the clear under a padlock. One authoritative source, from the server, on
+   * the request the timeline was already making.
+   */
   async function load(id: number) {
     channelId.value = id
-    const res = await api<{ data: Message[], has_more: boolean }>(`/api/channels/${id}/messages`)
-    messages.value = res.data
+
+    const res = await api<MessagePage>(`/api/channels/${id}/messages`)
+
+    encrypted.value = res.encryption?.encrypted ?? false
+    epoch.value = res.encryption?.epoch ?? 0
+
+    // Collect whatever sender keys were addressed to this device before rendering. Doing it
+    // after would draw a screen of "can't read this" and then quietly fix itself, which reads
+    // as the encryption being broken.
+    if (epoch.value > 0) {
+      await collectKeys(id)
+      // …and make sure anybody who has joined since gets *our* chain. Opening the channel is
+      // enough; nobody should have to send a message to un-deafen a new device.
+      void encryption.announcePresence(id, epoch.value).catch(() => {})
+    }
+
+    messages.value = await crypto.decryptAll(res.data)
     hasMore.value = res.has_more
     // A plain load always lands at the live end, which un-does whatever window a jump left.
     hasNewer.value = false
+  }
+
+  /**
+   * Fetch and unwrap this channel's sender keys, tolerating failure.
+   *
+   * Never allowed to stop a channel opening. If the key exchange is down, the right outcome
+   * is a timeline whose encrypted rows say they can't be read — not a blank screen where a
+   * conversation should be, including the plaintext half that has nothing to do with keys.
+   */
+  async function collectKeys(id: number) {
+    try {
+      await encryption.collectInbox(id)
+    } catch {
+      // Reported per message by the "can't read this" state, which is where a person can
+      // actually act on it.
+    }
+  }
+
+  /**
+   * Try the unreadable messages again, now that more keys have arrived.
+   *
+   * Without this, a key that turns up while the timeline is on screen changes nothing until
+   * something else reloads the page — the rows stay as "can't read this" even though they
+   * now can be. That is the exact shape of the complaint the whole distribution fix is
+   * about, and leaving it out would only move the reload one step later.
+   *
+   * Only the failed rows are retried. A page of successfully decrypted messages is not worth
+   * redoing, and re-deriving them would churn every chain on screen for no change.
+   */
+  async function retryUndecrypted() {
+    if (!messages.value.some(m => m.decryption === 'failed')) return
+
+    messages.value = await Promise.all(
+      messages.value.map(m => (m.decryption === 'failed' ? crypto.decryptIncoming(m) : m)),
+    )
   }
 
   // Prepend the previous 200 messages. Returns the id of the message that was
@@ -167,11 +287,12 @@ export function useMessages() {
     loadingOlder.value = true
     const anchorId = messages.value[0]!.id
     try {
-      const res = await api<{ data: Message[], has_more: boolean }>(
+      const res = await api<MessagePage>(
         `/api/channels/${channelId.value}/messages?before=${anchorId}`,
       )
       const seen = new Set(messages.value.map(m => m.id))
-      messages.value = [...res.data.filter(m => !seen.has(m.id)), ...messages.value]
+      const older = await crypto.decryptAll(res.data.filter(m => !seen.has(m.id)))
+      messages.value = [...older, ...messages.value]
       hasMore.value = res.has_more
       return anchorId
     } finally {
@@ -211,12 +332,18 @@ export function useMessages() {
     if (target === channelId.value && messages.value.some(m => m.id === id)) return true
 
     channelId.value = target
-    const res = await api<{ data: Message[], has_more: boolean, has_newer: boolean }>(
+    const res = await api<MessagePage>(
       `/api/channels/${target}/messages?around=${id}`,
     )
-    messages.value = res.data
+    // A jump can land anywhere — a search result from a channel this device has never opened —
+    // so collect keys whenever the window actually contains ciphertext, rather than trying to
+    // infer it from where we came from.
+    if (res.data.some(m => m.encrypted)) await collectKeys(target)
+
+    messages.value = await crypto.decryptAll(res.data)
     hasMore.value = res.has_more
-    hasNewer.value = res.has_newer
+    // Only the `?around=` page carries it; the type makes it optional for the other two.
+    hasNewer.value = res.has_newer ?? false
 
     return res.data.some(m => m.id === id)
   }
@@ -231,7 +358,21 @@ export function useMessages() {
    * Post the message — as a run of them when the body is over the per-message limit, one after
    * the other so they land in the order they were written. See {@link buildMessageParts}.
    */
-  async function send(body: string, replyToId?: number | null, files: File[] = [], gif?: GifResult | null, uploadIds: string[] = []) {
+  async function send(
+    body: string,
+    replyToId?: number | null,
+    files: File[] = [],
+    gif?: GifResult | null,
+    uploadIds: string[] = [],
+    /**
+     * Keys for files the composer already sealed and staged.
+     *
+     * Anything over CHUNK_THRESHOLD starts uploading the moment it is picked, so it cannot be
+     * encrypted here — by the time a send happens its bytes are already on the server. The
+     * composer seals those itself and passes the keys along; see MessageComposer.stage().
+     */
+    uploadMeta: SealedFile[] = [],
+  ) {
     if (!channelId.value) return
     // Writing is leaving: your message belongs at the live end of the conversation, so
     // typing one abandons whatever historical window a search jump had us parked in. Doing
@@ -239,13 +380,66 @@ export function useMessages() {
     // the one message the user is guaranteed to be looking for.
     if (hasNewer.value) await returnToLatest()
 
-    for (const payload of buildMessageParts({ body, replyToId, files, gif, uploadIds })) {
+    /*
+     * Encrypt the files before anything is built, because doing so replaces them.
+     *
+     * Each file gets its own random key, its bytes are sealed, and the key travels with the
+     * real name and type inside the message envelope. What reaches the server is an opaque
+     * blob called "encrypted" — see AttachmentService::describe for the other half.
+     *
+     * A GIF is left alone and cannot be otherwise: it is a reference to somebody else's CDN,
+     * not bytes we hold. Picking one in an encrypted channel tells that CDN, and anybody
+     * watching, what was sent. The composer should say so — see the note in ChannelView.
+     */
+    const outgoing = encrypted.value ? await sealFiles(files) : { files, meta: [] as SealedFile[] }
+
+    /*
+     * Direct files first, then staged uploads — the order the server attaches them in.
+     *
+     * AttachmentService runs storeFor() before attachUploads(), and a key is matched to its
+     * file by position alone. Getting this order wrong doesn't fail loudly: it hands each
+     * file the next one's key, and every attachment on the message becomes undecryptable
+     * rubbish with a plausible-looking name.
+     */
+    const meta = [...outgoing.meta, ...uploadMeta]
+
+    const parts = buildMessageParts({ body, replyToId, files: outgoing.files, gif, uploadIds })
+
+    for (const [index, part] of parts.entries()) {
+      /*
+       * Encrypt after chunking, and refuse rather than fall back.
+       *
+       * If the chain can't be built or handed out — the key exchange is down, no device
+       * would verify — this throws and the composer surfaces it. Posting in the clear
+       * instead would be worse than any error: the padlock said otherwise, and the person
+       * typing would never know. See useMessageCrypto.
+       *
+       * The file keys go on the *last* part, because that is where buildMessageParts puts
+       * the files themselves. On the first part they would describe attachments three
+       * messages further down; on every part they would ship the same keys repeatedly.
+       */
+      const carriesFiles = index === parts.length - 1
+
+      const payload = encrypted.value
+        ? setPayloadBody(
+            part,
+            await crypto.encryptOutgoing(
+              channelId.value,
+              epoch.value,
+              bodyOf(part),
+              carriesFiles ? meta : [],
+            ),
+          )
+        : part
+
       const res = await api<{ data: Message }>(`/api/channels/${channelId.value}/messages`, {
         method: 'POST',
         body: payload as any,
         headers: { 'X-Socket-ID': echo?.socketId() ?? '' },
       })
-      pushUnique(res.data)
+      // Our own message comes back as the ciphertext we sent, so it goes through the same
+      // door as everybody else's rather than being special-cased into the timeline.
+      pushUnique(await crypto.decryptIncoming(res.data))
       // `a!board`, `a!notes`, … answer with an ephemeral note carrying the app to open. The
       // launch is deliberately client-side and sender-only: the note says what happened, and
       // the window it opens is one of *yours*, on the shelf that follows you around the app.
@@ -276,18 +470,32 @@ export function useMessages() {
 
   async function edit(id: number, body: string | null, files: File[] = [], removeAttachmentIds: number[] = []) {
     const multipart = files.length > 0 || removeAttachmentIds.length > 0
-    const payload = buildMessagePayload({
+    const built = buildMessagePayload({
       body,
       files,
       removeAttachmentIds,
       ...(multipart ? { method: 'PATCH' as const } : {}),
     })
+
+    /*
+     * An edit re-encrypts under the *message's* era, not the channel's.
+     *
+     * Those differ whenever encryption has been toggled since — editing a message from era 1
+     * while the channel sits in era 2 must produce era-1 ciphertext, or the edit lands in a
+     * chain the readers of that message never had. A message from a plaintext run stays
+     * plaintext for the same reason: what a message is was decided when it was sent.
+     */
+    const target = messages.value.find(m => m.id === id)
+    const payload = target?.encrypted && target.epoch != null
+      ? setPayloadBody(built, await crypto.encryptOutgoing(target.channel_id, target.epoch, body))
+      : built
+
     const res = await api<{ data: Message }>(`/api/messages/${id}`, {
       // PHP cannot parse a multipart body on PATCH, so we POST with method spoofing.
       method: multipart ? 'POST' : 'PATCH',
       body: payload as any,
     })
-    replaceMessage(res.data)
+    replaceMessage(await crypto.decryptIncoming(res.data))
   }
 
   /** Add the reaction, or take it back if it's already yours. */
@@ -344,11 +552,43 @@ export function useMessages() {
    */
   const handlers: Record<string, (payload: any) => void> = {
     '.MessageSent': (m: Message) => {
-      pushUnique(m)
-      // A widget card arrives as a reference (no state) — pull its live state in.
-      if (m.type === 'widget' && m.widget && m.widget.state == null) refreshWidget(m.widget.id)
+      // Decryption is async and a handler isn't, so the push happens in the `then`. Ordering
+      // still holds: `pushUnique` appends by arrival and drops anything already there, so a
+      // message that lost a race with its own re-render doesn't double up.
+      void crypto.decryptIncoming(m).then((decrypted) => {
+        pushUnique(decrypted)
+        // A widget card arrives as a reference (no state) — pull its live state in.
+        if (m.type === 'widget' && m.widget && m.widget.state == null) refreshWidget(m.widget.id)
+      })
     },
-    '.MessageUpdated': (m: Message) => replaceMessage(m),
+    '.MessageUpdated': (m: Message) => void crypto.decryptIncoming(m).then(replaceMessage),
+    /**
+     * Somebody flipped the padlock while we were looking at the channel.
+     *
+     * The composer has to change behaviour mid-conversation — a client that kept sending
+     * plaintext into a channel that had just been locked is the worst failure this feature
+     * has. Collecting keys immediately means the first message of the new era is readable
+     * when it lands rather than a moment later.
+     */
+    '.ChannelEncryptionToggled': (p: { encrypted: boolean, encryption_epoch: number }) => {
+      encrypted.value = p.encrypted
+      epoch.value = p.encryption_epoch
+      if (p.encrypted && channelId.value !== null) void collectKeys(channelId.value)
+    },
+    /**
+     * Somebody has left sender keys in this channel's post box.
+     *
+     * The event carries nothing readable — every blob in the inbox is sealed to one device —
+     * so the only useful response is to go and look. This is what lets a device that joined
+     * mid-conversation start reading without a reload, and what makes a message sent to it
+     * legible the moment its sender notices it exists.
+     */
+    '.SenderKeysDistributed': () => {
+      const id = channelId.value
+      if (id === null) return
+
+      void collectKeys(id).then(retryUndecrypted)
+    },
     '.MessageDeleted': (p: { id: number }) => removeMessage(p.id),
     '.ReactionToggled': (p: { message_id: number, reactions: Reaction[] }) => {
       // Diffed before the patch, since the patch is what destroys the "before".
@@ -456,5 +696,5 @@ export function useMessages() {
     release(`channel.${id}`)
   }
 
-  return { messages, hasMore, hasNewer, loadingOlder, load, loadOlder, ensureLoaded, jumpTo, returnToLatest, send, edit, remove, removeAttachment, toggleReaction, togglePin, subscribe, unsubscribe }
+  return { messages, hasMore, hasNewer, loadingOlder, encrypted, epoch, load, loadOlder, ensureLoaded, jumpTo, returnToLatest, send, edit, remove, removeAttachment, toggleReaction, togglePin, subscribe, unsubscribe }
 }

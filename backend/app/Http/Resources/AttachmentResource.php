@@ -21,6 +21,15 @@ class AttachmentResource extends JsonResource
             'mime_type' => $this->mime_type,
             'extension' => $this->extension,
             'size' => $this->size,
+            /*
+             * Ciphertext on disk. The client fetches it, decrypts it in the browser and
+             * renders from a blob URL — so `url` below is still where the bytes come from,
+             * it just can't be pointed at an <img> directly.
+             *
+             * `name` and `mime_type` above are placeholders for these; the real ones are
+             * sealed in the message envelope. See AttachmentService::describe().
+             */
+            'encrypted' => $this->isEncrypted(),
             'is_image' => $this->isImage(),
             'is_pdf' => $this->isPdf(),
             'is_gif' => $this->isGif(),

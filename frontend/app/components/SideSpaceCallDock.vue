@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { useLocalStorage } from '@vueuse/core'
-import { Maximize, Maximize2, Minimize, Minimize2, PictureInPicture2, ScreenShare, Tv, Users, Video, VolumeX, Volume2, X } from 'lucide-vue-next'
+import { Maximize2, Minimize2, PictureInPicture2, Tv, Users, Volume2, X } from 'lucide-vue-next'
 import { watchKey } from '~/composables/useCallStage'
 import type { Peer } from '~/types'
 
@@ -101,8 +101,6 @@ const nearby = computed(() => {
  */
 const { isMuted: bubblesMutedFor, toggleMuted: toggleBubbleMute } = useSpaceChatBubbles()
 
-const stageEl = ref<HTMLElement | null>(null)
-const isFullscreen = ref(false)
 
 /**
  * Watch the screen over the room instead of inside this rail.
@@ -172,7 +170,7 @@ const selfPeer = computed<Peer>(() => ({
  * stage is passed as `priority`, so stepping up in front of the room claims an empty stage the
  * way pressing Share does. See useCallStage.
  */
-const { watchables, watching, stage, stageScreenPeer, toggleWatch } = useCallStage({
+const { watchables, watching, stages, stage, stageFull, isWatching, screenPeerFor, toggleWatch, clearWatching } = useCallStage({
   peers: () => nearby.value,
   self: () => ({
     sharing: isSharing.value,
@@ -187,48 +185,34 @@ const { watchables, watching, stage, stageScreenPeer, toggleWatch } = useCallSta
 const audioSharers = computed(() => nearby.value.filter(p => p.audioSharing && !p.screenSharing))
 
 // A screen you shrank away and then closed shouldn't come back shrunk when the next one starts:
-// the next share is a fresh "look at this".
-watch(watching, key => { if (key === null) minimized.value = false })
-
-/** The stage stream's true size — remote control maps clicks through it. See VoiceChannel. */
-const stageDimensions = ref({ width: 0, height: 0 })
-function onStageDimensions(width: number, height: number) {
-  stageDimensions.value = { width, height }
-}
+// the next share is a fresh "look at this". Only once the stage empties completely — shrinking is
+// about the band over the room, and the band is still there while anything is on it.
+watch(() => stages.value.length, n => { if (!n) minimized.value = false })
 
 /**
- * Fullscreen, where there is one.
+ * How the tiles are laid out over the room.
  *
- * iOS' web view has no Element.requestFullscreen at all — `document.fullscreenEnabled` is how it
- * says so — and calling it there rejects into nothing. The button is hidden rather than left to
- * fail, and the call is guarded anyway because the check runs at mount and the DOM doesn't
- * promise the method will still be there.
+ * A single screen keeps the whole band, and beyond that it's two columns. The band is 62% of the
+ * room's height, so four tiles in it are small — but they're four things you asked to see at once,
+ * and the alternative (a column of them, most below the fold) is worse. Fullscreen and the rail
+ * are both a click away for the one you actually want to read.
+ */
+const stageColumns = computed(() => stages.value.length > 1 ? 'grid-cols-2' : 'grid-cols-1')
+
+/**
+ * Whether fullscreen exists here at all.
+ *
+ * iOS' web view has no Element.requestFullscreen — `document.fullscreenEnabled` is how it says so
+ * — and calling it there rejects into nothing, so the button is hidden rather than left to fail.
+ * Asked once, here, and handed to every tile; the tiles do the toggling, since with a grid up
+ * "fullscreen" means one particular screen. See CallStageTile.
  */
 const canFullscreen = ref(false)
-
-async function toggleFullscreen() {
-  if (!stageEl.value || !canFullscreen.value) return
-
-  try {
-    if (document.fullscreenElement) await document.exitFullscreen()
-    else await stageEl.value.requestFullscreen()
-  }
-  catch {
-    // Refused (a permissions policy, or a gesture the browser didn't count). Nothing to say —
-    // the screen is still playing in the panel, which is what you were watching it in.
-  }
-}
-
-function onFullscreenChange() {
-  isFullscreen.value = !!document.fullscreenElement
-}
 
 onMounted(() => {
   mounted.value = true
   canFullscreen.value = !!document.fullscreenEnabled && typeof Element.prototype.requestFullscreen === 'function'
-  document.addEventListener('fullscreenchange', onFullscreenChange)
 })
-onBeforeUnmount(() => document.removeEventListener('fullscreenchange', onFullscreenChange))
 </script>
 
 <template>
@@ -269,7 +253,10 @@ onBeforeUnmount(() => document.removeEventListener('fullscreenchange', onFullscr
         @click="wantsTheater = false"
       >
         <Tv class="h-3.5 w-3.5 shrink-0" />
-        <span class="min-w-0 flex-1 truncate">{{ stage.name }} — {{ minimized ? 'in the corner of the room' : 'showing over the room' }}</span>
+        <span class="min-w-0 flex-1 truncate">
+          {{ stages.length > 1 ? `${stages.length} screens` : stage?.name }} —
+          {{ minimized ? 'in the corner of the room' : 'showing over the room' }}
+        </span>
         <PictureInPicture2 class="h-3.5 w-3.5 shrink-0" />
       </button>
 
@@ -284,7 +271,7 @@ onBeforeUnmount(() => document.removeEventListener('fullscreenchange', onFullscr
       -->
       <Teleport to="#space-screen-theater" :disabled="!theater">
         <section
-          v-if="stage"
+          v-if="stages.length"
           class="flex flex-col gap-1.5"
           :class="theater
             ? (minimized
@@ -292,137 +279,77 @@ onBeforeUnmount(() => document.removeEventListener('fullscreenchange', onFullscr
               : 'pointer-events-auto absolute inset-x-0 top-0 h-[62%] max-h-full border-b bg-background/95 p-2 shadow-xl backdrop-blur')
             : 'shrink-0'"
         >
+          <!-- Everything you're watching near you. Over the room it stretches to fill the band;
+               in the rail each tile keeps its own 16:9 and the column scrolls. -->
           <div
-            ref="stageEl"
-            class="group relative overflow-hidden bg-black"
-            :class="isFullscreen
-              ? 'h-screen w-screen'
-              : theater && !minimized ? 'min-h-0 flex-1 rounded-lg border' : 'aspect-video rounded-lg border'"
+            class="grid gap-1.5"
+            :class="[stageColumns, theater && !minimized ? 'min-h-0 flex-1' : '']"
           >
-            <!-- Your own screen is a note, never played back: capturing a window that contains
-                 this one is an endless hall of mirrors. Everyone else sees the real thing. -->
-            <div v-if="stage.owner === 'self' && stage.kind === 'screen'" class="grid h-full w-full place-items-center p-2 text-center text-white/70">
-              <div class="flex flex-col items-center gap-1.5">
-                <ScreenShare class="h-6 w-6" />
-                <p class="text-xs font-medium text-white">You're sharing your screen</p>
-                <p class="text-[11px] text-white/60">Everyone near you can see it.</p>
-              </div>
-            </div>
-            <!-- Your own face is mirrored, like every self-view; nobody else's is. -->
-            <VoiceVideo
-              v-else
-              :stream="stage.stream"
-              :class="stage.owner === 'self' ? '-scale-x-100' : ''"
-              @dimensions="onStageDimensions"
-            />
-
-            <!-- Remote control's input layer — inert unless you hold control of this screen. -->
-            <RemoteControlSurface
-              v-if="stageScreenPeer"
-              :peer-id="stageScreenPeer.id"
-              :video-width="stageDimensions.width"
-              :video-height="stageDimensions.height"
-            />
-
-            <button
-              type="button"
-              class="absolute left-1.5 top-1.5 grid h-7 w-7 place-items-center rounded-md bg-black/50 text-white opacity-0 reveal-touch transition hover:bg-black/70 focus:opacity-100 group-hover:opacity-100"
-              :title="stage.kind === 'camera' ? 'Take them off the main screen' : 'Stop watching this screen'"
-              @click="watching = null"
-            >
-              <X class="h-3.5 w-3.5" />
-            </button>
-
-            <div class="absolute right-1.5 top-1.5 flex items-center gap-1">
-              <!-- Out of the way without being closed. Only over the room: in the rail the screen
-                   is already as small as it gets, and there'd be nowhere for it to go. -->
-              <button
-                v-if="theater && !isFullscreen"
-                type="button"
-                class="grid h-7 w-7 place-items-center rounded-md bg-black/50 text-white opacity-0 reveal-touch transition hover:bg-black/70 focus:opacity-100 group-hover:opacity-100"
-                :title="minimized ? 'Show it full size again' : 'Shrink it into the corner'"
-                @click="minimized = !minimized"
-              >
-                <Maximize2 v-if="minimized" class="h-3.5 w-3.5" />
-                <Minimize2 v-else class="h-3.5 w-3.5" />
-              </button>
-
-              <!-- Between the rail and fullscreen. Hidden while minimized (three buttons don't fit
-                   across a thumbnail), while the sheet is up — a phone watching in the sheet has
-                   nowhere else to put it — and in fullscreen, where it would mean nothing. -->
-              <button
-                v-if="!sheet && !isFullscreen && !minimized"
-                type="button"
-                class="grid h-7 w-7 place-items-center rounded-md bg-black/50 text-white opacity-0 reveal-touch transition hover:bg-black/70 focus:opacity-100 group-hover:opacity-100"
-                :title="theater ? 'Watch it in the side panel' : 'Watch it over the room'"
-                @click="wantsTheater = !wantsTheater"
-              >
-                <PictureInPicture2 v-if="theater" class="h-3.5 w-3.5" />
-                <Tv v-else class="h-3.5 w-3.5" />
-              </button>
-
-              <button
-                v-if="!(stage.owner === 'self' && stage.kind === 'screen') && canFullscreen"
-                type="button"
-                class="grid h-7 w-7 place-items-center rounded-md bg-black/50 text-white opacity-0 reveal-touch transition hover:bg-black/70 focus:opacity-100 group-hover:opacity-100"
-                :title="isFullscreen ? 'Exit fullscreen' : 'Fullscreen'"
-                @click="toggleFullscreen"
-              >
-                <Minimize v-if="isFullscreen" class="h-3.5 w-3.5" />
-                <Maximize v-else class="h-3.5 w-3.5" />
-              </button>
-            </div>
-          </div>
-
-          <!-- Labels and sliders are illegible on a thumbnail; the volume is a person's tile away
-               in the panel, and full size is one button away here. -->
-          <div v-if="!minimized" class="flex shrink-0 items-center gap-1.5">
-            <span class="min-w-0 flex-1 truncate text-[11px] text-muted-foreground">{{ stage.name }}</span>
-
-            <!-- Ask to drive it. Only ever a peer's screen. -->
-            <RemoteControlButton v-if="stageScreenPeer" :peer-id="stageScreenPeer.id" />
-
-            <!-- How loud their share plays, for you alone — kept apart from their voice so a loud
-                 clip can be turned down without quietening the person talking over it. -->
-            <template v-if="stageScreenPeer">
-              <button
-                type="button"
-                class="shrink-0 rounded p-0.5 transition"
-                :class="stageScreenPeer.screenMuted ? 'text-destructive' : 'text-muted-foreground hover:text-foreground'"
-                :title="stageScreenPeer.screenMuted ? 'Hear this screen again' : 'Mute this screen\'s sound'"
-                @click="togglePeerScreenMute(stageScreenPeer.id)"
-              >
-                <VolumeX v-if="stageScreenPeer.screenMuted" class="h-3.5 w-3.5" />
-                <Volume2 v-else class="h-3.5 w-3.5" />
-              </button>
-              <input
-                type="range"
-                min="0"
-                max="1"
-                step="0.01"
-                :value="stageScreenPeer.screenVolume"
-                :disabled="stageScreenPeer.screenMuted"
-                class="h-1 w-20 shrink-0 cursor-pointer appearance-none rounded-full bg-muted accent-primary disabled:cursor-not-allowed disabled:opacity-40"
-                :aria-label="`Shared screen volume for ${stageScreenPeer.name}`"
-                @input="setPeerScreenVolume(stageScreenPeer.id, Number(($event.target as HTMLInputElement).value))"
-              >
-            </template>
-          </div>
-
-          <!-- More than one thing to look at near you — screens and faces both: pick. -->
-          <div v-if="watchables.length > 1 && !minimized" class="flex shrink-0 flex-wrap gap-1">
-            <button
-              v-for="w in watchables"
+            <CallStageTile
+              v-for="w in stages"
               :key="w.key"
-              type="button"
-              class="flex items-center gap-1 rounded px-1.5 py-0.5 text-[11px] transition"
-              :class="w.key === watching ? 'bg-primary text-primary-foreground' : 'bg-muted text-muted-foreground hover:bg-muted/70'"
-              @click="watching = w.key"
+              :watchable="w"
+              :screen-peer="screenPeerFor(w)"
+              :compact="minimized || !theater"
+              :no-fullscreen="!canFullscreen"
+              @close="toggleWatch(w.owner, w.kind)"
             >
-              <ScreenShare v-if="w.kind === 'screen'" class="h-3 w-3 shrink-0" />
-              <Video v-else class="h-3 w-3 shrink-0" />
-              {{ w.name }}
+              <!-- Where the stage lives, rather than what's on it — so these stay here rather
+                   than moving into the tile. Only on the first tile: one band moves and shrinks
+                   as a whole, and four copies of the same two buttons is just clutter. -->
+              <template v-if="w.key === stages[0]?.key" #actions="{ fullscreen }">
+                <!-- Out of the way without being closed. Only over the room: in the rail the
+                     screens are already as small as they get, with nowhere to go. -->
+                <button
+                  v-if="theater && !fullscreen"
+                  type="button"
+                  class="grid h-7 w-7 place-items-center rounded-md bg-black/50 text-white opacity-0 reveal-touch transition hover:bg-black/70 focus:opacity-100 group-hover:opacity-100"
+                  :title="minimized ? 'Show it full size again' : 'Shrink it into the corner'"
+                  @click="minimized = !minimized"
+                >
+                  <Maximize2 v-if="minimized" class="h-3.5 w-3.5" />
+                  <Minimize2 v-else class="h-3.5 w-3.5" />
+                </button>
+
+                <!-- Between the rail and the room. Hidden while minimized (three buttons don't fit
+                     across a thumbnail), while the sheet is up — a phone watching in the sheet has
+                     nowhere else to put it — and in fullscreen, where it would mean nothing. -->
+                <button
+                  v-if="!sheet && !fullscreen && !minimized"
+                  type="button"
+                  class="grid h-7 w-7 place-items-center rounded-md bg-black/50 text-white opacity-0 reveal-touch transition hover:bg-black/70 focus:opacity-100 group-hover:opacity-100"
+                  :title="theater ? 'Watch in the side panel' : 'Watch over the room'"
+                  @click="wantsTheater = !wantsTheater"
+                >
+                  <PictureInPicture2 v-if="theater" class="h-3.5 w-3.5" />
+                  <Tv v-else class="h-3.5 w-3.5" />
+                </button>
+              </template>
+            </CallStageTile>
+          </div>
+
+          <!-- Illegible on a thumbnail, and every one of these controls is a tile or a button
+               away in the panel. -->
+          <div v-if="!minimized" class="flex shrink-0 flex-wrap items-center gap-1">
+            <button
+              v-if="stages.length > 1"
+              type="button"
+              class="shrink-0 rounded px-1.5 py-0.5 text-[11px] text-muted-foreground transition hover:bg-muted hover:text-foreground"
+              title="Stop watching everything and stay in the room"
+              @click="clearWatching()"
+            >
+              Clear
             </button>
+
+            <!-- Everything worth looking at near you — screens and faces both. -->
+            <CallStagePicker
+              v-if="watchables.length > 1"
+              compact
+              :watchables="watchables"
+              :watching="watching"
+              :full="stageFull"
+              @toggle="toggleWatch($event.owner, $event.kind)"
+            />
           </div>
         </section>
       </Teleport>
@@ -447,8 +374,8 @@ onBeforeUnmount(() => document.removeEventListener('fullscreenchange', onFullscr
           :speaking="selfSpeaking"
           :muted="!micOpen"
           :sharing="isSharing"
-          :watching="watching === watchKey('self', 'screen')"
-          :pinned="watching === watchKey('self', 'camera')"
+          :watching="isWatching(watchKey('self', 'screen'))"
+          :pinned="isWatching(watchKey('self', 'camera'))"
           @watch="toggleWatch('self', 'screen')"
           @pin="toggleWatch('self', 'camera')"
         />
@@ -459,8 +386,8 @@ onBeforeUnmount(() => document.removeEventListener('fullscreenchange', onFullscr
           :speaking="peer.speaking"
           :muted="peer.muted"
           :sharing="peer.screenSharing"
-          :watching="watching === watchKey(peer.id, 'screen')"
-          :pinned="watching === watchKey(peer.id, 'camera')"
+          :watching="isWatching(watchKey(peer.id, 'screen'))"
+          :pinned="isWatching(watchKey(peer.id, 'camera'))"
           can-mute-bubbles
           :bubbles-muted="bubblesMutedFor(peer.id)"
           :can-moderate="canModerate"

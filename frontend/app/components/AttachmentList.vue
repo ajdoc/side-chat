@@ -23,8 +23,16 @@ const props = defineProps<{
 
 const emit = defineEmits<{ remove: [id: number] }>()
 
-const images = computed(() => props.attachments.filter(a => a.is_image))
-const files = computed(() => props.attachments.filter(a => !a.is_image))
+/**
+ * An image needs bytes to be an image.
+ *
+ * An encrypted attachment that hasn't been decrypted — too large to fetch on sight, or one
+ * whose key is missing — has no URL, and putting it in the image grid would draw a row of
+ * broken-image icons. It falls through to the file list instead, which has a name, a size and
+ * a button that fetches it.
+ */
+const images = computed(() => props.attachments.filter(a => a.is_image && a.url))
+const files = computed(() => props.attachments.filter(a => !(a.is_image && a.url)))
 
 /**
  * Sound and video play where they land — a voice message you have to download to hear isn't a
@@ -132,10 +140,42 @@ function formatSize(bytes: number) {
   return `${(bytes / 1024 / 1024).toFixed(1)} MB`
 }
 
-function triggerDownload(a: Attachment) {
+/**
+ * A large encrypted attachment hasn't been fetched yet — see useAttachmentCrypto's size
+ * threshold. It decrypts when somebody actually asks for it, which is what this does.
+ *
+ * Held per attachment id so two clicks on one card don't start two downloads, and so the
+ * button can say "Decrypting…" while it works. An encrypted file cannot be streamed — the
+ * authentication tag covers the whole thing — so on a big one this is a real wait, and
+ * pretending otherwise would look like a dead button.
+ */
+const decrypting = ref<Set<number>>(new Set())
+const attachmentCrypto = useAttachmentCrypto()
+
+async function ensureBytes(a: Attachment): Promise<Attachment> {
+  if (a.url || !a.encryptedKey || decrypting.value.has(a.id)) return a
+
+  decrypting.value = new Set(decrypting.value).add(a.id)
+  try {
+    const resolved = await attachmentCrypto.decryptInto(a)
+    // Patch it in place so the card stops offering to fetch what it now holds.
+    Object.assign(a, resolved)
+
+    return resolved
+  } finally {
+    const next = new Set(decrypting.value)
+    next.delete(a.id)
+    decrypting.value = next
+  }
+}
+
+async function triggerDownload(a: Attachment) {
+  const ready = await ensureBytes(a)
+  if (!ready.download_url) return
+
   const link = document.createElement('a')
-  link.href = a.download_url
-  link.download = a.name
+  link.href = ready.download_url
+  link.download = ready.name
   document.body.appendChild(link)
   link.click()
   link.remove()
@@ -145,11 +185,13 @@ function triggerDownload(a: Attachment) {
  * File cards only (images open in the lightbox instead). PDFs view in the browser;
  * anything else has no viewer, so "view" simply downloads it.
  */
-function onView(a: Attachment) {
-  if (a.is_pdf) {
-    window.open(a.url, '_blank', 'noopener')
+async function onView(a: Attachment) {
+  const ready = await ensureBytes(a)
+
+  if (ready.is_pdf && ready.url) {
+    window.open(ready.url, '_blank', 'noopener')
   } else {
-    triggerDownload(a)
+    await triggerDownload(ready)
   }
 }
 </script>

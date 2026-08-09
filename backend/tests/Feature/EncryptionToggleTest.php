@@ -2,10 +2,12 @@
 
 use App\Events\ChannelEncryptionToggled;
 use App\Jobs\DeliverBotEvent;
+use App\Models\Attachment;
 use App\Models\Channel;
 use App\Models\Conversation;
 use App\Models\Message;
 use App\Models\User;
+use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Facades\Event;
 use Illuminate\Support\Facades\Queue;
 use Laravel\Passport\Passport;
@@ -178,6 +180,27 @@ it('lets only the owner encrypt a group chat', function () {
  * Phase two: what the flag does to everything that reads a body.
  */
 
+it('tells the timeline what a message sent now would be', function () {
+    // The composer's only source of truth. A client that had to be *told* the channel was
+    // encrypted — rather than being told by the page it was already fetching — would post in
+    // the clear whenever nobody remembered to tell it, which is the one failure that matters.
+    [$owner, , $server] = twoMembers();
+    $channel = Channel::factory()->create(['server_id' => $server->id])->discussions()->first();
+    Passport::actingAs($owner);
+
+    $this->getJson("/api/channels/{$channel->id}/messages")
+        ->assertOk()
+        ->assertJsonPath('encryption.encrypted', false)
+        ->assertJsonPath('encryption.epoch', 0);
+
+    $this->putJson("/api/channels/{$channel->id}/encryption", ['encrypted' => true])->assertOk();
+
+    $this->getJson("/api/channels/{$channel->id}/messages")
+        ->assertOk()
+        ->assertJsonPath('encryption.encrypted', true)
+        ->assertJsonPath('encryption.epoch', 1);
+});
+
 it('stamps a message with the era it was sent in, and never revises it', function () {
     [$owner, , $channel] = encryptedChannel();
     Passport::actingAs($owner);
@@ -281,6 +304,59 @@ it('does not unfurl links in an encrypted channel', function () {
         ->assertJsonPath('data.link_previews', []);
 
     expect(Message::where('channel_id', $channel->id)->latest('id')->first()->linkPreviews()->count())->toBe(0);
+});
+
+it('forgets an encrypted attachment’s name and type', function () {
+    // A filename is often the most revealing thing about a document, so storing the real one
+    // beside an encrypted file would give away most of what the encryption was for. The real
+    // values travel sealed in the message envelope; the columns get neutral placeholders.
+    [$owner, , $channel] = encryptedChannel();
+    Passport::actingAs($owner);
+
+    $this->postJson("/api/channels/{$channel->id}/messages", [
+        'body' => 'envelope-stand-in',
+        'attachments' => [UploadedFile::fake()->create('Q3 redundancies.xlsx', 12, 'application/vnd.ms-excel')],
+    ])->assertCreated();
+
+    $attachment = Attachment::latest('id')->first();
+
+    expect($attachment->isEncrypted())->toBeTrue()
+        ->and($attachment->name)->toBe('Encrypted file')
+        ->and($attachment->name)->not->toContain('redundancies')
+        ->and($attachment->mime_type)->toBe('application/octet-stream')
+        ->and($attachment->extension)->toBeNull()
+        // Size is the one thing that can't be hidden — the bytes are on disk — and pretending
+        // otherwise would be worse than admitting it.
+        ->and($attachment->size)->toBeGreaterThan(0);
+});
+
+it('refuses to guess what an encrypted attachment is', function () {
+    // Every content question answers no, because the stored MIME type is a placeholder.
+    // A true `is_image` here would have the client draw a broken picture and a thumbnailer
+    // chew on ciphertext.
+    [$owner, , $channel] = encryptedChannel();
+    Passport::actingAs($owner);
+
+    $this->postJson("/api/channels/{$channel->id}/messages", [
+        'body' => 'envelope-stand-in',
+        'attachments' => [UploadedFile::fake()->create('holiday.png', 20, 'image/png')],
+    ])->assertCreated()
+        ->assertJsonPath('data.attachments.0.encrypted', true)
+        ->assertJsonPath('data.attachments.0.is_image', false);
+});
+
+it('leaves attachments alone in an unencrypted channel', function () {
+    [$owner, , $server] = twoMembers();
+    $channel = Channel::factory()->create(['server_id' => $server->id])->discussions()->first();
+    Passport::actingAs($owner);
+
+    $this->postJson("/api/channels/{$channel->id}/messages", [
+        'body' => 'here you go',
+        'attachments' => [UploadedFile::fake()->create('holiday.png', 20, 'image/png')],
+    ])->assertCreated()
+        ->assertJsonPath('data.attachments.0.encrypted', false)
+        ->assertJsonPath('data.attachments.0.is_image', true)
+        ->assertJsonPath('data.attachments.0.name', 'holiday.png');
 });
 
 it('does not treat an encrypted body as a command', function () {

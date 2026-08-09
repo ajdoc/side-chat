@@ -1,7 +1,8 @@
 <script setup lang="ts">
-import { ArrowDown, Loader2, Menu, PictureInPicture2, Search, X } from 'lucide-vue-next'
+import { ArrowDown, Loader2, LockKeyhole, Menu, PictureInPicture2, Search, X } from 'lucide-vue-next'
 import type { Channel, GifResult, Message } from '~/types'
 import type { FloatingConversationIcon } from '~/composables/useFloatingWindows'
+import type { SealedFile } from '~/lib/crypto/envelope'
 import { Button } from '~/components/ui/button'
 import { memberBadgesKey, mentionNamesKey, useChannelMembers } from '~/composables/useChannelMembers'
 import { emoteOnly } from '~/lib/spaceEmotes'
@@ -52,7 +53,7 @@ const emit = defineEmits<{ read: [] }>()
 const surface = useSurfaceRoute()
 const query = surface.query
 const { user } = useAuth()
-const { messages, hasMore, hasNewer, loadingOlder, load, loadOlder, ensureLoaded, jumpTo, returnToLatest, send, edit, remove, toggleReaction, togglePin, subscribe, unsubscribe } = useMessages()
+const { messages, hasMore, hasNewer, loadingOlder, encrypted, load, loadOlder, ensureLoaded, jumpTo, returnToLatest, send, edit, remove, toggleReaction, togglePin, subscribe, unsubscribe } = useMessages()
 const {
   readersByMessage,
   load: loadReads,
@@ -117,6 +118,21 @@ const activeSideChatId = computed(() => {
   const s = query.value.sidechat
   return s && s !== 'new' ? Number(s) : null
 })
+
+const showEncryption = ref(false)
+
+/**
+ * Encryption was just switched.
+ *
+ * The broadcast updates every *other* client, including our own other tabs — but the tab that
+ * made the change is excluded from its own socket echo, so the composer here would keep the
+ * old state until something else reloaded the timeline. Reloading is the simplest correct
+ * answer: it re-reads the encryption block off the page and collects any keys the new era
+ * needs, in one round trip.
+ */
+async function onEncryptionSaved() {
+  await load(props.channel.id)
+}
 
 const sending = ref(false)
 const replyingTo = ref<Message | null>(null)
@@ -324,11 +340,18 @@ function closeChannel(id: number) {
   unsubscribe(id)
 }
 
-async function onSend(body: string, files: File[], gif?: GifResult, uploadIds: string[] = []) {
+async function onSend(
+  body: string,
+  files: File[],
+  gif?: GifResult,
+  uploadIds: string[] = [],
+  // Keys for the big files the composer already encrypted and staged — see its stage().
+  uploadMeta: SealedFile[] = [],
+) {
   if (sending.value) return
   sending.value = true
   try {
-    await send(body, replyingTo.value?.id ?? null, files, gif, uploadIds)
+    await send(body, replyingTo.value?.id ?? null, files, gif, uploadIds, uploadMeta)
     stopTyping()
     /*
      * Your own line over your own head.
@@ -561,6 +584,23 @@ onBeforeUnmount(() => {
           >
             <Search class="h-4 w-4" />
           </button>
+          <!--
+            Encryption for *this* timeline.
+
+            On the timeline rather than in the sidebar because that is where the setting
+            applies: a channel is a container of discussions, each with its own switch, and a
+            padlock on the sidebar row would be a padlock on a conversation nobody is having.
+            Lit when on, so the state is legible without opening anything.
+          -->
+          <button
+            type="button"
+            class="rounded p-1.5 transition-colors hover:bg-muted"
+            :class="encrypted ? 'text-emerald-600 dark:text-emerald-400' : 'text-muted-foreground hover:text-foreground'"
+            :title="encrypted ? 'End-to-end encrypted — change' : 'Encryption is off'"
+            @click="showEncryption = true"
+          >
+            <LockKeyhole class="h-4 w-4" />
+          </button>
           <button
             v-if="!isMobile"
             type="button"
@@ -676,11 +716,30 @@ onBeforeUnmount(() => {
           <span class="truncate">Replying to <span class="font-medium">{{ replyingTo.user.name }}</span></span>
           <button class="hover:text-foreground" @click="replyingTo = null"><X class="h-3.5 w-3.5" /></button>
         </div>
+        <!--
+          The padlock, above the composer where somebody is about to type.
+
+          Says what is true *now*, which is the one thing the timeline can't: the messages on
+          screen each carry their own state, and a channel that was locked an hour ago may not
+          be any more. It reads from `encrypted`, which the server sends with every page.
+        -->
+        <p
+          v-if="encrypted"
+          class="flex items-center gap-1.5 px-4 py-1 text-xs text-muted-foreground"
+        >
+          <LockKeyhole class="size-3 shrink-0" />
+          <span>
+            End-to-end encrypted — files included. Search, bots and link previews are off for
+            new messages, and a GIF from the picker is a link to its provider rather than an
+            encrypted file.
+          </span>
+        </p>
         <TypingIndicator :label="typingLabel" />
         <MessageComposer
           :placeholder="`Message ${prefix ?? ''}${title}`"
           :sending="sending"
           :channel-id="channelId"
+          :encrypted="encrypted"
           :mention-members="mentionMembers"
           :commands="slashCommands"
           @submit="onSend"
@@ -726,5 +785,17 @@ onBeforeUnmount(() => {
 
     <!-- Forward a message from this timeline into another chat or channel. -->
     <ForwardDialog v-model:message="forwardTarget" />
+
+    <!--
+      The encryption switch. Refuses to open on a container — a channel that holds discussions
+      has no timeline of its own to encrypt, and the endpoint would reject it anyway (see
+      ToggleEncryptionRequest), so offering the dialog would be offering a dead end.
+    -->
+    <EncryptionDialog
+      v-if="showEncryption"
+      :channel="channel"
+      @close="showEncryption = false"
+      @saved="onEncryptionSaved"
+    />
   </div>
 </template>

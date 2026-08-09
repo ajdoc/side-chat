@@ -53,6 +53,23 @@ contextBridge.exposeInMainWorld('sideChatDesktop', {
   },
 
   /**
+   * OS-backed secret storage, for the encryption vault key.
+   *
+   * A deliberately tiny door: two string operations and a capability probe. It is not a
+   * general key-value store for the page — the only thing that should ever go through here is
+   * a secret whose whole point is to be unreadable from the profile directory. See
+   * provideSecrets in main.js, and `vault.ts` for what it protects.
+   */
+  secrets: {
+    /** Whether the OS will actually encrypt for us. False on a Linux box with no keyring. */
+    available: () => ipcRenderer.invoke('secrets:available'),
+    /** The stored value, or null — including when it was written under a keychain that's gone. */
+    get: name => ipcRenderer.invoke('secrets:get', name),
+    /** Resolves false if the OS declined; the caller then carries on unprotected. */
+    set: (name, value) => ipcRenderer.invoke('secrets:set', name, value),
+  },
+
+  /**
    * Remote control, sharer side only.
    *
    * Note what is *not* here: nothing that reads the screen, nothing that grants anything. This

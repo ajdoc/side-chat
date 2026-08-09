@@ -15,11 +15,23 @@ class Attachment extends Model
     /** @use HasFactory<AttachmentFactory> */
     use HasFactory;
 
-    protected $fillable = ['message_id', 'disk', 'path', 'name', 'mime_type', 'extension', 'size'];
+    protected $fillable = ['message_id', 'disk', 'path', 'name', 'mime_type', 'extension', 'size', 'encrypted'];
 
     protected function casts(): array
     {
-        return ['size' => 'integer'];
+        return ['size' => 'integer', 'encrypted' => 'boolean'];
+    }
+
+    /**
+     * Are the bytes on disk ciphertext?
+     *
+     * Gates every question about *contents*. The stored MIME type of an encrypted attachment
+     * is a placeholder, so asking "is this an image" of one would get a confident, wrong
+     * answer — see {@see isImage()}.
+     */
+    public function isEncrypted(): bool
+    {
+        return (bool) $this->encrypted;
     }
 
     public function message(): BelongsTo
@@ -27,19 +39,28 @@ class Attachment extends Model
         return $this->belongsTo(Message::class);
     }
 
+    /*
+     * What kind of file this is — as far as the *server* can tell.
+     *
+     * All three answer false for an encrypted attachment, and that is the truthful answer
+     * rather than a cautious one: the stored MIME type is a placeholder, so there is nothing
+     * here to be right about. The client learns the real type from the sealed metadata in the
+     * message envelope and renders accordingly, which is the only place it can be known.
+     */
+
     public function isImage(): bool
     {
-        return Str::startsWith($this->mime_type, 'image/');
+        return ! $this->isEncrypted() && Str::startsWith($this->mime_type, 'image/');
     }
 
     public function isPdf(): bool
     {
-        return $this->mime_type === 'application/pdf';
+        return ! $this->isEncrypted() && $this->mime_type === 'application/pdf';
     }
 
     public function isGif(): bool
     {
-        return $this->mime_type === 'image/gif';
+        return ! $this->isEncrypted() && $this->mime_type === 'image/gif';
     }
 
     /**

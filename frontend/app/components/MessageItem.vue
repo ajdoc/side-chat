@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import { Check, CheckCircle2, Copy, CornerUpLeft, Forward, Info, MessagesSquare, MoreHorizontal, Paperclip, Pencil, Pin, PinOff, Rocket, Trash2, X } from 'lucide-vue-next'
-import type { Message, User } from '~/types'
+import { Check, CheckCircle2, Copy, CornerUpLeft, Forward, Info, LockKeyhole, MessagesSquare, MoreHorizontal, Paperclip, Pencil, Pin, PinOff, Rocket, Trash2, X } from 'lucide-vue-next'
+import type { Attachment, Message, User } from '~/types'
 import { memberBadgesKey } from '~/composables/useChannelMembers'
 import { emoteOnly } from '~/lib/spaceEmotes'
 import { Button } from '~/components/ui/button'
@@ -70,10 +70,33 @@ const isSystem = computed(() => props.message.type === 'system')
 // usual rules — but "editing" it would mean typing a body onto a player, which is nonsense.
 const isWidget = computed(() => props.message.type === 'widget')
 // System messages (e.g. "X joined the server") are generated — nobody may edit them.
+// A message this device can't read is one it can't edit either: the editor would open with
+// the base64 envelope in it, and saving would post that as the new text.
+const unreadable = computed(() => props.message.decryption === 'failed')
 const canModify = computed(() =>
-  !isSystem.value && props.currentUserId != null && props.message.user.id === props.currentUserId,
+  !isSystem.value && !unreadable.value && props.currentUserId != null && props.message.user.id === props.currentUserId,
 )
-const attachments = computed(() => props.message.attachments ?? [])
+/**
+ * This message's attachments, with encrypted ones resolved back into real files.
+ *
+ * A plaintext message's attachments are used exactly as they arrive — the common case, and no
+ * copy is made. An encrypted one's are swapped for versions carrying the real name and type
+ * out of the message envelope and a blob URL of the decrypted bytes, so everything below here
+ * (the image grid, the players, the file cards) needs to know nothing about any of it.
+ *
+ * Resolution is async, so the list starts empty and fills in. That is the honest sequence
+ * rather than a flicker to hide: the bytes genuinely aren't there yet.
+ */
+const attachmentCrypto = useAttachmentCrypto()
+const resolvedAttachments = ref<Attachment[]>([])
+
+watchEffect(async () => {
+  resolvedAttachments.value = props.message.encrypted
+    ? await attachmentCrypto.resolve(props.message)
+    : props.message.attachments ?? []
+})
+
+const attachments = computed(() => resolvedAttachments.value)
 
 /**
  * The glyph, if this message is nothing but emoji — else null, and it renders as ordinary text.
@@ -374,6 +397,22 @@ onBeforeUnmount(() => clearTimeout(copiedTimer))
           <span v-if="message.edited" class="align-middle text-[10px] text-muted-foreground">(edited)</span>
         </p>
 
+        <!--
+          Encrypted, and this device has no key for it.
+
+          Drawn as a stated absence rather than as the envelope, which would put a screenful
+          of base64 where somebody's words should be. Ordinary and permanent, not an error:
+          the message was sent to an era this device wasn't part of — before this browser
+          existed, before the person joined, or by a sender whose keys we couldn't verify.
+        -->
+        <p
+          v-else-if="message.decryption === 'failed'"
+          class="flex items-center gap-1.5 py-0.5 text-sm italic text-muted-foreground"
+        >
+          <LockKeyhole class="size-3.5 shrink-0" />
+          Encrypted — this device doesn’t have the key for this message.
+        </p>
+
         <MarkdownBody v-else-if="message.body" :source="message.body" :edited="message.edited" />
 
         <!-- interactive widget card (music player / kanban board) — kept live over the stream -->
@@ -494,7 +533,8 @@ onBeforeUnmount(() => clearTimeout(copiedTimer))
             <Forward class="h-4 w-4" /> Forward
           </DropdownMenuItem>
           <!-- Copy the message text. Only where there's text to copy. -->
-          <DropdownMenuItem v-if="message.body" @select="copyMessage">
+          <!-- `!unreadable`, or "copy" would put a base64 envelope on the clipboard. -->
+          <DropdownMenuItem v-if="message.body && !unreadable" @select="copyMessage">
             <Check v-if="copied" class="h-4 w-4" />
             <Copy v-else class="h-4 w-4" />
             {{ copied ? 'Copied!' : 'Copy text' }}

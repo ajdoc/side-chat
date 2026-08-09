@@ -6,8 +6,6 @@ import {
   Headphones,
   HeadphoneOff,
   Loader2,
-  Maximize,
-  Minimize,
   Mic,
   MicOff,
   PhoneOff,
@@ -18,8 +16,6 @@ import {
   Video,
   VideoOff,
   Volume2,
-  VolumeX,
-  X,
 } from 'lucide-vue-next'
 import type { Channel, Peer, VoiceParticipant } from '~/types'
 import { watchKey } from '~/composables/useCallStage'
@@ -211,8 +207,12 @@ const selfPeer = computed<Peer>(() => ({
  * whenever the watched one became invalid, `watching = null` included — so closing a screen in a
  * voice channel sprang it straight back, and there was no way to dismiss the last one at all.
  * Now closing means closed, and a *newly* started share is what claims the stage again.
+ *
+ * **And it holds several at once** — up to `MAX_WATCHING`, laid out as a grid. Two people sharing
+ * used to mean picking one; now the second joins the first, which is the case that produces two
+ * shares in the first place.
  */
-const { watchables, watching, stage, stageScreenPeer, toggleWatch } = useCallStage({
+const { watchables, watching, stages, stageFull, isWatching, screenPeerFor, toggleWatch, clearWatching } = useCallStage({
   peers: () => peers.value,
   self: () => ({
     sharing: isSharing.value,
@@ -226,42 +226,15 @@ const { watchables, watching, stage, stageScreenPeer, toggleWatch } = useCallSta
   onScreenStarted: () => { collapsed.value = false },
 })
 
-// Whether this machine could hand over the mouse at all — shown on your own share, so the
-// answer arrives before someone asks rather than after. See useRemoteControl.
-const { canGrantControl, grantBlockedReason } = useRemoteControl()
-
-/**
- * The stage stream's intrinsic size, reported by VoiceVideo.
+/*
+ * How the grid is laid out.
  *
- * Only remote control needs it — mapping a click in a letterboxed video onto a point on the
- * sharer's actual screen is impossible without the picture's true aspect. See
- * RemoteControlSurface.toFraction.
+ * One thing on the stage keeps the full width, which is the overwhelmingly common case and the
+ * one that most wants the pixels. Beyond that it's two columns — a shared terminal in a third of
+ * a chat pane is not something anyone can read, so the third and fourth tiles go onto a second
+ * row rather than making every tile narrower.
  */
-const stageDimensions = ref({ width: 0, height: 0 })
-function onStageDimensions(width: number, height: number) {
-  stageDimensions.value = { width, height }
-}
-
-// --- fullscreen ---
-
-const stageEl = ref<HTMLElement | null>(null)
-const isFullscreen = ref(false)
-
-function toggleFullscreen() {
-  // Your own *screen* is a placeholder, never live video — fullscreening your own capture is
-  // the hall-of-mirrors that flickered the app. Your own camera is fine: it's a plain stream.
-  if (stage.value?.owner === 'self' && stage.value.kind === 'screen') return
-  if (document.fullscreenElement) void document.exitFullscreen().catch(() => {})
-  else void stageEl.value?.requestFullscreen().catch(() => {})
-}
-
-// Track it rather than assume: the user can leave fullscreen with Esc, and the browser's
-// own controls, without ever touching our button.
-function onFullscreenChange() {
-  isFullscreen.value = document.fullscreenElement === stageEl.value
-}
-onMounted(() => document.addEventListener('fullscreenchange', onFullscreenChange))
-onUnmounted(() => document.removeEventListener('fullscreenchange', onFullscreenChange))
+const stageColumns = computed(() => stages.value.length > 1 ? 'grid-cols-2' : 'grid-cols-1')
 
 // Names follow whatever people are called in this server or chat — see useNicknames.
 const { nameFor } = useNicknames()
@@ -371,123 +344,41 @@ const deafenedCount = computed(() => waiting.value.filter(p => p.deafened).lengt
       </div>
 
       <div v-if="!collapsed" class="flex flex-col gap-3 px-4 pb-3">
-        <!-- Someone's screen, if anyone is sharing one — and you haven't chosen not to watch. -->
-        <section v-if="stage" class="flex flex-col gap-1.5">
-          <div
-            ref="stageEl"
-            class="group relative overflow-hidden bg-black"
-            :class="isFullscreen ? 'h-screen w-screen' : 'aspect-video max-h-[45vh] rounded-lg border'"
-          >
-            <!--
-              Your own screen is shown as a still note, never played back live: a whole-screen
-              or window capture that includes this very window turns into an endless hall of
-              mirrors, and fullscreen made it fill the display and flicker. You know what's on
-              your screen — everyone else sees the real thing on their stage.
-            -->
-            <div v-if="stage.owner === 'self' && stage.kind === 'screen'" class="grid h-full w-full place-items-center gap-2 text-center text-white/70">
-              <div class="flex flex-col items-center gap-2">
-                <ScreenShare class="h-8 w-8" />
-                <p class="text-sm font-medium text-white">You're sharing your screen</p>
-                <p class="text-xs text-white/60">Everyone else in the call can see it.</p>
-                <!-- Say now whether anyone could take the wheel, rather than at the moment
-                     someone asks and the Allow button turns out to be dead. -->
-                <p class="max-w-xs text-xs" :class="canGrantControl ? 'text-white/60' : 'text-amber-300/80'">
-                  {{ canGrantControl ? 'You can hand someone control if they ask.' : grantBlockedReason }}
-                </p>
-              </div>
-            </div>
-            <!-- Your own face is mirrored, like every self-view; nobody else's is. -->
-            <VoiceVideo
-              v-else
-              :stream="stage.stream"
-              :class="stage.owner === 'self' ? '-scale-x-100' : ''"
-              @dimensions="onStageDimensions"
+        <!-- Whatever you're watching — screens and faces, up to four of them side by side. -->
+        <section v-if="stages.length" class="flex flex-col gap-1.5">
+          <div class="grid gap-1.5" :class="stageColumns">
+            <CallStageTile
+              v-for="w in stages"
+              :key="w.key"
+              :watchable="w"
+              :screen-peer="screenPeerFor(w)"
+              :picture-class="stages.length > 1 ? 'max-h-[30vh]' : 'max-h-[45vh]'"
+              @close="toggleWatch(w.owner, w.kind)"
             />
-
-            <!-- The remote-control input layer. Renders only while you actually hold control of
-                 *this* peer's screen, and sits above the hover controls so a click meant for
-                 their desktop can't land on our own fullscreen button. -->
-            <RemoteControlSurface
-              v-if="stageScreenPeer"
-              :peer-id="stageScreenPeer.id"
-              :video-width="stageDimensions.width"
-              :video-height="stageDimensions.height"
-            />
-
-            <!-- Stop watching: hide just the screen and keep the call. Re-watch from any
-                 sharer's tile below. -->
-            <button
-              type="button"
-              class="absolute left-2 top-2 grid h-8 w-8 place-items-center rounded-md bg-black/50 text-white opacity-0 reveal-touch transition hover:bg-black/70 focus:opacity-100 group-hover:opacity-100"
-              :title="stage.kind === 'camera' ? 'Take them off the main screen' : 'Stop watching this screen'"
-              @click="watching = null"
-            >
-              <X class="h-4 w-4" />
-            </button>
-
-            <!-- Fullscreen toggle: peers' screens only (your own is a placeholder). Appears on
-                 hover, and works while fullscreen too. -->
-            <button
-              v-if="!(stage.owner === 'self' && stage.kind === 'screen')"
-              type="button"
-              class="absolute right-2 top-2 grid h-8 w-8 place-items-center rounded-md bg-black/50 text-white opacity-0 reveal-touch transition hover:bg-black/70 focus:opacity-100 group-hover:opacity-100"
-              :title="isFullscreen ? 'Exit fullscreen' : 'Fullscreen'"
-              @click="toggleFullscreen"
-            >
-              <Minimize v-if="isFullscreen" class="h-4 w-4" />
-              <Maximize v-else class="h-4 w-4" />
-            </button>
           </div>
-          <div class="flex items-center gap-2">
-            <span class="shrink-0 text-xs text-muted-foreground">{{ stage.name }}</span>
 
-            <!-- Ask to drive it. Only ever a peer's screen — controlling your own is nothing. -->
-            <RemoteControlButton v-if="stageScreenPeer" :peer-id="stageScreenPeer.id" />
+          <div class="flex flex-wrap items-center gap-2">
+            <!-- Clear the lot without leaving the call. Only worth a button once there's more
+                 than one to clear; a single tile has its own X. -->
+            <button
+              v-if="stages.length > 1"
+              type="button"
+              class="shrink-0 rounded px-2 py-0.5 text-xs text-muted-foreground transition hover:bg-muted hover:text-foreground"
+              title="Stop watching everything and keep the call"
+              @click="clearWatching()"
+            >
+              Clear stage
+            </button>
 
-            <!-- How loud their shared screen plays, for you alone — separate from their voice,
-                 and with its own switch for turning the sound off while you keep watching. -->
-            <div v-if="stageScreenPeer" class="flex min-w-0 items-center gap-1.5">
-              <button
-                type="button"
-                class="shrink-0 rounded p-0.5 transition"
-                :class="stageScreenPeer.screenMuted ? 'text-destructive' : 'text-muted-foreground hover:text-foreground'"
-                :title="stageScreenPeer.screenMuted
-                  ? 'Hear this screen again'
-                  : 'Mute this screen\'s sound — you\'ll still hear everyone talking'"
-                @click="togglePeerScreenMute(stageScreenPeer.id)"
-              >
-                <VolumeX v-if="stageScreenPeer.screenMuted" class="h-3.5 w-3.5" />
-                <Volume2 v-else class="h-3.5 w-3.5" />
-              </button>
-              <input
-                type="range"
-                min="0"
-                max="1"
-                step="0.01"
-                :value="stageScreenPeer.screenVolume"
-                :disabled="stageScreenPeer.screenMuted"
-                class="h-1 w-24 cursor-pointer appearance-none rounded-full bg-muted accent-primary disabled:cursor-not-allowed disabled:opacity-40"
-                :aria-label="`Shared screen volume for ${stageScreenPeer.name}`"
-                :title="stageScreenPeer.screenMuted ? 'Screen sound: off' : `Screen sound: ${Math.round(stageScreenPeer.screenVolume * 100)}%`"
-                @input="setPeerScreenVolume(stageScreenPeer.id, Number(($event.target as HTMLInputElement).value))"
-              >
-            </div>
-
-            <!-- More than one thing to look at — screens and faces both: pick. -->
-            <div v-if="watchables.length > 1" class="ml-auto flex flex-wrap gap-1">
-              <button
-                v-for="w in watchables"
-                :key="w.key"
-                type="button"
-                class="flex items-center gap-1 rounded px-2 py-0.5 text-xs transition"
-                :class="w.key === watching ? 'bg-primary text-primary-foreground' : 'bg-muted text-muted-foreground hover:bg-muted/70'"
-                @click="watching = w.key"
-              >
-                <ScreenShare v-if="w.kind === 'screen'" class="h-3 w-3 shrink-0" />
-                <Video v-else class="h-3 w-3 shrink-0" />
-                {{ w.name }}
-              </button>
-            </div>
+            <!-- Everything you could be watching, and everything you are. -->
+            <CallStagePicker
+              v-if="watchables.length > 1"
+              class="ml-auto"
+              :watchables="watchables"
+              :watching="watching"
+              :full="stageFull"
+              @toggle="toggleWatch($event.owner, $event.kind)"
+            />
           </div>
         </section>
 
@@ -502,8 +393,8 @@ const deafenedCount = computed(() => waiting.value.filter(p => p.deafened).lengt
             :speaking="selfSpeaking"
             :muted="!micOpen"
             :sharing="isSharing"
-            :watching="watching === watchKey('self', 'screen')"
-            :pinned="watching === watchKey('self', 'camera')"
+            :watching="isWatching(watchKey('self', 'screen'))"
+            :pinned="isWatching(watchKey('self', 'camera'))"
             @watch="toggleWatch('self', 'screen')"
             @pin="toggleWatch('self', 'camera')"
           />
@@ -514,8 +405,8 @@ const deafenedCount = computed(() => waiting.value.filter(p => p.deafened).lengt
             :speaking="peer.speaking"
             :muted="peer.muted"
             :sharing="peer.screenSharing"
-            :watching="watching === watchKey(peer.id, 'screen')"
-            :pinned="watching === watchKey(peer.id, 'camera')"
+            :watching="isWatching(watchKey(peer.id, 'screen'))"
+            :pinned="isWatching(watchKey(peer.id, 'camera'))"
             :can-moderate="canModerate"
             @toggle-mute="togglePeerMute(peer.id)"
             @set-volume="setPeerVolume(peer.id, $event)"

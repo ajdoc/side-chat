@@ -275,6 +275,38 @@ Route::middleware('auth:api')->group(function () {
     Route::put('channels/{channel}/encryption', [EncryptionController::class, 'toggle']);
 
     /*
+     * The key directory.
+     *
+     * Public halves and sealed blobs only — the server is a post box here, not a party to
+     * anything. Registration is about the caller's own device (the account comes from the
+     * token, never the payload); everything channel-scoped is gated on membership, because
+     * fetching bundles *consumes* other people's one-time prekeys and an open version would
+     * let anyone drain the server's forward secrecy. See EncryptionKeyService.
+     */
+    Route::put('encryption/devices', [EncryptionController::class, 'registerDevice']);
+    Route::post('encryption/devices/prekeys', [EncryptionController::class, 'storePrekeys']);
+
+    // POST, not GET, and deliberately: each bundle returned burns a one-time prekey.
+    Route::post('channels/{channel}/encryption/bundles', [EncryptionController::class, 'bundles']);
+    // Read-only, and consumes nothing — what the safety-number screen asks for. Pointing that
+    // screen at `bundles` above would drain a one-time prekey per glance.
+    Route::get('channels/{channel}/encryption/identities', [EncryptionController::class, 'identities']);
+    Route::post('channels/{channel}/encryption/sender-keys', [EncryptionController::class, 'distribute']);
+    Route::post('channels/{channel}/encryption/inbox', [EncryptionController::class, 'inbox']);
+
+    /*
+     * Key backup — the passphrase-escrow half of "what happens on a new device".
+     *
+     * A wrapped blob the server cannot read, one row per account, replaced rather than
+     * appended. Opting out means simply never calling these: no row exists, and the person
+     * keeps a downloaded recovery file instead. See the key_backups migration for the honest
+     * account of what escrow costs.
+     */
+    Route::get('encryption/backup', [EncryptionController::class, 'showBackup']);
+    Route::put('encryption/backup', [EncryptionController::class, 'storeBackup']);
+    Route::delete('encryption/backup', [EncryptionController::class, 'destroyBackup']);
+
+    /*
      * Discussions: the conversations inside a channel. A discussion *is* a channel, so
      * everything below this line in the file already works on one addressed by its own id —
      * these three routes are only what a discussion has that a channel doesn't.

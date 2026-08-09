@@ -46,12 +46,45 @@ final class AttachmentService
             $message->attachments()->create([
                 'disk' => $disk,
                 'path' => $path,
-                'name' => $file->getClientOriginalName(),
-                'mime_type' => $file->getMimeType() ?: 'application/octet-stream',
-                'extension' => strtolower($file->getClientOriginalExtension()) ?: null,
                 'size' => $file->getSize(),
+                ...$this->describe($message, $file->getClientOriginalName(), $file->getMimeType(), $file->getClientOriginalExtension()),
             ]);
         }
+    }
+
+    /**
+     * The name, type and extension to record — the file's own, or nothing at all.
+     *
+     * On an encrypted message the bytes arriving here are already ciphertext, and the three
+     * descriptive fields are deliberately thrown away rather than stored. A filename is
+     * frequently the most sensitive thing about a document, and keeping "Q3 redundancies.xlsx"
+     * in a plaintext column beside an encrypted file would give away most of what the
+     * encryption was for. The real values travel sealed inside the message envelope and reach
+     * only somebody who can already read the message.
+     *
+     * The MIME type is flattened to `application/octet-stream` for the same reason, and with
+     * a second benefit: every "is this an image" check in the app answers no, so nothing
+     * downstream tries to render, thumbnail or unfurl a file it cannot read.
+     *
+     * @return array<string, mixed>
+     */
+    private function describe(Message $message, string $name, ?string $mime, ?string $extension): array
+    {
+        if ($message->isEncrypted()) {
+            return [
+                'name' => 'Encrypted file',
+                'mime_type' => 'application/octet-stream',
+                'extension' => null,
+                'encrypted' => true,
+            ];
+        }
+
+        return [
+            'name' => $name,
+            'mime_type' => $mime ?: 'application/octet-stream',
+            'extension' => strtolower((string) $extension) ?: null,
+            'encrypted' => false,
+        ];
     }
 
     /**
@@ -98,10 +131,10 @@ final class AttachmentService
             $message->attachments()->create([
                 'disk' => $upload->disk,
                 'path' => $path,
-                'name' => $upload->name,
-                'mime_type' => $upload->mime_type,
-                'extension' => $upload->extension,
                 'size' => $upload->size,
+                // Same scrubbing as the direct path: a large file is no less revealing for
+                // having arrived in pieces.
+                ...$this->describe($message, $upload->name, $upload->mime_type, $upload->extension),
             ]);
 
             $upload->delete();

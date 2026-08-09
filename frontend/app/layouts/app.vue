@@ -3,6 +3,7 @@ import {
   AudioLines,
   Bot,
   Check, ChevronDown, ChevronRight, Copy, DoorOpen, Hash, HeadphoneOff, Lock, LogOut,
+  KeyRound,
   LayoutList,
   Map as MapIcon,
   MessageSquarePlus, MessagesSquare, MicOff, Monitor, Moon, Pencil, Phone, Plus, ScreenShare, Search, Shield, Sun, Trash2,
@@ -542,6 +543,7 @@ const showRenameChannel = ref(false)
 // more inline dialogs here: each fetches something (an allow-list, a roster with roles)
 // that only the people who can open it are allowed to see.
 const accessChannel = ref<Channel | null>(null)
+const showKeyBackup = ref(false)
 const rolesServer = ref<Server | null>(null)
 // Bots, likewise its own component: it fetches tokens' worth of settings only the owner
 // may see, and it's the one screen where a secret is shown.
@@ -1370,6 +1372,15 @@ onBeforeUnmount(() => { userStream.unsubscribe(); stopPresence() })
             <DropdownMenuItem @select="askEditProfile">
               <User class="mr-2 h-4 w-4" /> Profile
             </DropdownMenuItem>
+            <!--
+              Encryption keys. Reachable from the account menu rather than from any one
+              conversation, because it is an account-wide answer to "what happens on a new
+              device" — and somebody who needs it most is often looking at a channel full of
+              messages they cannot read.
+            -->
+            <DropdownMenuItem @select="showKeyBackup = true">
+              <KeyRound class="mr-2 h-4 w-4" /> Encryption keys
+            </DropdownMenuItem>
             <DropdownMenuItem class="text-destructive focus:text-destructive" @select="logout">
               <LogOut class="mr-2 h-4 w-4" /> Sign out
             </DropdownMenuItem>
@@ -1487,6 +1498,7 @@ onBeforeUnmount(() => { userStream.unsubscribe(); stopPresence() })
     <!-- Who may be in a channel (staff), and who runs the server (owner). Mounted here
          beside the shelf so they survive the sidebar row that opened them being re-rendered. -->
     <ChannelAccessDialog v-if="accessChannel" :channel="accessChannel" @close="accessChannel = null" />
+    <KeyBackupDialog v-if="showKeyBackup" @close="showKeyBackup = false" />
     <ServerRolesDialog v-if="rolesServer" :server="rolesServer" :channel-id="activeChannelId ?? channels[0]?.id ?? null" @close="rolesServer = null" />
     <ServerBotsDialog v-if="botsServer" :server="botsServer" @close="botsServer = null" />
     <ServerBotDashboard

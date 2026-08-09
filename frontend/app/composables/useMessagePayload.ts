@@ -103,4 +103,26 @@ export function isFormData(v: unknown): v is FormData {
   return typeof FormData !== 'undefined' && v instanceof FormData
 }
 
+/**
+ * Swap the body of an already-built payload.
+ *
+ * For encryption, which has to happen *after* chunking — the split is over the plaintext,
+ * where the paragraph breaks are, and encrypting first would chunk base64 into pieces that
+ * decrypt to nothing. Each part is its own message with its own ratchet step, so each gets
+ * its own envelope, and this puts it back into whichever payload shape the part had.
+ */
+export function setPayloadBody(
+  payload: FormData | Record<string, unknown>,
+  body: string | null | undefined,
+): FormData | Record<string, unknown> {
+  if (isFormData(payload)) {
+    if (body == null) payload.delete('body')
+    else payload.set('body', body)
+
+    return payload
+  }
+
+  return { ...payload, body }
+}
+
 export type { Message }

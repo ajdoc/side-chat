@@ -20,7 +20,7 @@
 // 3. Screen sharing needs a source picker. Chromium's own picker isn't available to an
 //    Electron app, so `setDisplayMediaRequestHandler` supplies one.
 
-const { app, BrowserWindow, desktopCapturer, ipcMain, net, protocol, session, shell } = require('electron')
+const { app, BrowserWindow, desktopCapturer, ipcMain, net, protocol, safeStorage, session, shell } = require('electron')
 const http = require('node:http')
 const fs = require('node:fs')
 const fsp = require('node:fs/promises')
@@ -105,6 +105,7 @@ app.whenReady().then(async () => {
   provideScreenSources(partition)
   provideRemoteControl()
   provideUploads()
+  provideSecrets()
   createWindow()
 
   app.on('activate', () => {
@@ -379,6 +380,72 @@ function provideRemoteControl() {
  * would copy it twice and be structured-cloned in between. Each `write` resolves only once the
  * socket has taken the slice, which is what paces the renderer's reads to the network.
  */
+/**
+ * Secrets the page needs kept out of its own profile directory.
+ *
+ * Exactly one thing uses this today: the encryption vault key, which wraps the sender chain
+ * keys sitting in IndexedDB. Those keys have to exist as bytes — the message ratchet derives
+ * from them — so on the web they are readable by anyone who can read the profile folder.
+ * Here they aren't, because the key that unlocks them lives in the OS keychain instead.
+ *
+ * `safeStorage` is Electron's front end to Keychain on macOS, DPAPI on Windows and
+ * libsecret/kwallet on Linux. It encrypts *for this application on this machine*, which is
+ * the property that matters: copying the profile directory to another computer gets you
+ * ciphertext and nothing else.
+ *
+ * The encrypted blob is written next to the app's own data rather than into the keychain
+ * itself — that is how safeStorage is meant to be used, and it is why the Linux case degrades
+ * gracefully: with no secret service running, `isEncryptionAvailable()` is false, this bridge
+ * says so, and the app falls back to unwrapped keys rather than losing them.
+ */
+function provideSecrets() {
+  const file = path.join(app.getPath('userData'), 'secrets.json')
+
+  /** The whole store, or an empty one. A corrupt file is treated as absent, deliberately. */
+  function read() {
+    try {
+      return JSON.parse(fs.readFileSync(file, 'utf8'))
+    } catch {
+      // Missing is the ordinary first-launch case. Unparseable means somebody or something
+      // damaged it, and there is nothing to recover — starting fresh loses the vault key and
+      // therefore the local chain keys, which is bad, but guessing at half a file is worse.
+      return {}
+    }
+  }
+
+  ipcMain.handle('secrets:available', () => safeStorage.isEncryptionAvailable())
+
+  ipcMain.handle('secrets:get', (_event, name) => {
+    if (typeof name !== 'string') return null
+
+    const stored = read()[name]
+    if (typeof stored !== 'string') return null
+
+    try {
+      return safeStorage.decryptString(Buffer.from(stored, 'base64'))
+    } catch {
+      // Written under a keychain this machine no longer has — a restored profile, a reset
+      // keyring. Unreadable rather than an error: the caller mints a new vault key, and the
+      // chains sealed under the old one are gone. See the note in keyStore.reveal().
+      return null
+    }
+  })
+
+  ipcMain.handle('secrets:set', (_event, name, value) => {
+    if (typeof name !== 'string' || typeof value !== 'string') return false
+    if (!safeStorage.isEncryptionAvailable()) return false
+
+    const store = read()
+    store[name] = safeStorage.encryptString(value).toString('base64')
+
+    // Written 0600: the OS has already encrypted the contents, but there is no reason for
+    // another account on the machine to be able to read even the ciphertext.
+    fs.writeFileSync(file, JSON.stringify(store), { mode: 0o600 })
+
+    return true
+  })
+}
+
 function provideUploads() {
   /** In-flight PUTs by id. One per upload; the renderer stages files one at a time. */
   const inFlight = new Map()

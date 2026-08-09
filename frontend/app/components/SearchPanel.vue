@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { CornerUpLeft, Filter, FolderOpen, Hash, Image as ImageIcon, Link2, Loader2, MessagesSquare, Paperclip, Search, Sparkles, X } from 'lucide-vue-next'
+import { CornerUpLeft, Filter, FolderOpen, Hash, Image as ImageIcon, Link2, Loader2, LockKeyhole, MessagesSquare, Paperclip, Search, Sparkles, X } from 'lucide-vue-next'
 import type { SearchFilters, SearchHas, SearchMessage, SearchSurface } from '~/types'
 import { Button } from '~/components/ui/button'
 import { Input } from '~/components/ui/input'
@@ -28,7 +28,7 @@ const { nameFor } = useNicknames()
 const { members, load: loadMembers } = useChannelMembers()
 const { server } = useServer()
 
-const { messages, surfaces, loading, hasMore, searchMessages, searchSurfaces, debounced, reset, MIN_TERM } = useSearch()
+const { messages, surfaces, encryptedSkipped, loading, hasMore, searchMessages, searchSurfaces, debounced, reset, MIN_TERM } = useSearch()
 
 const raw = ref('')
 // The `Input` component's ref is the component; the element it wraps is its `$el`.
@@ -332,6 +332,25 @@ onBeforeUnmount(reset)
 
       <p v-else-if="!messages.length && !surfaces.length && !tooShort" class="py-6 text-center text-sm text-muted-foreground">
         Nothing found.
+      </p>
+
+      <!--
+        The blind spot, stated.
+
+        Encrypted messages can't be searched by the server and never will be — it has no keys.
+        Leaving this out would make "your search missed it" indistinguishable from "you never
+        said it", which is the wrong thing to let somebody conclude about their own history.
+      -->
+      <p
+        v-if="encryptedSkipped > 0 && !tooShort"
+        class="mb-2 flex items-start gap-1.5 rounded-md border bg-muted/40 px-2.5 py-2 text-xs text-muted-foreground"
+      >
+        <LockKeyhole class="mt-0.5 size-3 shrink-0" />
+        <span>
+          {{ encryptedSkipped }} encrypted
+          {{ encryptedSkipped === 1 ? 'message was' : 'messages were' }} not searched.
+          Encrypted messages can only be read on your own devices.
+        </span>
       </p>
 
       <!-- Places matching the same words, above the messages. Titles are what people

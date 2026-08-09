@@ -35,7 +35,23 @@ class MessageController extends Controller
         );
 
         return MessageResource::collection($page['messages'])
-            ->additional(['has_more' => $page['has_more'], 'has_newer' => $page['has_newer']]);
+            ->additional([
+                'has_more' => $page['has_more'],
+                'has_newer' => $page['has_newer'],
+                /*
+                 * Whether a message sent into this channel *now* would be encrypted.
+                 *
+                 * Rides on the timeline rather than being left for the client to carry
+                 * alongside, because not every client has the channel to hand — a popped-out
+                 * conversation window is opened by id and nothing else. A composer that
+                 * assumed "not encrypted" because it hadn't been told would post in the clear
+                 * under a padlock, which is the one failure this feature cannot have.
+                 */
+                'encryption' => [
+                    'encrypted' => $channel->isEncrypted(),
+                    'epoch' => (int) $channel->encryption_epoch,
+                ],
+            ]);
     }
 
     public function store(StoreMessageRequest $request, Channel $channel, SendMessageAction $action): MessageResource
