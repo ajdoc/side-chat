@@ -49,7 +49,14 @@ export function usePushNotifications() {
       ? true
       : (await push.requestPermissions()).receive === 'granted'
 
-    if (!granted) return false
+    if (!granted) {
+      // A declined prompt is final until the user changes it in system settings, and it
+      // leaves no trace anywhere else — so it is the first thing to check when a device
+      // never appears in the registry.
+      console.warn('[SideChat] notification permission not granted; push is off for this install')
+
+      return false
+    }
 
     bind(push)
     await push.register()
@@ -74,16 +81,24 @@ export function usePushNotifications() {
       await api('/api/device-tokens', {
         method: 'POST',
         body: { token: token.value, platform: 'android' },
-      }).catch(() => {
-        // Offline at launch is the common case here. The next launch registers again, and
-        // until then the badge and the live socket cover everything the push would have.
+      }).catch((e: any) => {
+        // Offline at launch is the common case, and not worth interrupting anyone over: the
+        // next launch registers again, and until then the badge and the live socket cover
+        // everything the push would have.
+        //
+        // But it is worth *saying*. A silently swallowed failure here is indistinguishable
+        // from a phone that never asked — both look like an empty device_tokens table — and
+        // that ambiguity costs an afternoon. `adb logcat | grep SideChat` finds this line.
+        console.warn('[SideChat] push registration failed:', e?.status ?? '', e?.data ?? e)
         registered.value = null
       })
     })
 
-    push.addListener('registrationError', () => {
-      // Almost always a build with no google-services.json. Nothing the user can do, and
-      // nothing worth interrupting them over — the app works, it just won't buzz.
+    push.addListener('registrationError', (err: unknown) => {
+      // Usually a build with no google-services.json, or a Play Services that can't reach
+      // Google. Nothing the user can do about either, so it stays out of the UI — but it
+      // goes to the log for the same reason as above.
+      console.warn('[SideChat] FCM would not issue a token:', err)
       registered.value = null
     })
 
