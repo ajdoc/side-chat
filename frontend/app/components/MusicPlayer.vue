@@ -135,6 +135,10 @@ let stalledTicks = 0
 // shared engine, so every mounted player agrees on whether Spotify is usable.
 const spotifyEligible = computed(() =>
   spotifyStatus.value.linked && !spotify.accountError.value && !spotify.authError.value && !spotify.deviceError.value
+  // A runtime with no Widevine CDM cannot decrypt Spotify's stream — the desktop shell,
+  // in practice. Same treatment as a free account: fall through to YouTube, which needs
+  // no DRM and plays the same track.
+  && !spotify.drmError.value
   && !!current.value?.spotifyUri && (state.value.speed ?? 1) === 1,
 )
 // Which engine actually plays for *this* viewer right now.
@@ -503,6 +507,10 @@ const loopIcon = computed(() => (state.value.loop === 'track' ? Repeat1 : Repeat
 const spotifyOffer = computed(() => {
   if (!current.value?.spotifyUri) return null
   if (!spotifyStatus.value.linked) return 'connect'
+  // Ordered before the account check: on a build with no CDM the SDK never gets far enough
+  // to report whether the account can stream, so "Premium required" would be a guess — and
+  // the wrong one for a Premium listener on the desktop app.
+  if (spotify.drmError.value) return 'drm'
   return spotify.accountError.value ? 'premium' : null
 })
 // A recoverable Spotify failure a reconnect can fix — a rejected token or an unplayable
@@ -752,6 +760,11 @@ onBeforeUnmount(() => {
         </button>
         <p v-else-if="spotifyOffer === 'premium'" class="mt-2 text-center text-[10px] text-muted-foreground">
           Spotify Premium is required for original playback — using YouTube.
+        </p>
+        <!-- Said plainly rather than left as silence: the account *is* connected and does work
+             in the browser, so an unexplained fallback reads as the link being broken. -->
+        <p v-else-if="spotifyOffer === 'drm'" class="mt-2 text-center text-[10px] text-muted-foreground">
+          The desktop app can't play Spotify's protected audio — using YouTube. Spotify works in the browser.
         </p>
       </template>
 

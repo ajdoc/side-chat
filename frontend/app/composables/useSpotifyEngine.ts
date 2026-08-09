@@ -40,6 +40,7 @@ let playbackState: Ref<{ position: number, duration: number, paused: boolean } |
 let accountError: Ref<boolean>
 let authError: Ref<boolean>
 let deviceError: Ref<boolean>
+let drmError: Ref<boolean>
 
 function bindState() {
   // The SDK reported this account can't stream (not Premium) — fall back to YouTube for good.
@@ -48,6 +49,9 @@ function bindState() {
   authError ??= useState('spotify:authError', () => false)
   // The device 404s even after a transfer — a ghost/mismatched device; a reconnect re-registers.
   deviceError ??= useState('spotify:deviceError', () => false)
+  // This runtime cannot decrypt Spotify's stream at all — see probeDrm(). Terminal like
+  // accountError rather than recoverable like deviceError: no reconnect grows a CDM.
+  drmError ??= useState('spotify:drmError', () => false)
   ready ??= useState('spotify:ready', () => false)
   deviceId ??= useState<string | null>('spotify:deviceId', () => null)
   playbackState ??= useState<{ position: number, duration: number, paused: boolean } | null>('spotify:playbackState', () => null)
@@ -80,10 +84,53 @@ async function cachedToken(): Promise<string | null> {
   return t
 }
 
+/**
+ * Can this runtime play DRM audio at all?
+ *
+ * Spotify's Web Playback SDK decrypts through EME, which needs a Widevine CDM. Every
+ * browser we care about ships one; **stock Electron does not**, so the desktop build fails
+ * deep inside the SDK with "No supported keysystem was found" — an unhandled rejection with
+ * no listener attached, which is why the symptom was silence rather than a fallback.
+ *
+ * Asked once and cached. The answer is a property of the build, not of the account or the
+ * network, so it cannot change within a session.
+ */
+let drmProbe: Promise<boolean> | null = null
+
+function probeDrm(): Promise<boolean> {
+  drmProbe ??= (async () => {
+    if (typeof navigator === 'undefined' || !navigator.requestMediaKeySystemAccess) return false
+
+    try {
+      await navigator.requestMediaKeySystemAccess('com.widevine.alpha', [{
+        initDataTypes: ['cenc'],
+        audioCapabilities: [{ contentType: 'audio/mp4; codecs="mp4a.40.2"' }],
+      }])
+
+      return true
+    }
+    catch {
+      // Thrown, not returned, when no key system matches. An Electron build without the
+      // Widevine CDM lands here every time.
+      return false
+    }
+  })()
+
+  return drmProbe
+}
+
 async function ensure(): Promise<void> {
   if (player || !linkedRef?.value) return
   if (creating) return creating
   creating = (async () => {
+    // Before the SDK loads, not after: once it has a track it throws from inside its own
+    // promise chain, and there is nothing to catch it with.
+    if (!await probeDrm()) {
+      drmError.value = true
+
+      return
+    }
+
     const Spotify = await $spotify.ready()
     if (player) return // a concurrent ensure() won the race
     player = new Spotify.Player({
@@ -276,6 +323,8 @@ function teardown(): void {
   tokenCache = null
   authError.value = false
   deviceError.value = false
+  // Deliberately not drmError: a reconnect cannot give this build a CDM, and clearing it
+  // would put us back into a loop of trying Spotify and falling silent.
 }
 
 export function useSpotifyEngine() {
@@ -294,6 +343,7 @@ export function useSpotifyEngine() {
     accountError,
     authError,
     deviceError,
+    drmError,
     ensure,
     reconcile,
     idle,
