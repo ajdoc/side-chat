@@ -111,7 +111,13 @@ class TestPush extends Command
 
     private function send(FcmSender $sender, string $target): int
     {
-        $user = User::where('email', $target)->orWhere('id', $target)->first();
+        // The id clause is only added when the argument could *be* an id. Postgres compares
+        // bigint strictly and errors on a string it can't cast, so an `or id = <email>` is
+        // not a miss that returns nothing — it's a 22P02 that takes the whole query down.
+        $user = User::query()
+            ->where('email', $target)
+            ->when(ctype_digit($target), fn ($q) => $q->orWhere('id', (int) $target))
+            ->first();
 
         if ($user === null) {
             $this->error("No user matches \"{$target}\".");
@@ -156,9 +162,8 @@ class TestPush extends Command
     /** The pipeline's private steps are worth testing individually, and only from here. */
     private function invoke(FcmSender $sender, string $method, mixed ...$args): mixed
     {
-        $reflection = new \ReflectionMethod(FcmSender::class, $method);
-        $reflection->setAccessible(true);
-
-        return $reflection->invoke($sender, ...$args);
+        // No setAccessible(): private methods have been reachable through reflection since
+        // PHP 8.1, and the call is deprecated as of 8.5.
+        return (new \ReflectionMethod(FcmSender::class, $method))->invoke($sender, ...$args);
     }
 }
