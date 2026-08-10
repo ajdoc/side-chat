@@ -1,6 +1,7 @@
 <?php
 
 use App\Events\SideSpaceMapUpdated;
+use App\Events\SideSpaceSummoned;
 use App\Events\VoiceStateUpdated;
 use App\Models\Channel;
 use App\Models\SideSpaceMap;
@@ -1140,4 +1141,110 @@ it('serves a complete look for somebody who has never chosen one', function () {
         ->assertOk()
         ->assertJsonPath('data.space_avatar.body', 'slim')
         ->assertJsonPath('data.space_pet', null);
+});
+
+// --- summoning the room ---
+
+/*
+ * "Everyone follow me" is the one thing in a Side Space that moves somebody else's avatar
+ * without asking them, so what's worth testing is not that it works but that it is *shut*: a
+ * member who could call this could drag the room around, which is the whole reason it's an
+ * endpoint rather than one more peer-to-peer whisper alongside the movement ones.
+ */
+
+it('lets staff summon the room', function () {
+    Event::fake([SideSpaceSummoned::class]);
+
+    [$owner, , $channel] = ownerWithSpaceChannel();
+    Passport::actingAs($owner);
+
+    $this->postJson("/api/channels/{$channel->id}/space/summon", [
+        'user_ids' => null,
+        'following' => true,
+    ])->assertNoContent();
+
+    Event::assertDispatched(SideSpaceSummoned::class, function (SideSpaceSummoned $event) use ($channel, $owner) {
+        // A null list is the room, and it travels as null rather than as a roster: every client
+        // already knows who is standing in there.
+        return $event->channelId === $channel->id
+            && $event->leader->is($owner)
+            && $event->userIds === null
+            && $event->following === true;
+    });
+});
+
+it('refuses a plain member the room', function () {
+    Event::fake([SideSpaceSummoned::class]);
+
+    [, $server, $channel] = ownerWithSpaceChannel();
+    $member = User::factory()->create();
+    $server->members()->attach($member->id, ['role' => 'member']);
+
+    Passport::actingAs($member);
+
+    $this->postJson("/api/channels/{$channel->id}/space/summon", [
+        'user_ids' => null,
+        'following' => true,
+    ])->assertForbidden();
+
+    Event::assertNotDispatched(SideSpaceSummoned::class);
+});
+
+it('refuses a stranger to the server', function () {
+    Event::fake([SideSpaceSummoned::class]);
+
+    [, , $channel] = ownerWithSpaceChannel();
+
+    Passport::actingAs(User::factory()->create());
+
+    $this->postJson("/api/channels/{$channel->id}/space/summon", [
+        'user_ids' => null,
+        'following' => true,
+    ])->assertForbidden();
+
+    Event::assertNotDispatched(SideSpaceSummoned::class);
+});
+
+it('carries the named few when only some are summoned', function () {
+    Event::fake([SideSpaceSummoned::class]);
+
+    [$owner, , $channel] = ownerWithSpaceChannel();
+    Passport::actingAs($owner);
+
+    $this->postJson("/api/channels/{$channel->id}/space/summon", [
+        'user_ids' => [7, 9],
+        'following' => true,
+    ])->assertNoContent();
+
+    Event::assertDispatched(SideSpaceSummoned::class, fn (SideSpaceSummoned $event) => $event->userIds === [7, 9]);
+});
+
+it('releases with the same call, the other way round', function () {
+    Event::fake([SideSpaceSummoned::class]);
+
+    [$owner, , $channel] = ownerWithSpaceChannel();
+    Passport::actingAs($owner);
+
+    $this->postJson("/api/channels/{$channel->id}/space/summon", [
+        'user_ids' => null,
+        'following' => false,
+    ])->assertNoContent();
+
+    Event::assertDispatched(SideSpaceSummoned::class, fn (SideSpaceSummoned $event) => $event->following === false);
+});
+
+it('is not a thing you can do to a channel nobody walks around in', function () {
+    Event::fake([SideSpaceSummoned::class]);
+
+    [$owner, $server] = ownerWithServer();
+    $text = Channel::factory()->for($server)->create(['type' => 'text']);
+
+    Passport::actingAs($owner);
+
+    $this->postJson("/api/channels/{$text->id}/space/summon", [
+        'user_ids' => null,
+        'following' => true,
+    ])->assertNotFound();
+
+    Event::assertNotDispatched(SideSpaceSummoned::class);
 });

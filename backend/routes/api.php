@@ -453,6 +453,12 @@ Route::middleware('auth:api')->group(function () {
     // Pressing E on the furniture. Answers with the channel's widget of whatever type that
     // piece opens — the speaker's music player is the channel's music player.
     Route::post('channels/{channel}/space/interact', [SideSpaceController::class, 'interact']);
+    /*
+     * "Everyone follow me." Staff only, and the only thing in the room that moves other people's
+     * avatars without asking them — which is exactly why it's an endpoint rather than one more
+     * whisper alongside the movement ones. See App\Http\Requests\SideSpace\SummonSpaceRequest.
+     */
+    Route::post('channels/{channel}/space/summon', [SideSpaceController::class, 'summon']);
 
     /*
      * Rooms and their doors.

@@ -3,6 +3,7 @@
 namespace App\Http\Controllers;
 
 use App\Events\SideSpaceMapUpdated;
+use App\Events\SideSpaceSummoned;
 use App\Http\Requests\SideSpace\AssignSpaceRoomOwnerRequest;
 use App\Http\Requests\SideSpace\DestroySpaceLockRequest;
 use App\Http\Requests\SideSpace\EnterSpaceLockRequest;
@@ -10,6 +11,7 @@ use App\Http\Requests\SideSpace\IndexSpaceLocksRequest;
 use App\Http\Requests\SideSpace\InteractWithSpaceObjectRequest;
 use App\Http\Requests\SideSpace\ShowSideSpaceMapRequest;
 use App\Http\Requests\SideSpace\StoreSpaceLockRequest;
+use App\Http\Requests\SideSpace\SummonSpaceRequest;
 use App\Http\Requests\SideSpace\UpdateSideSpaceMapRequest;
 use App\Http\Requests\SideSpace\UpdateSpaceObjectsRequest;
 use App\Http\Requests\SideSpace\UpdateSpacePositionRequest;
@@ -217,6 +219,32 @@ class SideSpaceController extends Controller
                 'y' => $request->validated('y'),
                 'facing' => $request->validated('facing'),
             ]);
+
+        return response()->noContent();
+    }
+
+    /**
+     * Tell the room to follow you — or let it go again.
+     *
+     * Staff only, checked in {@see SummonSpaceRequest}, and that check is the entire security
+     * model here: this is the one call in the Side Space that moves other people's avatars with
+     * nothing asked of them, so the difference between it and griefing is *who may make it*.
+     *
+     * Nothing is stored. Being followed is a state of the moment, not of the room — it should
+     * not survive a reload, a walk out of the door or the leader closing their laptop, and a
+     * column would make it survive all three and need sweeping. So this only broadcasts, and
+     * every follower's client holds its own half for as long as it can see the leader moving.
+     */
+    public function summon(SummonSpaceRequest $request, Channel $channel): Response
+    {
+        abort_unless($channel->isSpace(), 404);
+
+        broadcast(new SideSpaceSummoned(
+            $channel->id,
+            $request->user(),
+            $request->validated('user_ids'),
+            $request->boolean('following'),
+        ));
 
         return response()->noContent();
     }

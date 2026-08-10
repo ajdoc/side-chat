@@ -10,11 +10,13 @@
 //    engines the player runs on both refuse a scheme they don't recognise. YouTube's IFrame
 //    player won't start under an `app://` embedder and the Spotify Web Playback SDK requires
 //    https-or-localhost outright, so on the desktop build the music card sat there and never
-//    made a sound. `http://127.0.0.1` is a *potentially trustworthy* origin per the spec — a
+//    made a sound. `http://localhost` is a *potentially trustworthy* origin per the spec — a
 //    secure context, so getUserMedia, EME and service workers all still work — and it is the
-//    one origin every embeddable player already understands. The port is fixed so the origin
-//    is stable across launches; the origin is what localStorage (and therefore the auth
-//    token) hangs off.
+//    one origin every embeddable player already understands. The hostname matters as much as
+//    the scheme: served from the bare IP `127.0.0.1` instead, YouTube refuses every embed
+//    outright (`errorCode: "auth"`, player error 150), in plain Chrome as much as in Electron.
+//    The port is fixed so the origin is stable across launches; the origin is what
+//    localStorage (and therefore the auth token) hangs off.
 // 2. Media permission requests are answered here. Electron denies getUserMedia by default,
 //    which would silently break every voice channel.
 // 3. Screen sharing needs a source picker. Chromium's own picker isn't available to an
@@ -86,6 +88,26 @@ protocol.registerSchemesAsPrivileged([
 const gotLock = app.requestSingleInstanceLock()
 if (!gotLock) app.quit()
 
+/**
+ * Let media start without Chromium demanding its own idea of a user gesture.
+ *
+ * Chromium gates autoplay on a "media engagement index" — a per-origin score built from a
+ * history of you deliberately playing sound there. A browser you have used for months has
+ * one for youtube.com; a freshly installed desktop app serving from localhost:43117 never
+ * will, and the score is per-origin, so it can never accumulate one either.
+ *
+ * The music player *does* start from a real click ("Listen along"), but the player lives in
+ * a cross-origin YouTube iframe and the gesture doesn't cross that boundary — so the embed
+ * refused to start, the player noticed it had stalled, and offered "resume audio", which
+ * refused for exactly the same reason. Hence a room playing on and a desktop app that never
+ * made a sound.
+ *
+ * Set as a command-line switch rather than a webPreferences flag because it has to be in
+ * place before the first renderer is created. Safe here in a way it would not be in a
+ * browser: nothing loads in this window except our own app.
+ */
+app.commandLine.appendSwitch('autoplay-policy', 'no-user-gesture-required')
+
 /** Where the bundle is being served from, once the server is up. Set before any window opens. */
 let appOrigin = 'app://side-chat'
 
@@ -97,6 +119,7 @@ app.whenReady().then(async () => {
   const partition = session.defaultSession
 
   registerAppProtocol()
+  passAsAChrome(partition)
   appOrigin = await startBundleServer()
   grantMediaPermissions(partition)
   provideScreenSources(partition)
@@ -217,11 +240,39 @@ function createWindow() {
 }
 
 /**
+ * Stop announcing ourselves as Electron.
+ *
+ * Electron's default User-Agent carries `side-chat-desktop/0.1.0` and `Electron/33.0.0`
+ * alongside the Chrome token. YouTube reads that, decides the client is not a browser it
+ * is willing to serve video to, and refuses the embed — `isPlayable: false`,
+ * `errorCode: "auth"`, player error 150 — on videos that embed perfectly well anywhere
+ * else. Nothing in the page can see that; it surfaces only as a player that never starts,
+ * which is why this looked like an autoplay problem for so long.
+ *
+ * Removing the two custom tokens leaves the honest Chrome UA underneath, which is a fair
+ * description: this *is* the same Chromium, rendering in the same way.
+ *
+ * Set on the session rather than the window, so it also applies to the cross-origin
+ * iframes — the YouTube embed being the entire point.
+ */
+function passAsAChrome(partition) {
+  // An allowlist rather than a list of things to remove. Naming the tokens to strip means
+  // guessing what Electron decided to call us — it uses the *product* name with the spaces
+  // taken out ("SideChat/0.1.0"), not the package name — and a rename would quietly put the
+  // token back. A real Chrome UA contains exactly these four `name/version` pairs, so
+  // anything else in there is ours and shouldn't be.
+  const ua = partition.getUserAgent()
+    .replace(/ (?!Mozilla\/|AppleWebKit\/|Chrome\/|Safari\/)[^\s()]+\/[^\s()]+/g, '')
+
+  partition.setUserAgent(ua)
+}
+
+/**
  * The fixed loopback port the bundle is served on.
  *
  * Fixed, not ephemeral, because the port is part of the origin and the origin is where the
  * app's localStorage lives: a port that moved between launches would sign the user out every
- * time they opened the app. Bound to 127.0.0.1 only, so nothing outside this machine can
+ * time they opened the app. Bound to loopback only, so nothing outside this machine can
  * reach it.
  */
 const BUNDLE_PORT = 43117
@@ -254,7 +305,20 @@ const MIME = {
 }
 
 /**
- * Serve `desktop/web` over `http://127.0.0.1:<BUNDLE_PORT>`.
+ * Serve `desktop/web` over `http://localhost:<BUNDLE_PORT>`.
+ *
+ * **`localhost`, not `127.0.0.1`, and that is not cosmetic.** YouTube refuses to embed into
+ * a page whose origin is a bare loopback IP: the player reports `isPlayable: false`,
+ * `errorCode: "auth"` and error 150 for every video, including ones that embed anywhere
+ * else. It is not an Electron problem — plain Chrome at `http://127.0.0.1:43117` fails
+ * identically — which is exactly what made it so hard to see from inside the app.
+ *
+ * The hostname is the whole of the difference. `localhost` is a *potentially trustworthy*
+ * origin in the same way the IP is (secure context, so getUserMedia and EME still work), but
+ * it is also the origin every embeddable player is used to seeing from a dev machine.
+ *
+ * Bound to loopback only, so nothing outside this machine can reach it — the hostname
+ * changed, the exposure did not.
  *
  * Resolves to the origin to load. If the port can't be bound — something else on the machine
  * has it — we fall back to the `app://` protocol rather than refusing to start: a desktop app
@@ -269,8 +333,12 @@ function startBundleServer() {
       resolve('app://side-chat')
     })
 
-    server.listen(BUNDLE_PORT, '127.0.0.1', () => {
-      resolve(`http://127.0.0.1:${BUNDLE_PORT}`)
+    // Listening on the *name* rather than on 127.0.0.1 lets Node bind whichever loopback
+    // address this machine resolves it to. Windows answers `localhost` with ::1 first, and a
+    // server bound only to the IPv4 loopback would leave the browser retrying an address
+    // nothing is listening on.
+    server.listen(BUNDLE_PORT, 'localhost', () => {
+      resolve(`http://localhost:${BUNDLE_PORT}`)
     })
 
     // Nothing should outlive the app; an unclosed listener keeps the process alive on quit.
@@ -288,7 +356,9 @@ async function serveBundle(req, res) {
     return res.end()
   }
 
-  const { pathname } = new URL(req.url, `http://127.0.0.1:${BUNDLE_PORT}`)
+  // Only ever used to give the relative request URL something to be relative *to*; the
+  // host here never leaves this function.
+  const { pathname } = new URL(req.url, `http://localhost:${BUNDLE_PORT}`)
   const relative = decodeURIComponent(pathname).replace(/^\/+/, '')
   const candidate = path.resolve(BUNDLE, relative)
 
@@ -428,7 +498,7 @@ function provideRemoteControl() {
  *
  * Large uploads take a signed URL and PUT the bytes to the bucket themselves, bypassing the
  * API entirely (see useChunkedUpload). In a browser that works because the bucket's CORS
- * policy names the site's origin. The desktop shell's origin is `http://127.0.0.1:43117` — a
+ * policy names the site's origin. The desktop shell's origin is `http://localhost:43117` — a
  * loopback port belonging to this machine, which no bucket policy will ever have heard of —
  * so the preflight is refused and every large upload failed with "the storage service could
  * not be reached", the browser's indistinguishable-from-offline report of a CORS rejection.

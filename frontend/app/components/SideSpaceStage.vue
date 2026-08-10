@@ -161,6 +161,9 @@ const {
   acceptHand,
   declineHand,
   letGo,
+  following,
+  summon,
+  release,
   emote,
   subscribe: subscribeMoves,
   unsubscribe: unsubscribeMoves,
@@ -326,6 +329,30 @@ const roster = computed(() => {
 function goTo(id: number) {
   approach(id)
   rosterOpen.value = false
+}
+
+/**
+ * Whoever we've summoned by name, as opposed to summoning the room.
+ *
+ * A set rather than a flag because these are independent: fetching one person out of a corner
+ * and then fetching another is two summons, and letting the first go shouldn't let go of the
+ * second. Local for the same reason {@link leading} is — your own client drops your own summon.
+ */
+const summonedIds = ref<number[]>([])
+
+/** Call one person over, or let that one person go. See {@link toggleSummon} for the room. */
+async function toggleSummonOne(id: number) {
+  const held = summonedIds.value.includes(id)
+
+  try {
+    if (held) await release([id])
+    else await summon([id])
+
+    summonedIds.value = held ? summonedIds.value.filter(i => i !== id) : [...summonedIds.value, id]
+  }
+  catch {
+    // Nothing to say: the room carried on as it was, which is visible on screen already.
+  }
 }
 
 /** Whose hand you're holding, or null. Read from your own half of the link — see handPartnerOf. */
@@ -842,11 +869,50 @@ function fromMenu(run: () => void) {
 const { server } = useServer()
 const canModerate = computed(() =>
   server.value?.id === props.channel.server_id && !!server.value?.is_owner)
+/**
+ * Whether *we* are currently leading the room, from this tab's point of view.
+ *
+ * Local, and deliberately not read back off the wire: useSpacePresence drops a summon addressed
+ * to its own sender (following yourself is a loop), so the leader is the one person in the room
+ * with no server-side answer to "am I doing this". A ref is honest about what it is — the state
+ * of this button, on this screen — and the worst it can be wrong about is a second tab, where
+ * pressing "follow me" again is harmless.
+ */
+const leading = ref(false)
+const summoning = ref(false)
+
+/** Call the room over, or let it go. One button, because it is one state. */
+async function toggleSummon() {
+  if (summoning.value) return
+  summoning.value = true
+
+  try {
+    if (leading.value) await release()
+    else await summon()
+
+    leading.value = !leading.value
+  }
+  catch {
+    // Nothing to say: the room carried on as it was, which is visible on screen already.
+  }
+  finally {
+    summoning.value = false
+  }
+}
+
 /** Are we in *this* room's call, as opposed to some other channel's? */
 const inThisRoom = computed(() => inCall.value && activeCallChannel.value === props.channel.id)
 
 // Nothing left to look at in the people sheet once you've walked out.
-watch(inThisRoom, (still) => { if (!still) showPeople.value = false })
+watch(inThisRoom, (still) => {
+  if (still) return
+
+  showPeople.value = false
+  // Leading is a thing you do *in* a room. Walking out of the call ends it, and leaves the
+  // button in the state somebody coming back would expect.
+  leading.value = false
+  summonedIds.value = []
+})
 
 /** The zone you're standing in, named in a banner so the audio rules are never a surprise. */
 const currentZone = computed(() => (map.value && me.value ? zoneAt(map.value, me.value.x, me.value.y) : null))
@@ -2793,6 +2859,30 @@ watch(inThisRoom, (now) => {
             <VoiceEffectSettings :channel="channel" />
           </div>
 
+          <!--
+            "Everyone follow me."
+
+            Staff only, and only while you're standing in the room — summoning people to a place
+            you aren't is summoning them to nowhere. Deliberately not a per-person menu: the
+            thing this is for is gathering a room, and picking people off a list one at a time is
+            a different, rarer job that the endpoint still allows.
+
+            The label carries the whole state, because there's no other indication on the
+            leader's own screen that it's happening — everybody else's avatar walking towards
+            them is the indication, and that only reads as deliberate if the button says so.
+          -->
+          <button
+            v-if="canModerate && inThisRoom"
+            type="button"
+            :class="[toolClass, leading ? 'text-foreground' : 'text-muted-foreground hover:text-foreground']"
+            :disabled="summoning"
+            :title="leading ? 'Let everyone go' : 'Make everyone follow you'"
+            @click="fromMenu(toggleSummon)"
+          >
+            <Users class="h-4 w-4 shrink-0" />
+            <span v-if="narrow">{{ leading ? 'Let everyone go' : 'Everyone follow me' }}</span>
+          </button>
+
           <!-- Rooms and their doors. Hidden from anybody who administers neither: a panel whose
                every list would be empty is worse than no panel. -->
           <button
@@ -2994,7 +3084,7 @@ watch(inThisRoom, (now) => {
         </component>
 
         <button
-          v-if="inThisRoom && hasPrompt && !blockedDoor && !handOffer"
+          v-if="inThisRoom && hasPrompt && !blockedDoor && !handOffer && !following"
           type="button"
           class="absolute bottom-2 left-1/2 flex -translate-x-1/2 items-center gap-2 rounded-full bg-foreground px-3 py-1.5 text-xs font-medium text-background shadow-lg transition hover:opacity-90 disabled:opacity-60"
           :disabled="using"
@@ -3004,6 +3094,26 @@ watch(inThisRoom, (now) => {
           <span v-else-if="!narrow" class="rounded border border-background/40 px-1 text-[10px] leading-4">E</span>
           {{ interactHint }}
         </button>
+
+        <!--
+          You are being walked somewhere.
+
+          The counterweight to the whole feature. A summon doesn't ask, so the one thing it owes
+          the person it moves is that it is never a mystery: your avatar setting off on its own
+          with nothing on screen to explain it reads as your game breaking, not as somebody
+          calling you over. Named, so you know whose doing it is.
+
+          No way out of it here on purpose — being let go is the leader's to decide, which is
+          what "staff only, no consent" means when it's honest about itself. It ends when they
+          end it, or when you walk out of the room.
+        -->
+        <div
+          v-if="inThisRoom && following"
+          class="absolute bottom-2 left-1/2 flex -translate-x-1/2 items-center gap-2 rounded-full bg-amber-600 px-3 py-1.5 text-xs font-medium text-white shadow-lg"
+        >
+          <Users class="h-3.5 w-3.5" />
+          <span>Following {{ following.name }}</span>
+        </div>
 
         <!--
           Somebody has offered you their hand.
@@ -3035,7 +3145,7 @@ watch(inThisRoom, (now) => {
           menu, and none of these is worth one.
         -->
         <button
-          v-if="inThisRoom && !handOffer && !hasPrompt && !blockedDoor && (holdingWith || nearestPerson)"
+          v-if="inThisRoom && !handOffer && !following && !hasPrompt && !blockedDoor && (holdingWith || nearestPerson)"
           type="button"
           class="absolute bottom-2 left-1/2 flex -translate-x-1/2 items-center gap-2 rounded-full px-3 py-1.5 text-xs font-medium shadow-lg transition hover:opacity-90"
           :class="holdingWith ? 'bg-pink-600 text-white' : 'bg-foreground text-background'"
@@ -3104,6 +3214,25 @@ watch(inThisRoom, (now) => {
                   @click="goTo(p.id)"
                 >
                   Go to
+                </button>
+
+                <!--
+                  The other direction: bring them to you rather than going to them.
+
+                  Deliberately next to "Go to", because they are the same wish pointed opposite
+                  ways and the roster is where you're already looking at a name. Staff only, and
+                  only while you're in the room — the same two conditions the header's
+                  everyone-follow-me carries, for the same reasons.
+                -->
+                <button
+                  v-if="canModerate && inThisRoom"
+                  type="button"
+                  class="shrink-0 rounded border px-1.5 py-0.5 text-[10px] font-medium transition-colors hover:bg-muted"
+                  :class="summonedIds.includes(p.id) ? 'border-amber-600 text-amber-600' : 'text-muted-foreground hover:text-foreground'"
+                  :title="summonedIds.includes(p.id) ? `Let ${p.name} go` : `Make ${p.name} follow you`"
+                  @click="toggleSummonOne(p.id)"
+                >
+                  {{ summonedIds.includes(p.id) ? 'Release' : 'Summon' }}
                 </button>
               </li>
             </ul>

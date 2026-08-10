@@ -60,6 +60,35 @@ const PET_LOST = 5
 const HAND_GAP = 0.9
 const HAND_REACH = 1.25
 const HAND_BREAK = 6
+/**
+ * Following a leader: how close it trails, and how far is far enough to give up walking.
+ *
+ * Looser than a hand on purpose. A hand is two people and can hold them a tile apart; a summon
+ * is a crowd walking at one person, and at `HAND_GAP` a dozen followers converge on the same
+ * square and spend the walk shoving each other through the leader. So the gap is wide enough for
+ * a group to stand *around* somebody, and it grows with the size of the crowd — see
+ * {@link followGap}.
+ *
+ * There's no equivalent of `HAND_BREAK` here, and that difference is the whole point of the
+ * feature: a hand is a link either end may stretch until it snaps, but a summon that quietly
+ * gave up the moment a wall came between you would fail precisely when it was most needed —
+ * somebody in the next room is the person you most wanted to bring. So past {@link FOLLOW_LOST}
+ * a follower warps instead, exactly as a lost pet reappears at its owner's heel. It ends when
+ * the leader says so, or when the follower takes their own keyboard back.
+ */
+const FOLLOW_GAP = 1.4
+const FOLLOW_LOST = 9
+/**
+ * How much faster than a walk a follower may move.
+ *
+ * Not a flourish — without it the feature doesn't work. A follower moving at exactly
+ * {@link SPEED} can never close a gap on a leader who is walking: the best it can manage is to
+ * hold whatever distance it started with, so summoning somebody across the room and then setting
+ * off means they trail you for ever at the range they began at. Pets have the same margin for
+ * the same reason (see {@link PET_SPEED}), and it's what lets a follower make up ground on the
+ * straights instead of losing a little at every corner.
+ */
+const FOLLOW_SPEED = SPEED * 1.35
 /** An unanswered offer to hold hands expires, so nobody is left with a prompt from a ghost. */
 const OFFER_TTL = 12_000
 /** How close you have to get before "go to them" counts as having got there. */
@@ -229,6 +258,31 @@ let approaching: number | null = null
 const handOffer = shallowRef<{ id: number, name: string, at: number } | null>(null)
 
 /**
+ * Whoever has summoned you, or null — see {@link followLeader}.
+ *
+ * A `ref` for the same reason the hand offer beside it is one: the UI has to say so. Being
+ * towed round a room without being told who by, or without a way to see that it's happening, is
+ * the difference between a feature and a haunting — consent isn't asked for here, so the *least*
+ * this owes a follower is that it's never a mystery.
+ *
+ * Held at module scope with the rest of standing-in-a-room, and deliberately not persisted
+ * anywhere: a summon is a state of the moment. Walking out, reloading, or the leader closing
+ * their laptop all end it, and none of those should need a server to remember they happened.
+ */
+const following = shallowRef<{ id: number, name: string } | null>(null)
+
+/**
+ * A summon that hasn't been able to land yet.
+ *
+ * The snap in {@link onSummoned} needs two things the moment the summon arrives — the leader's
+ * whispered position and a loaded map — and a summon can beat either of them: somebody who has
+ * just walked in has a map still fetching, and a leader who has been standing still is at most
+ * IDLE_WHISPER_EVERY away from having said where they are. Rather than drop the summon or warp
+ * to a guess, the snap is left owed and taken by the first frame that can pay it.
+ */
+let snapPending = false
+
+/**
  * How close counts as arrived, in tiles, and how little progress in one frame counts as stuck.
  *
  * Arrival has to be forgiving: {@link SPEED} tiles a second covers ~0.08 of a tile per frame, so
@@ -242,6 +296,14 @@ const STUCK_BELOW = 0.004
 /** The room we're currently attached to, or null. Guards against double-subscribing. */
 let attachedTo: number | null = null
 let channel: any = null
+/**
+ * The channel's own private channel, held only for `.SideSpaceSummoned`.
+ *
+ * Separate from `channel` above because it *is* separate: everything else in here rides the
+ * call's presence channel as a whisper, and a summon is the one thing that has to come from the
+ * server. See subscribe().
+ */
+let summonChannel: any = null
 let keysBound = false
 let lastWhisperAt = 0
 let lastPersistAt = 0
@@ -559,6 +621,9 @@ export function useSpacePresence(channelId: number, map: Ref<SpaceMap | null>) {
     // After your own step and before the pets': being towed by a hand is movement of the same
     // kind walking is, and the pet behind you should trail the place you ended up.
     holdHands(m, dt)
+    // After the hand, and for the same reason it runs after your own step: being summoned is
+    // movement of the same kind walking is, and both want the position you actually ended at.
+    followLeader(m, dt)
     interpolate(dt)
     movePets(m, dt)
     expireOffer()
@@ -599,6 +664,73 @@ export function useSpacePresence(channelId: number, map: Ref<SpaceMap | null>) {
 
     const travel = Math.min(SPEED * dt, d - HAND_GAP)
     const next = step(m, me.value!, (dx / d) * travel, (dy / d) * travel)
+
+    me.value = { ...me.value!, ...next, facing: facingOf(next.x - self.x, next.y - self.y, self.facing) }
+    whisperMove()
+  }
+
+  /**
+   * How far back to trail, given how many others are trailing the same person.
+   *
+   * A crowd needs a wider ring than a pair, or the people at the front stop the people behind
+   * from ever closing the gap and the whole group grinds against itself. Grows with the square
+   * root of the crowd because what has to fit is an *area* of standing room, not a queue — and
+   * it's computed from the same roster on every client, so nobody's ring disagrees.
+   */
+  function followGap(leaderId: number) {
+    const crowd = Object.values(others.value).filter(o => o.id !== leaderId).length + 1
+
+    return FOLLOW_GAP * Math.sqrt(crowd)
+  }
+
+  /**
+   * Walk after whoever summoned you.
+   *
+   * The mirror image of {@link petStep}, run against a person instead of a creature, and it is
+   * *your* client doing the walking — which is the same rule the rest of this file obeys and the
+   * reason a summon needs no new authority over anybody's coordinates. The server said who may
+   * start this; from then on it is you following a position they were already whispering.
+   *
+   * Unlike a hand, it doesn't break on distance. A summon exists to gather people who are *not*
+   * already next to you, so a wall between you is the normal case rather than the failure case:
+   * past {@link FOLLOW_LOST} the walk is abandoned and you simply appear beside them, the same
+   * concession `petStep` makes and for the same reason — the alternative is a navmesh, and the
+   * honest answer for somebody stuck on a couch two rooms away is that they caught up.
+   */
+  function followLeader(m: SpaceMap, dt: number) {
+    const self = me.value
+    const lead = following.value
+    if (!self || !lead) return
+
+    const leader = others.value[lead.id]
+
+    // They walked out, or their tab died and the sweep took them. Nobody left to follow, and
+    // nothing to tell them — a leader who has gone has already stopped leading.
+    if (!leader) return unfollow()
+
+    // A summon that arrived before the map or before the leader's first whisper. See snapPending.
+    if (snapPending && snapToLeader()) return
+
+    const dx = leader.x - self.x
+    const dy = leader.y - self.y
+    const d = Math.hypot(dx, dy)
+
+    if (d > FOLLOW_LOST) {
+      // Beside them rather than on them: warp takes a tile, and a dozen people warping onto one
+      // would arrive as a single stack. `nearestFloor` spirals out from the target, so a crowd
+      // lands in a ring around the leader instead.
+      const spot = nearestFloor(m, leader)
+
+      return warp(spot.x, spot.y)
+    }
+
+    if (d <= followGap(lead.id)) return
+
+    // Being pulled off a seat is standing up, exactly as walking off one is.
+    if (self.seatedOn) stand()
+
+    const travel = Math.min(FOLLOW_SPEED * dt, d - FOLLOW_GAP)
+    const next = step(m, self, (dx / d) * travel, (dy / d) * travel)
 
     me.value = { ...me.value!, ...next, facing: facingOf(next.x - self.x, next.y - self.y, self.facing) }
     whisperMove()
@@ -1055,6 +1187,22 @@ export function useSpacePresence(channelId: number, map: Ref<SpaceMap | null>) {
       .listenForWhisper('sp-hand', onHand)
       .listenForWhisper('sp-emote', onEmote)
 
+    /*
+     * Being summoned, which is the one thing here that arrives from the *server*.
+     *
+     * A second subscription, on `channel.{id}` rather than the call's presence channel, and the
+     * asymmetry is the point: everything above is a whisper, believed because a whisper about
+     * your own avatar can only be about your own avatar. A summon is a claim about *somebody
+     * else's*, so it may not be a whisper — a forged one would drag the room around, and the
+     * only thing standing between "staff may do this" and "anyone may" is that it goes through
+     * an endpoint that checks. See App\Http\Requests\SideSpace\SummonSpaceRequest.
+     *
+     * Not `echo.leave()`d on the way out: useMessages and useSpaceMap share this channel and own
+     * tearing it down, so unsubscribe below drops only this listener.
+     */
+    summonChannel = echo.private(`channel.${channelId}`)
+    summonChannel.listen('.SideSpaceSummoned', onSummoned)
+
     // Presence is what actually says somebody left; the sweep below is only for a tab that died
     // without the socket noticing.
     watchMembers()
@@ -1108,6 +1256,9 @@ export function useSpacePresence(channelId: number, map: Ref<SpaceMap | null>) {
     channel?.stopListeningForWhisper?.('sp-hand')
     channel?.stopListeningForWhisper?.('sp-emote')
     channel = null
+    // Not echo.leave() — useMessages and useSpaceMap share this one and own tearing it down.
+    summonChannel?.stopListening?.('.SideSpaceSummoned')
+    summonChannel = null
     attachedTo = null
 
     stopMemberWatch?.()
@@ -1132,6 +1283,10 @@ export function useSpacePresence(channelId: number, map: Ref<SpaceMap | null>) {
     // letting go of is a room you have already stopped whispering into.
     approaching = null
     handOffer.value = null
+    // A summon belongs to the room you were summoned in. Walking out of it ends it — which is
+    // also the follower's way out of one, and the reason this needs no expiry of its own.
+    following.value = null
+    snapPending = false
     // Cleared directly rather than through `keepOnly`: walking out of a room is not everybody
     // in it vanishing, and seeing it off with twelve puffs of light would be a firework display
     // for an empty stage. Nobody is drawing this room a frame from now anyway.
@@ -1318,6 +1473,130 @@ export function useSpacePresence(channelId: number, map: Ref<SpaceMap | null>) {
   }
 
   /**
+   * Make people follow you. Staff only — the server decides that, not this.
+   *
+   * `ids` omitted means everybody in the room, which is what the button in the header sends and
+   * very nearly always what's wanted: the phrase is "everyone over here". Passing ids is for
+   * fetching one person out of a corner.
+   *
+   * Notice what doesn't happen: nothing is set locally. The leader's own client learns the
+   * summon landed the same way every follower does, by hearing the broadcast come back — which
+   * means there is exactly one path into this state, and no way for a leader's screen to think
+   * it's leading a room the server never told.
+   */
+  async function summon(ids: number[] | null = null) {
+    await api(`/api/channels/${channelId}/space/summon`, {
+      method: 'POST',
+      body: { user_ids: ids, following: true },
+    })
+  }
+
+  /** Let the room go. Same call, other way round — see {@link summon}. */
+  async function release(ids: number[] | null = null) {
+    await api(`/api/channels/${channelId}/space/summon`, {
+      method: 'POST',
+      body: { user_ids: ids, following: false },
+    })
+  }
+
+  /**
+   * Stop following, locally.
+   *
+   * Nothing is sent, and nothing needs to be: following is a thing *your* client does to your
+   * own avatar, so ending it is entirely a local matter. The leader finds out the way they'd
+   * find out anything about you — you stop arriving.
+   */
+  function unfollow() {
+    following.value = null
+    snapPending = false
+  }
+
+  /**
+   * Arrive beside the leader at once.
+   *
+   * This is what makes a summon *a summon* rather than an invitation to walk. It runs the moment
+   * the broadcast lands, not from the frame loop, and that placement is the whole point: the
+   * render loop stops when the stage unmounts, so somebody who is standing in the room while
+   * reading another channel has nothing walking them. A snap needs no loop — it is one position
+   * and one whisper — so it reaches the people the walk cannot.
+   *
+   * Not onto the leader's own tile: {@link nearestFloor} spirals outwards, so a room summoned at
+   * once arrives as a ring around them rather than as a single stack of avatars.
+   *
+   * Returns whether it landed. It can fail twice over — no map yet, or a leader who hasn't
+   * whispered since we arrived — and both are moments rather than states, which is what
+   * {@link snapPending} is for.
+   */
+  function snapToLeader(): boolean {
+    const m = map.value
+    const lead = following.value
+    const self = me.value
+    if (!m || !lead || !self) return false
+
+    const leader = others.value[lead.id]
+    if (!leader) return false
+
+    snapPending = false
+
+    // Already standing with them. Yanking somebody a tile sideways to a spot they were as good
+    // as in reads as the room glitching, not as being called over.
+    if (Math.hypot(leader.x - self.x, leader.y - self.y) <= followGap(lead.id)) return true
+
+    const spot = nearestFloor(m, leader)
+
+    warp(spot.x, spot.y)
+
+    return true
+  }
+
+  function onSummoned(payload: {
+    leader_id: number
+    leader_name: string
+    user_ids: number[] | null
+    following: boolean
+  }) {
+    if (!me.value) return
+
+    // Addressed to everybody, or to you by name. A null list is the room.
+    if (payload.user_ids !== null && !payload.user_ids.includes(me.value.id)) return
+
+    // The leader hears their own summon come back, as everyone on the channel does. Following
+    // yourself is a loop that would stand you still and look like a bug.
+    if (payload.leader_id === me.value.id) return
+
+    if (!payload.following) {
+      // A release from somebody who isn't the one holding you is stale — a second member of
+      // staff calling off a summon of their own that ended a moment ago.
+      if (following.value?.id === payload.leader_id) unfollow()
+
+      return
+    }
+
+    // Being towed by two people at once is being torn in half. The newest summon wins, which is
+    // also the one whose leader is most likely still looking at the room.
+    following.value = { id: payload.leader_id, name: payload.leader_name }
+
+    // A hand and a summon pull the same avatar towards two different people. Whoever has you
+    // has you: the hand goes, and the person who was holding it is told properly.
+    if (me.value.handWith) letGo()
+
+    /*
+     * Arrive now, and walk from here on.
+     *
+     * A summon is answered rather than accepted, so it should read as being *called over* — you
+     * are there, and then you keep up. Walking the whole way was the earlier behaviour and it
+     * failed twice: at any real distance it's a long trudge across a room you didn't choose to
+     * cross, and for anybody whose stage isn't currently drawn there is no frame loop to walk
+     * them at all, so a summon simply never landed.
+     *
+     * The follow that comes after is what makes this different from a plain teleport: you stay
+     * with them as they move, which is the thing that was actually asked for.
+     */
+    snapPending = true
+    snapToLeader()
+  }
+
+  /**
    * Pull a face.
    *
    * Fire-and-forget, and shown on your own screen first rather than waiting to hear your own
@@ -1378,6 +1657,10 @@ export function useSpacePresence(channelId: number, map: Ref<SpaceMap | null>) {
     acceptHand,
     declineHand,
     letGo,
+    following,
+    summon,
+    release,
+    unfollow,
     emote,
     subscribe,
     unsubscribe,
