@@ -61,9 +61,15 @@ final class Decorations
      *
      * So the scans became lookups on both sides — {@see self::solidTiles()} here, the tile and row
      * index in `lib/spaceDecor.ts` there — and the ceiling is now about the room rather than the
-     * renderer: 1000 pieces on the largest grid we allow ({@see SideSpaceMap::MAX_SIZE}, 6,400
-     * tiles) is a room about a sixth furniture, which is a *full* office and not a wall of desks.
-     * It also keeps a saved map to a size that's unremarkable to store, send and parse.
+     * renderer: 1000 pieces was, when this was written, about a sixth of an 80x80 room — a *full*
+     * office rather than a wall of desks. It also keeps a saved map unremarkable to store, send
+     * and parse.
+     *
+     * The grid has since grown to 256 a side ({@see SideSpaceMap::MAX_SIZE}), so that arithmetic
+     * no longer holds: 1000 pieces across 65,536 tiles is one and a half percent, and this is now
+     * the limit a large map hits first. Left where it is deliberately — the artwork-backed maps
+     * carry their scenery in the picture and place almost nothing — but it is the number to raise
+     * when somebody furnishes a city by hand rather than the size ceiling.
      */
     public const MAX_PER_MAP = 1000;
 

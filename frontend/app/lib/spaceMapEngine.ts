@@ -114,7 +114,7 @@ export const STAGE_SPEAKERS = 3
  * way to draw a map.
  */
 export const MIN_MAP = 8
-export const MAX_MAP = 128
+export const MAX_MAP = 256
 
 export type Facing = 'up' | 'down' | 'left' | 'right'
 

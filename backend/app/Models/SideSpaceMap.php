@@ -52,17 +52,31 @@ class SideSpaceMap extends Model
     /**
      * The largest a map may be, each way.
      *
-     * Raised from 80 when maps became things you *join together*. A 30-wide office extended with
-     * the 64-wide New York artwork is 94 tiles across, and under the old ceiling it simply could
-     * not exist — the city arrived with Central Park and SoHo cropped off, which is not the map
-     * anybody asked for. A limit that silently deletes half of what you placed is the wrong limit.
+     * 80 originally, then 128 when maps became things you *join together* — a 30-wide office
+     * extended with the 64-wide New York artwork is 94 across, and under 80 the city arrived with
+     * Central Park cropped off. 256 now, for the same reason one step further out: several of
+     * these artwork maps side by side is the shape people are actually building.
      *
-     * 128 is still a bound rather than a licence: the grid travels as one document on every load,
-     * so the worst case here is about 16KB of tiles, and the renderer only ever visits what the
-     * camera can see. The thing that would actually hurt is furniture, and that has its own cap
-     * ({@see Decorations::MAX_PER_MAP}).
+     * ## What the number costs
+     *
+     * The grid travels as one document on every load, and it is the only thing here that grows
+     * with the *square* of this constant. At 256 that is 65,536 characters — around 64KB of
+     * tiles, against 16KB at 128. Sent once per load, gzipped in transit, and small beside the
+     * artwork a backdrop map already downloads.
+     *
+     * Everything that reads the grid was checked rather than assumed. Drawing is culled to the
+     * camera, so it costs what is on screen and not what is in the map. Collision is a lookup.
+     * The one thing that genuinely did scale badly was the minimap, which repainted every tile
+     * twelve times a second — that now caches its ground layer and repaints only when the map
+     * changes; see SideSpaceMiniMap.
+     *
+     * ## What is now the binding limit
+     *
+     * Furniture, not size. {@see Decorations::MAX_PER_MAP} allows 1000 pieces, which was a sixth
+     * of an 80x80 room and is one and a half percent of a 256x256 one. A map this large will run
+     * out of things to put in it long before it runs out of floor.
      */
-    public const MAX_SIZE = 128;
+    public const MAX_SIZE = 256;
 
     /**
      * This map's furniture as a `"x,y" => true` set, built on first use.

@@ -57,6 +57,8 @@ final class MapPresets
             'new-york' => self::newYork(),
             'gather-town' => self::gatherTown(),
             'nyc-street' => self::nycStreet(),
+            'nyc-skyline' => self::nycSkyline(),
+            'nyc-island' => self::nycIsland(),
             // The gyms: an arena crossed with an office, one per badge. See gym().
             'gym-cinnabar' => self::gymCinnabar(),
             'gym-celadon' => self::gymCeladon(),
@@ -84,7 +86,7 @@ final class MapPresets
      */
     public const GROUPS = [
         'Rooms' => ['office', 'lounge', 'park', 'campfire', 'blank'],
-        'Themed' => ['throne-room', 'green-hall', 'sleep-temple', 'espurr-den', 'new-york', 'gather-town', 'nyc-street'],
+        'Themed' => ['throne-room', 'green-hall', 'sleep-temple', 'espurr-den', 'new-york', 'gather-town', 'nyc-street', 'nyc-skyline', 'nyc-island'],
         'Gyms' => ['gym-cinnabar', 'gym-celadon', 'gym-vermilion', 'gym-azalea', 'gym-olivine', 'gym-blackthorn'],
     ];
 
@@ -1103,6 +1105,142 @@ final class MapPresets
             'objects' => [],
             'portals' => [],
             'spawn' => ['x' => 12, 'y' => 12],
+        ];
+    }
+
+    /**
+     * Midtown in the rain at sunset. 48×32.
+     *
+     * Walkable across the whole city band, with the sunset sky above it and the river below it
+     * solid. That is a deliberate trade, and the reasoning is in the generator: three ways of
+     * deriving buildings from this artwork were tried and all three failed, because a rainy night
+     * render has the streets, the roofs and the water inside about thirty levels of brightness and
+     * the rain streaks defeat variance as thoroughly as the wet reflections defeat hue. What the
+     * picture *does* say without ambiguity is where it stops being a city — the sky and the water
+     * are large, smooth and touch the frame, so a flood from the edges finds them exactly.
+     *
+     * So you can walk over a building here. At this density, where a roof and a street are the
+     * same surface to the eye, that reads as a city you move around freely; the alternative on
+     * offer was a street grid two thirds of which was invisible walls, which is worse than an open
+     * one. The wall brush makes real blocks in a minute for anybody who wants them.
+     */
+    private static function nycSkyline(): array
+    {
+        $tiles = [
+                '#################...............################',
+                '................................................',
+                '................................................',
+                '................................................',
+                '................................................',
+                '................................................',
+                '................................................',
+                '................................................',
+                '................................................',
+                '................................................',
+                '................................................',
+                '................................................',
+                '................................................',
+                '................................................',
+                '................................................',
+                '................................................',
+                '................................................',
+                '................................................',
+                '................................................',
+                '................................................',
+                '................................................',
+                '................................................',
+                '................................................',
+                '................................................',
+                '................................................',
+                '................................................',
+                '..###...#....#################..................',
+                '#########....########.########..##..............',
+                '#########....########.#####################.....',
+                '##########...###############################....',
+                '##########...###################################',
+                '##########..####################################',
+        ];
+
+        return [
+            'label' => 'NYC skyline, rain',
+            'description' => 'Midtown in the rain at sunset — the park, Times Square and the river below',
+            'name' => 'NYC skyline',
+            'width' => 48,
+            'height' => 32,
+            'tiles' => $tiles,
+            'backdrops' => [['key' => 'nyc-skyline', 'x' => 0, 'y' => 0, 'w' => 48, 'h' => 32]],
+            'zones' => [],
+            'objects' => [],
+            'portals' => [],
+            'spawn' => ['x' => 16, 'y' => 16],
+        ];
+    }
+
+    /**
+     * The whole island after dark. 48×32.
+     *
+     * The one rainy-night map whose streets *are* derived, and it took a different technique to
+     * get there. Colour and variance both fail here as they do on the skyline, but this picture
+     * has a property that one doesn't: it is an island. So the grid comes from two passes that
+     * never ask what colour anything is — a tolerant flood inwards from the frame, which stops at
+     * hard edges and so captures everything that is *not* a building (the harbour and the road
+     * network together, because they meet at the shoreline); and then the island's own silhouette,
+     * taken from the pixels the flood could not reach, to say which of that is street and which is
+     * sea.
+     *
+     * The result is a real street grid: avenues and cross-streets walkable, blocks solid, harbour
+     * solid, bridges crossing. The shoreline is blocky where the silhouette overshoots at the
+     * corners, which is a tile or two of walkable water and not worth a cleverer hull.
+     */
+    private static function nycIsland(): array
+    {
+        $tiles = [
+                '................................................',
+                '................................................',
+                '....#.......#....####...##.#####..##.##.....##..',
+                '....#.......##..########...#####.##..##......#..',
+                '....#....##..#...#######...###...###.##.........',
+                '...###...##......####......###.#.###............',
+                '..~.....###......####......#####.###............',
+                '.........##..##..####.###..#####.###..#......~..',
+                '.........##.###..###..###....##..###............',
+                '..~.#...###.###..####.####.#####.###...##.#.....',
+                '.......##........####.####.#####.###...##.#.....',
+                '......###.#####..####........###.###......#.....',
+                '..~....##.#####..###..##......#.................',
+                '.......##.#####..###..###.....#...#..####.......',
+                '.......##.#####..###..##...#.#....#..####...#...',
+                '........#..####..###..###..##...###..####...#...',
+                '..#.....##.................#....###..####...#...',
+                '..~.........##...###..#..#...#..###.#####.......',
+                '............##...###.#####...#..###.#####.......',
+                '.........#.###...###.#####......................',
+                '..~~..#....###...###.#####..........#.....#..#..',
+                '......#..#.#.#...###..#..#..###.#######.........',
+                '..~~.#####....#.......#..######.#########.......',
+                '......###.............##.######.########....~~..',
+                '..~...###..##....###..##.######..######....##~..',
+                '..~~~.####.#..#..###..##.######.########.....~..',
+                '..~...###..#..........#.............###...#..~..',
+                '..~~..##...........................#.....#......',
+                '..~~~~.###...#..#..#..#.....##..#...............',
+                '..~~~~.............#..............~.~....~.~....',
+                '................................................',
+                '................................................',
+        ];
+
+        return [
+            'label' => 'NYC island, night',
+            'description' => 'The whole island after dark: bridges, piers and the harbour around it',
+            'name' => 'NYC island',
+            'width' => 48,
+            'height' => 32,
+            'tiles' => $tiles,
+            'backdrops' => [['key' => 'nyc-island', 'x' => 0, 'y' => 0, 'w' => 48, 'h' => 32]],
+            'zones' => [],
+            'objects' => [],
+            'portals' => [],
+            'spawn' => ['x' => 16, 'y' => 16],
         ];
     }
 

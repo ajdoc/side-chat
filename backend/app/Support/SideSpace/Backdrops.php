@@ -88,6 +88,20 @@ final class Backdrops
                  */
                 'tiles' => ['w' => 14, 'h' => 8],
             ],
+
+            'nyc-skyline' => [
+                'label' => 'NYC skyline, rain',
+                'description' => 'Midtown in the rain at sunset — the park, Times Square and the river below',
+                'src' => 'backdrops/nyc-skyline.png',
+                'tiles' => ['w' => 48, 'h' => 32],
+            ],
+
+            'nyc-island' => [
+                'label' => 'NYC island, night',
+                'description' => 'The whole island after dark: bridges, piers and the harbour around it',
+                'src' => 'backdrops/nyc-island.png',
+                'tiles' => ['w' => 48, 'h' => 32],
+            ],
         ];
     }
 

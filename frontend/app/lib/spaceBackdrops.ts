@@ -56,6 +56,16 @@ export const BACKDROPS: Record<string, Backdrop> = {
     src: 'backdrops/nyc-loft.png',
     tiles: { w: 14, h: 8 },
   },
+  'nyc-skyline': {
+    label: 'NYC skyline, rain',
+    src: 'backdrops/nyc-skyline.png',
+    tiles: { w: 48, h: 32 },
+  },
+  'nyc-island': {
+    label: 'NYC island, night',
+    src: 'backdrops/nyc-island.png',
+    tiles: { w: 48, h: 32 },
+  },
 }
 
 export function backdropOf(key: string | null | undefined): Backdrop | null {

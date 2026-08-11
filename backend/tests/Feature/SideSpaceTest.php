@@ -459,6 +459,45 @@ it('round-trips every part of a map the editor can change', function () {
         ->assertJsonPath('data.portals.0.to.y', 6);
 });
 
+it('accepts a map at the full size ceiling, and refuses one past it', function () {
+    [$owner, , $channel] = ownerWithSpaceChannel();
+    Passport::actingAs($owner);
+
+    /*
+     * The ceiling is the one constant here whose cost grows with its *square*, so it gets an
+     * actual round trip rather than a reading of the constant. 256 a side is 65,536 tiles — about
+     * 64KB of grid in one document — and the point of this test is that a map that big still
+     * validates, saves and comes back whole rather than tripping some limit further down.
+     */
+    $max = SideSpaceMap::MAX_SIZE;
+    $rows = array_map(
+        fn (int $y) => $y === 0 || $y === $max - 1 ? str_repeat('#', $max) : '#'.str_repeat('.', $max - 2).'#',
+        range(0, $max - 1),
+    );
+
+    $this->putJson("/api/channels/{$channel->id}/space/map", [
+        'name' => 'Vast',
+        'width' => $max,
+        'height' => $max,
+        'tiles' => $rows,
+        'zones' => [],
+        'spawn' => ['x' => 5, 'y' => 5],
+    ])->assertOk()->assertJsonPath('data.width', $max);
+
+    expect($channel->spaceMap()->sole()->tiles)->toHaveCount($max);
+
+    // And one tile past it is refused, so the bound is real rather than advisory.
+    $over = $max + 1;
+    $this->putJson("/api/channels/{$channel->id}/space/map", [
+        'name' => 'Too big',
+        'width' => $over,
+        'height' => $over,
+        'tiles' => array_fill(0, $over, str_repeat('.', $over)),
+        'zones' => [],
+        'spawn' => ['x' => 5, 'y' => 5],
+    ])->assertStatus(422)->assertJsonValidationErrors(['width', 'height']);
+});
+
 it('refuses a doorway into another server', function () {
     [$owner, , $channel] = ownerWithSpaceChannel();
     // A Side Space somewhere else entirely — the one destination that must never be reachable,

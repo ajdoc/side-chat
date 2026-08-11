@@ -44,6 +44,19 @@ const OPEN_KEY = 'space:minimap'
 const open = ref(true)
 const canvas = ref<HTMLCanvasElement | null>(null)
 
+/**
+ * The ground, drawn once and kept.
+ *
+ * The map only changes when somebody saves the editor, which is rare; the dots on top of it move
+ * constantly. Redrawing the ground every frame therefore does the same work over and over for a
+ * picture that is identical each time — and that work is *per tile*, so it grows with the square
+ * of the map. At the 256-tile ceiling that is 65,536 tiles twelve times a second, on the same
+ * thread as a room that needs sixty frames. Cached, the per-frame cost is one `drawImage`
+ * whatever the map's size.
+ */
+let ground: HTMLCanvasElement | null = null
+let groundOf: { tiles: unknown, backdrops: unknown, w: number, h: number, loaded: boolean } | null = null
+
 /** How wide the picture is, in CSS pixels. The height follows the map's own proportions. */
 const WIDTH = 176
 
@@ -88,35 +101,9 @@ function draw() {
   const sx = w / props.map.width
   const sy = h / props.map.height
 
-  /*
-   * Artwork first. Each placement is scaled into the rectangle of tiles it covers, so a map that
-   * is half hand-built room and half city shows both — the city as its own picture, the room as
-   * tiles underneath.
-   */
-  const placements = props.map.backdrops ?? []
-  const covered: Array<{ x: number, y: number, w: number, h: number }> = []
-
-  ctx.imageSmoothingEnabled = true
-  for (const placement of placements) {
-    const img = backdropImage(placement.key)
-    if (!img) continue
-
-    ctx.drawImage(img, placement.x * sx, placement.y * sy, placement.w * sx, placement.h * sy)
-    covered.push(placement)
-  }
-
-  // Then the tiles, for everywhere the artwork doesn't reach.
-  for (let y = 0; y < props.map.height; y++) {
-    for (let x = 0; x < props.map.width; x++) {
-      if (covered.some(c => x >= c.x && x < c.x + c.w && y >= c.y && y < c.y + c.h)) continue
-
-      const tile = props.map.tiles[y]?.[x] ?? '#'
-      if (tile === ' ') continue
-
-      ctx.fillStyle = tile === '~' ? INK.water : (isWalkableTile(tile) ? INK.walkable : INK.solid)
-      ctx.fillRect(x * sx, y * sy, Math.ceil(sx), Math.ceil(sy))
-    }
-  }
+  // One blit, whatever the map's size — the tile loop lives in paintGround and runs only when
+  // the map itself changes.
+  ctx.drawImage(paintGround(w, h, sx, sy), 0, 0, w, h)
 
   /*
    * The slice of the map currently on screen.
@@ -163,6 +150,67 @@ function draw() {
     ctx.fill()
     ctx.stroke()
   }
+}
+
+/**
+ * Paint the artwork and the tiles onto an offscreen canvas, reusing the last one if nothing moved.
+ *
+ * Freshness is decided by the *identity* of the tiles and backdrops arrays rather than their
+ * contents: everything that edits a map replaces those arrays wholesale, so a reference check is
+ * both cheap and exact where comparing 65,536 characters would be neither. It also tracks whether
+ * the artwork has finished loading, or a map cached in the moment before the image arrived would
+ * keep its blank ground for good.
+ */
+function paintGround(w: number, h: number, sx: number, sy: number): HTMLCanvasElement {
+  const placements = props.map.backdrops ?? []
+  const loaded = placements.every(p => backdropImage(p.key))
+
+  const same = ground && groundOf
+    && groundOf.tiles === props.map.tiles
+    && groundOf.backdrops === props.map.backdrops
+    && groundOf.w === w && groundOf.h === h
+    && groundOf.loaded === loaded
+
+  if (same) return ground!
+
+  const dpr = Math.min(2, window.devicePixelRatio || 1)
+  ground ??= document.createElement('canvas')
+  ground.width = Math.round(w * dpr)
+  ground.height = Math.round(h * dpr)
+  groundOf = { tiles: props.map.tiles, backdrops: props.map.backdrops, w, h, loaded }
+
+  const g = ground.getContext('2d')!
+  g.setTransform(dpr, 0, 0, dpr, 0, 0)
+  g.fillStyle = INK.out
+  g.fillRect(0, 0, w, h)
+
+  // Artwork first. Each placement is scaled into the rectangle of tiles it covers, so a map that
+  // is half hand-built room and half city shows both.
+  const covered: Array<{ x: number, y: number, w: number, h: number }> = []
+  g.imageSmoothingEnabled = true
+
+  for (const placement of placements) {
+    const img = backdropImage(placement.key)
+    if (!img) continue
+
+    g.drawImage(img, placement.x * sx, placement.y * sy, placement.w * sx, placement.h * sy)
+    covered.push(placement)
+  }
+
+  // Then the tiles, for everywhere the artwork doesn't reach.
+  for (let y = 0; y < props.map.height; y++) {
+    for (let x = 0; x < props.map.width; x++) {
+      if (covered.some(c => x >= c.x && x < c.x + c.w && y >= c.y && y < c.y + c.h)) continue
+
+      const tile = props.map.tiles[y]?.[x] ?? '#'
+      if (tile === ' ') continue
+
+      g.fillStyle = tile === '~' ? INK.water : (isWalkableTile(tile) ? INK.walkable : INK.solid)
+      g.fillRect(x * sx, y * sy, Math.ceil(sx), Math.ceil(sy))
+    }
+  }
+
+  return ground
 }
 
 /*
