@@ -1,5 +1,5 @@
 import {
-  CalendarDays, Columns3, FileText, Film, Flag, Gamepad2, LayoutGrid, Music,
+  CalendarDays, Columns3, FileText, Film, Flag, Gamepad2, LayoutGrid, ListChecks, Music,
   NotebookPen, Palette, PenTool, Spade, Vote,
 } from 'lucide-vue-next'
 import type { Component } from 'vue'
@@ -55,6 +55,20 @@ export interface DeskApp {
   removable: boolean
   /** Can it be dropped on the Open Canvas as a card? The canvas obviously can't hold itself. */
   canvasable: boolean
+  /**
+   * Can it be an entire channel — the body of an app channel, in place of a timeline?
+   *
+   * The third question in the same family as the two above, and the reason it's a flag here
+   * rather than a list somewhere else: an app channel's picker, the Side Desk's tab picker and
+   * the canvas's card toolbar are then three filters over one registry. That's the same
+   * collapse this file already performed once on the tab/card split; a separate list of
+   * "channel apps" would re-open exactly the seam described at the top.
+   *
+   * The games are false on purpose. A game is something a room starts, plays and finishes, and
+   * a permanent channel for one would be an empty table most of the time. Mirrored server-side
+   * by App\Support\Apps\AppCatalogue, which is what actually refuses an unknown id.
+   */
+  channelable: boolean
   /** Default card size when placed on the canvas. */
   card?: { w: number, h: number }
   /** Groups the "add an app" picker; games are a shelf you go to on purpose. */
@@ -70,24 +84,28 @@ export interface DeskApp {
  */
 export const DESK_APPS: DeskApp[] = [
   // --- surface apps ---
-  { id: 'canvas', label: 'Canvas', icon: LayoutGrid, family: 'surface', removable: false, canvasable: false, group: 'workspace' },
-  { id: 'board', label: 'Board', icon: PenTool, family: 'surface', removable: true, canvasable: true, card: { w: 420, h: 320 }, group: 'workspace' },
-  { id: 'notes', label: 'Notes', icon: NotebookPen, family: 'surface', removable: true, canvasable: true, card: { w: 320, h: 300 }, group: 'workspace' },
-  { id: 'calendar', label: 'Calendar', icon: CalendarDays, family: 'surface', removable: true, canvasable: true, card: { w: 300, h: 340 }, group: 'workspace' },
+  { id: 'canvas', label: 'Canvas', icon: LayoutGrid, family: 'surface', removable: false, canvasable: false, channelable: true, group: 'workspace' },
+  { id: 'board', label: 'Board', icon: PenTool, family: 'surface', removable: true, canvasable: true, channelable: true, card: { w: 420, h: 320 }, group: 'workspace' },
+  { id: 'notes', label: 'Notes', icon: NotebookPen, family: 'surface', removable: true, canvasable: true, channelable: true, card: { w: 320, h: 300 }, group: 'workspace' },
+  { id: 'calendar', label: 'Calendar', icon: CalendarDays, family: 'surface', removable: true, canvasable: true, channelable: true, card: { w: 300, h: 340 }, group: 'workspace' },
+  // The Tracker: projects, and tasks under them. The one app built for the channel slot rather
+  // than adapted into it — a board of fifty tasks with a detail pane beside it was never going
+  // to be a tab, and it's deliberately not canvasable for the same reason Docs isn't.
+  { id: 'tracker', label: 'Tracker', icon: ListChecks, family: 'surface', removable: true, canvasable: false, channelable: true, group: 'workspace' },
   // Docs is a file shelf with its own upload flow and viewers; squeezed into a canvas card it's
   // a scrollbar around a scrollbar, so it stays a tab.
-  { id: 'docs', label: 'Docs', icon: FileText, family: 'surface', removable: true, canvasable: false, group: 'workspace' },
+  { id: 'docs', label: 'Docs', icon: FileText, family: 'surface', removable: true, canvasable: false, channelable: true, group: 'workspace' },
 
   // --- widget apps ---
-  { id: 'music', label: 'Music', icon: Music, family: 'widget', removable: true, canvasable: true, card: { w: 300, h: 190 }, group: 'tool' },
+  { id: 'music', label: 'Music', icon: Music, family: 'widget', removable: true, canvasable: true, channelable: true, card: { w: 300, h: 190 }, group: 'tool' },
   // Taller than the rest: the card leads with a 16:9 screen, so a short one clips it.
-  { id: 'video', label: 'Video', icon: Film, family: 'widget', removable: true, canvasable: true, card: { w: 400, h: 520 }, group: 'tool' },
-  { id: 'kanban', label: 'Kanban', icon: Columns3, family: 'widget', removable: true, canvasable: true, card: { w: 340, h: 320 }, group: 'tool' },
-  { id: 'poll', label: 'Poll', icon: Vote, family: 'widget', removable: true, canvasable: true, card: { w: 280, h: 260 }, group: 'tool' },
-  { id: 'shooter', label: 'Galaga', icon: Gamepad2, family: 'widget', removable: true, canvasable: true, card: { w: 320, h: 420 }, group: 'game' },
-  { id: 'racing', label: 'Racing', icon: Flag, family: 'widget', removable: true, canvasable: true, card: { w: 340, h: 380 }, group: 'game' },
-  { id: 'poker', label: 'Poker', icon: Spade, family: 'widget', removable: true, canvasable: true, card: { w: 360, h: 460 }, group: 'game' },
-  { id: 'skribbl', label: 'Skribbl', icon: Palette, family: 'widget', removable: true, canvasable: true, card: { w: 360, h: 520 }, group: 'game' },
+  { id: 'video', label: 'Video', icon: Film, family: 'widget', removable: true, canvasable: true, channelable: true, card: { w: 400, h: 520 }, group: 'tool' },
+  { id: 'kanban', label: 'Kanban', icon: Columns3, family: 'widget', removable: true, canvasable: true, channelable: true, card: { w: 340, h: 320 }, group: 'tool' },
+  { id: 'poll', label: 'Poll', icon: Vote, family: 'widget', removable: true, canvasable: true, channelable: true, card: { w: 280, h: 260 }, group: 'tool' },
+  { id: 'shooter', label: 'Galaga', icon: Gamepad2, family: 'widget', removable: true, canvasable: true, channelable: false, card: { w: 320, h: 420 }, group: 'game' },
+  { id: 'racing', label: 'Racing', icon: Flag, family: 'widget', removable: true, canvasable: true, channelable: false, card: { w: 340, h: 380 }, group: 'game' },
+  { id: 'poker', label: 'Poker', icon: Spade, family: 'widget', removable: true, canvasable: true, channelable: false, card: { w: 360, h: 460 }, group: 'game' },
+  { id: 'skribbl', label: 'Skribbl', icon: Palette, family: 'widget', removable: true, canvasable: true, channelable: false, card: { w: 360, h: 520 }, group: 'game' },
 ]
 
 const BY_ID = new Map(DESK_APPS.map(a => [a.id, a]))
@@ -104,6 +122,16 @@ export const DEFAULT_APPS: SideDeskAppId[] = ['canvas', 'board', 'notes', 'docs'
 
 /** The apps that can be placed on the Open Canvas, for its toolbar. */
 export const CANVASABLE_APPS = DESK_APPS.filter(a => a.canvasable)
+
+/**
+ * The apps that can be a whole channel, for the create-channel picker.
+ *
+ * The Tracker leads: it's the app built for this slot, and the one somebody choosing "App
+ * channel" most likely came for. The rest keep registry order.
+ */
+export const CHANNELABLE_APPS = DESK_APPS
+  .filter(a => a.channelable)
+  .sort((a, b) => Number(b.id === 'tracker') - Number(a.id === 'tracker'))
 
 /** True for the widget family — the ids that resolve to a {@link Widget} rather than a surface. */
 export function isWidgetApp(id: SideDeskAppId): id is WidgetType {

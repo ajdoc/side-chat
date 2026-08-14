@@ -4,6 +4,7 @@ namespace App\Actions\Channel;
 
 use App\Events\ChannelCreated;
 use App\Models\Channel;
+use App\Models\User;
 use Illuminate\Support\Facades\DB;
 
 final class CreateDiscussionAction
@@ -13,10 +14,17 @@ final class CreateDiscussionAction
      *
      * @param  Channel  $parent  the container — never itself a discussion
      * @param  Channel|null  $copyFrom  which sibling's map to start from, for a Side Space
+     * @param  string|null  $appId  which app this one is, for an app channel; null inherits
+     * @param  User|null  $installedBy  recorded as the app's installer, for an app channel
      */
-    public function handle(Channel $parent, string $name, ?Channel $copyFrom = null): Channel
-    {
-        $discussion = DB::transaction(function () use ($parent, $name, $copyFrom) {
+    public function handle(
+        Channel $parent,
+        string $name,
+        ?Channel $copyFrom = null,
+        ?string $appId = null,
+        ?User $installedBy = null,
+    ): Channel {
+        $discussion = DB::transaction(function () use ($parent, $name, $copyFrom, $appId, $installedBy) {
             $discussion = $parent->discussions()->create([
                 'server_id' => $parent->server_id,
                 'conversation_id' => $parent->conversation_id,
@@ -31,6 +39,17 @@ final class CreateDiscussionAction
                 $this->copyMap($discussion, $copyFrom ?? $parent->discussions()->first());
             }
 
+            // A new discussion in an app channel starts as the same app its siblings are, unless
+            // the caller asked for another. Same reasoning as copying a sibling's map: the
+            // container is named for what it's *for* ("Design"), so the useful default is more
+            // of that, and picking an app is then an override rather than a required step.
+            if ($discussion->isApp()) {
+                $discussion->setRelation('app', $discussion->app()->create([
+                    'app_id' => $appId ?? $this->siblingApp($parent, $copyFrom) ?? 'tracker',
+                    'installed_by' => $installedBy?->getKey(),
+                ]));
+            }
+
             return $discussion;
         });
 
@@ -39,6 +58,24 @@ final class CreateDiscussionAction
         broadcast(new ChannelCreated($discussion));
 
         return $discussion;
+    }
+
+    /**
+     * Which app this channel's existing discussions are, so a new one can be more of the same.
+     *
+     * Falls back across siblings rather than trusting one row: the named `copyFrom` is what the
+     * caller pointed at, and any other discussion answers the question just as well when they
+     * didn't. Null only if none of them has an app row at all, which the caller reads as "no
+     * opinion" and resolves to the default.
+     */
+    private function siblingApp(Channel $parent, ?Channel $copyFrom): ?string
+    {
+        $named = $copyFrom?->loadMissing('app')->app?->app_id;
+
+        return $named ?? $parent->discussions()
+            ->whereHas('app')
+            ->with('app')
+            ->first()?->app?->app_id;
     }
 
     /**

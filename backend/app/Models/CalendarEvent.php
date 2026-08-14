@@ -4,6 +4,7 @@ namespace App\Models;
 
 use App\Http\Controllers\CalendarController;
 use App\Http\Controllers\ChannelCalendarController;
+use App\Models\Concerns\HasAppActivity;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 
@@ -15,6 +16,9 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
  */
 class CalendarEvent extends Model
 {
+    /** Comments, tags and a history — see the trait. */
+    use HasAppActivity;
+
     protected $fillable = [
         'side_chat_id', 'channel_id', 'user_id',
         'title', 'description', 'starts_at', 'ends_at', 'all_day', 'color',

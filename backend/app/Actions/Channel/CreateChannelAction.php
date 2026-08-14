@@ -6,14 +6,21 @@ use App\DTOs\Channel\CreateChannelData;
 use App\Events\ChannelCreated;
 use App\Models\Channel;
 use App\Models\Server;
+use App\Models\User;
 use App\Support\SideSpace\MapPresets;
 use Illuminate\Support\Facades\DB;
 
 final class CreateChannelAction
 {
-    public function handle(Server $server, CreateChannelData $data): Channel
+    /**
+     * @param  User|null  $installedBy  who is creating it — recorded only for an app channel,
+     *                                  as the "installed by" on its app row. Optional so the
+     *                                  factories and tests that predate app channels still call
+     *                                  this with two arguments.
+     */
+    public function handle(Server $server, CreateChannelData $data, ?User $installedBy = null): Channel
     {
-        $channel = DB::transaction(function () use ($server, $data) {
+        $channel = DB::transaction(function () use ($server, $data, $installedBy) {
             $channel = $server->channels()->create([
                 'name' => $data->name,
                 'type' => $data->type,
@@ -37,6 +44,22 @@ final class CreateChannelAction
             // hangs off the discussion, not the container: each discussion is its own room.
             if ($channel->isSpace()) {
                 $this->seedMap($general, (string) $data->preset);
+            }
+
+            // Same argument as the map, one layer up: an app channel whose app row didn't exist
+            // yet is a channel that opens onto nothing. It goes on the discussion, because the
+            // discussion is what people actually open — see ChannelApp.
+            if ($channel->isApp()) {
+                $app = $general->app()->create([
+                    'app_id' => (string) $data->app_id,
+                    'installed_by' => $installedBy?->getKey(),
+                ]);
+
+                // Set on both, so the response to "create this channel" already says which app
+                // it is and the client can route straight into it. The container carries a copy
+                // because the sidebar draws the trunk from it.
+                $general->setRelation('app', $app);
+                $channel->setRelation('app', $app);
             }
 
             return $channel->setRelation('discussions', collect([$general]));

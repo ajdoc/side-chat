@@ -1,5 +1,7 @@
 <?php
 
+use App\Http\Controllers\AppCommentController;
+use App\Http\Controllers\AppTagController;
 use App\Http\Controllers\ArpgCharacterController;
 use App\Http\Controllers\AttachmentController;
 use App\Http\Controllers\Auth\AuthController;
@@ -62,6 +64,8 @@ use App\Http\Controllers\SpaceNoteController;
 use App\Http\Controllers\SpotifyController;
 use App\Http\Controllers\ThreadController;
 use App\Http\Controllers\ThreadMessageController;
+use App\Http\Controllers\TrackerProjectController;
+use App\Http\Controllers\TrackerTaskController;
 use App\Http\Controllers\VoiceController;
 use App\Http\Controllers\WhiteboardController;
 use App\Http\Controllers\WidgetController;
@@ -427,6 +431,56 @@ Route::middleware('auth:api')->group(function () {
     Route::post('channels/{channel}/voice/mute', [VoiceController::class, 'mute']);
     // Any member: disconnect one participant (with user_id) or clear the room (without).
     Route::post('channels/{channel}/voice/disconnect', [VoiceController::class, 'disconnect']);
+
+    /*
+     * App channels — the Tracker, and the comments/tags every app can borrow.
+     *
+     * Short for the same reason the Side Space block below is: an app channel *is* a channel,
+     * so its timeline, threads, side chats, reads and permissions are the endpoints above,
+     * unchanged. What's left is the app's own storage.
+     *
+     * Everything is addressed to its channel, which is what lets MemberRequest settle who may
+     * be here without the tracker knowing anything about permissions — and what scopes the
+     * storage, so two tracker channels are two trackers.
+     */
+    Route::get('channels/{channel}/tracker/fields', [TrackerProjectController::class, 'fields']);
+    Route::get('channels/{channel}/tracker/projects', [TrackerProjectController::class, 'index']);
+    Route::post('channels/{channel}/tracker/projects', [TrackerProjectController::class, 'store']);
+    Route::patch('channels/{channel}/tracker/projects/{project}', [TrackerProjectController::class, 'update']);
+    // Takes its tasks, and their comments, tags and history, with it.
+    Route::delete('channels/{channel}/tracker/projects/{project}', [TrackerProjectController::class, 'destroy']);
+
+    // One listing for both screens: without ?project= it's the home's "your tasks", with one
+    // it's the board. See TrackerTaskController::index.
+    Route::get('channels/{channel}/tracker/tasks', [TrackerTaskController::class, 'index']);
+    Route::post('channels/{channel}/tracker/tasks', [TrackerTaskController::class, 'store']);
+    // The detail pane: the task plus the two lists a board listing leaves out.
+    Route::get('channels/{channel}/tracker/tasks/{task}', [TrackerTaskController::class, 'show']);
+    Route::patch('channels/{channel}/tracker/tasks/{task}', [TrackerTaskController::class, 'update']);
+    Route::delete('channels/{channel}/tracker/tasks/{task}', [TrackerTaskController::class, 'destroy']);
+
+    /*
+     * Comments and tags, for anything an app owns.
+     *
+     * `{type}` is the short morph name of what's being commented on or tagged — 'tracker_task'
+     * today — resolved by App\Support\Apps\AppSubjects. That indirection is the point: making a
+     * kanban card commentable is a resolver, not another six routes.
+     */
+    Route::get('channels/{channel}/apps/{type}/{id}/comments', [AppCommentController::class, 'index']);
+    Route::post('channels/{channel}/apps/{type}/{id}/comments', [AppCommentController::class, 'store']);
+    // Addressed by comment id rather than through its target: a comment is already unique, and
+    // the channel in the path is what authorises reaching it.
+    Route::patch('channels/{channel}/app-comments/{comment}', [AppCommentController::class, 'update']);
+    Route::delete('channels/{channel}/app-comments/{comment}', [AppCommentController::class, 'destroy']);
+
+    // The channel's vocabulary — shared by every app in it, not per project.
+    Route::get('channels/{channel}/app-tags', [AppTagController::class, 'index']);
+    Route::post('channels/{channel}/app-tags', [AppTagController::class, 'store']);
+    Route::patch('channels/{channel}/app-tags/{tag}', [AppTagController::class, 'update']);
+    Route::delete('channels/{channel}/app-tags/{tag}', [AppTagController::class, 'destroy']);
+    // Putting one on something, and taking it off.
+    Route::put('channels/{channel}/apps/{type}/{id}/tags/{tag}', [AppTagController::class, 'attach']);
+    Route::delete('channels/{channel}/apps/{type}/{id}/tags/{tag}', [AppTagController::class, 'detach']);
 
     /*
      * Side Spaces — the walkable rooms.

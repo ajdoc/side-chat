@@ -13,6 +13,7 @@ import {
 import { useLocalStorage } from '@vueuse/core'
 import type { Channel, Conversation, Server, ThemeColor, ThemeMode } from '~/types'
 import type { SplitPane } from '~/composables/useSplitView'
+import { deskApp } from '~/composables/useDeskApps'
 import { useLongPress } from '~/composables/useTouch'
 import { useDesktopNotifications } from '~/composables/useDesktopNotifications'
 import { Button } from '~/components/ui/button'
@@ -220,14 +221,21 @@ function startDividerDrag(e: PointerEvent) {
 /**
  * The channel-type sections, in the order a server's tree draws them.
  *
- * A constant rather than three hand-written blocks, because the three sections differ only
- * in which channels they hold and what they're called — writing them out three times is
- * three places for the next kind of channel to be forgotten.
+ * A constant rather than hand-written blocks, because the sections differ only in which
+ * channels they hold and what they're called — writing them out separately is one place per
+ * section for the next kind of channel to be forgotten. (It happened anyway when `app` was
+ * added: the type existed everywhere else and the channels rendered nowhere, because nothing
+ * fails when a type is missing from this list — its channels are simply filtered out of every
+ * section. Adding a channel type means adding a row here.)
  */
 const CHANNEL_SECTIONS = [
   { type: 'text', label: 'Text' },
   { type: 'voice', label: 'Voice' },
   { type: 'space', label: 'Side Spaces' },
+  // Channels that *are* an application. Last because it's the section you go to on purpose,
+  // where the three above are where conversation happens — and a tracker is somewhere you
+  // visit rather than somewhere you keep half an eye on.
+  { type: 'app', label: 'Apps' },
 ] as const
 const userStream = useUserStream()
 const { ensurePermission: ensureNotifyPermission } = useDesktopNotifications()
@@ -657,6 +665,17 @@ function askLeaveServer(s: Server) {
   showLeave.value = true
 }
 
+/**
+ * The icon an app channel wears in the tree — its app's own, from the registry.
+ *
+ * Returns undefined for anything that isn't an app channel, or whose app this client doesn't
+ * know, and the template falls through to the ordinary icons. A client a release behind the
+ * server draws an unknown app as a plain channel rather than as a hole in the sidebar.
+ */
+function channelAppIcon(channel: Channel) {
+  return channel.app_id ? deskApp(channel.app_id)?.icon : undefined
+}
+
 const showNickname = ref(false)
 
 /**
@@ -1052,8 +1071,8 @@ onBeforeUnmount(() => { userStream.unsubscribe(); stopPresence() })
                   </DropdownMenu>
                 </div>
 
-                <!-- The Text / Voice / Side Spaces heading inside an open server. Folds its
-                     own channels away; the count is what tells you what you folded. -->
+                <!-- A channel-type heading (Text / Voice / Side Spaces / Apps) inside an open
+                     server. Folds its own channels away; the count tells you what you folded. -->
                 <button
                   v-else-if="item.kind === 'channel-section'"
                   type="button"
@@ -1114,7 +1133,14 @@ onBeforeUnmount(() => { userStream.unsubscribe(); stopPresence() })
                         <ChevronDown v-if="item.open" class="h-3 w-3" />
                         <ChevronRight v-else class="h-3 w-3" />
                       </button>
-                      <MapIcon v-if="item.channel.type === 'space'" class="h-4 w-4 shrink-0" />
+                      <!-- An app channel wears its app's own icon, so a tracker and a doc
+                           shelf are told apart in the tree rather than sharing one glyph. -->
+                      <component
+                        :is="channelAppIcon(item.channel)"
+                        v-if="item.channel.type === 'app' && channelAppIcon(item.channel)"
+                        class="h-4 w-4 shrink-0"
+                      />
+                      <MapIcon v-else-if="item.channel.type === 'space'" class="h-4 w-4 shrink-0" />
                       <Volume2 v-else-if="item.channel.type === 'voice'" class="h-4 w-4 shrink-0" />
                       <Hash v-else class="h-4 w-4 shrink-0" />
                       <span class="truncate">{{ item.channel.name }}</span>

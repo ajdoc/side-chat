@@ -21,8 +21,14 @@ class Channel extends Model
      * `space` is a Side Space: a room you walk an avatar around, hearing whoever is near you.
      * Like a voice channel it is a text channel that also holds a call — the map sits on top of
      * the same timeline, and everything below it is unaware of the map (see allowsCalls).
+     *
+     * `app` is the same trick applied to software instead of a room: the channel's body is an
+     * application — a tracker, a board, a doc shelf — over a timeline that carries on existing
+     * underneath it. Which app is one row in `channel_apps` (see {@see ChannelApp}), and it
+     * hangs off the *discussion*, exactly as a Side Space's map does, so a container full of
+     * discussions is a folder of apps at no extra cost.
      */
-    public const TYPES = ['text', 'voice', 'space'];
+    public const TYPES = ['text', 'voice', 'space', 'app'];
 
     /**
      * The entrance/exit effects a call may be given — everything the browser knows how to
@@ -349,6 +355,72 @@ class Channel extends Model
     public function isSpace(): bool
     {
         return $this->type === 'space';
+    }
+
+    /** An app channel — a channel whose body is an application rather than a timeline. */
+    public function isApp(): bool
+    {
+        return $this->type === 'app';
+    }
+
+    /** Which app this is, when it's an app channel. Null for every other kind of channel. */
+    public function app(): HasOne
+    {
+        return $this->hasOne(ChannelApp::class);
+    }
+
+    /**
+     * The app this channel should be *drawn* as — its own, or its first discussion's.
+     *
+     * A container has no app row: the row hangs off the discussion, exactly as a Side Space's
+     * map does. But the sidebar draws containers, so asking a container "which app are you"
+     * and getting null is how an app channel ends up wearing a `#` like a text channel.
+     *
+     * So the container borrows from what's inside it. First discussion rather than a survey of
+     * all of them, because the tree shows one icon per row and a channel holding a tracker and
+     * a board has to pick one — the first is the one it was created as.
+     *
+     * Reads only already-loaded relations and never triggers a query: it's called once per
+     * sidebar row, and lazy loading throws outside production anyway.
+     */
+    public function displayAppId(): ?string
+    {
+        if ($this->relationLoaded('app') && $this->app !== null) {
+            return $this->app->app_id;
+        }
+
+        if (! $this->relationLoaded('discussions')) {
+            return null;
+        }
+
+        return $this->discussions
+            ->first(fn (Channel $d) => $d->relationLoaded('app') && $d->app !== null)
+            ?->app?->app_id;
+    }
+
+    /**
+     * This channel's Tracker projects.
+     *
+     * Storage hanging off the channel, exactly like its calendar events and canvas items — so a
+     * tracker app channel has one, and so does any channel whose Side Desk shows the Tracker
+     * tab. Nothing here is conditional on the channel's `type`.
+     *
+     * @return HasMany<TrackerProject, $this>
+     */
+    public function trackerProjects(): HasMany
+    {
+        return $this->hasMany(TrackerProject::class);
+    }
+
+    /**
+     * The channel's shared tag vocabulary — used by the Tracker, and by whatever picks up
+     * {@see Concerns\HasAppActivity} next.
+     *
+     * @return HasMany<AppTag, $this>
+     */
+    public function appTags(): HasMany
+    {
+        return $this->hasMany(AppTag::class);
     }
 
     /** The room itself, when this is a Side Space. Null for every other kind of channel. */

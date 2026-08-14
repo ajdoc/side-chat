@@ -90,19 +90,31 @@ final class CloudflareTurn
             return null;
         }
 
-        // `urls` is documented as a list but comes back as a bare string when there's only
-        // one; RTCPeerConnection accepts either, and normalising here keeps the shape of
-        // our own response identical to the statically configured TURN entries.
-        $urls = array_values(array_filter((array) ($ice['urls'] ?? []), 'is_string'));
+        // `iceServers` comes back as a *list* of entries — Cloudflare returns its STUN servers
+        // as one and the relay as another — though the API is also documented returning a bare
+        // object with `urls` on it. Both shapes are normalised to a list here, because reading
+        // `$ice['urls']` off the list form silently finds nothing: that mismatch is what had
+        // this returning null against the live API while the tests, which faked the object
+        // form, passed.
+        $entries = isset($ice['urls']) ? [$ice] : array_filter($ice, 'is_array');
 
-        if ($urls === []) {
-            return null;
+        // The relay is the entry that carries credentials. The STUN-only entry is deliberately
+        // dropped rather than passed through: it needs no minting, config('webrtc.stun_urls')
+        // already supplies STUN, and this method's contract is one TURN entry.
+        foreach ($entries as $entry) {
+            $urls = array_values(array_filter((array) ($entry['urls'] ?? []), 'is_string'));
+
+            if ($urls === [] || ($entry['username'] ?? null) === null) {
+                continue;
+            }
+
+            return [
+                'urls' => $urls,
+                'username' => $entry['username'],
+                'credential' => $entry['credential'] ?? null,
+            ];
         }
 
-        return [
-            'urls' => $urls,
-            'username' => $ice['username'] ?? null,
-            'credential' => $ice['credential'] ?? null,
-        ];
+        return null;
     }
 }

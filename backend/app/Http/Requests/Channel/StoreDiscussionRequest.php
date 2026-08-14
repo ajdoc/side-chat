@@ -5,6 +5,7 @@ namespace App\Http\Requests\Channel;
 use App\Http\Requests\MemberRequest;
 use App\Models\Channel;
 use App\Models\Server;
+use App\Support\Apps\AppCatalogue;
 use Illuminate\Validation\Rule;
 
 /**
@@ -45,6 +46,9 @@ class StoreDiscussionRequest extends MemberRequest
                 'integer',
                 Rule::exists('channels', 'id')->where('parent_id', $parent->getKey()),
             ],
+            // Which app the new discussion is, for an app channel. Optional even there —
+            // omitting it inherits whatever its siblings are, which is the common case.
+            'app_id' => ['nullable', 'string', 'in:'.implode(',', AppCatalogue::ids())],
         ];
     }
 }

@@ -3,6 +3,7 @@
 namespace App\DTOs\Channel;
 
 use App\Models\Channel;
+use App\Support\Apps\AppCatalogue;
 use App\Support\SideSpace\MapPresets;
 use WendellAdriel\ValidatedDTO\ValidatedDTO;
 
@@ -20,6 +21,19 @@ final class CreateChannelData extends ValidatedDTO
     public ?string $preset;
 
     /**
+     * Which app an app channel is. Null for every other type — and required for an `app`, for
+     * the same reason a Side Space needs a preset: the channel is the app, so there is nothing
+     * sensible to render until somebody has said which one.
+     *
+     * Snake_case to match the wire, rather than `$appId` plus a `mapData()` entry: the package
+     * applies that mapping *before* validation, so the rule keyed `app_id` would be looking for
+     * a key that had already been renamed away and `required_if` would fire on every app
+     * channel. The rules are shared with {@see StoreChannelRequest}, which sees the raw request,
+     * so the wire name is the one that has to win.
+     */
+    public ?string $app_id;
+
+    /**
      * Single source of truth for validation — reused by the matching FormRequest.
      *
      * @return array<string, mixed>
@@ -30,6 +44,7 @@ final class CreateChannelData extends ValidatedDTO
             'name' => ['required', 'string', 'max:100'],
             'type' => ['required', 'string', 'in:'.implode(',', Channel::TYPES)],
             'preset' => ['nullable', 'required_if:type,space', 'string', 'in:'.implode(',', MapPresets::keys())],
+            'app_id' => ['nullable', 'required_if:type,app', 'string', 'in:'.implode(',', AppCatalogue::ids())],
         ];
     }
 
@@ -42,9 +57,9 @@ final class CreateChannelData extends ValidatedDTO
     /** @return array<string, mixed> */
     protected function defaults(): array
     {
-        // Explicit, so `preset` is always defined rather than unset on the three channel types
-        // that have no map.
-        return ['preset' => null];
+        // Explicit, so each is always defined rather than unset on the channel types that have
+        // no map and no app.
+        return ['preset' => null, 'app_id' => null];
     }
 
     /** @return array<string, mixed> */

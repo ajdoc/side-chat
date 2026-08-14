@@ -1,4 +1,4 @@
-import type { Channel, ChannelType, Server } from '~/types'
+import type { Channel, ChannelType, Server, SideDeskAppId } from '~/types'
 
 interface Paginated<T> {
   data: T[]
@@ -115,7 +115,7 @@ export function useServer() {
   }
 
   /** `preset` names the starting room, and is required for — and only for — a Side Space. */
-  async function createChannel(serverId: number, payload: { name: string, type: ChannelType, preset?: string }) {
+  async function createChannel(serverId: number, payload: { name: string, type: ChannelType, preset?: string, app_id?: SideDeskAppId }) {
     const res = await api<{ data: Channel }>(`/api/servers/${serverId}/channels`, {
       method: 'POST',
       body: payload,

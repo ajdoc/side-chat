@@ -115,6 +115,8 @@ class DiscussionController extends Controller
             $channel,
             $data['name'],
             isset($data['copy_from']) ? Channel::find($data['copy_from']) : null,
+            $data['app_id'] ?? null,
+            $request->user(),
         ));
     }
 

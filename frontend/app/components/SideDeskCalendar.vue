@@ -444,6 +444,25 @@ function dayLabel(e: CalendarEvent) {
             <Trash2 class="h-4 w-4" />
           </button>
         </div>
+
+        <!--
+          Tags and a comment thread on the entry being edited.
+
+          Only when editing, because both hang off an id and a new event doesn't have one yet.
+          The component fetches and writes on its own — see AppItemDiscussion — which is what
+          "the polymorphic tables paid off" looks like in practice: the Calendar gained a
+          discussion without learning what a comment is.
+
+          Compact mode is excluded: that's the 280px canvas card, where a comment thread under
+          the form would be a scrollbar inside a scrollbar.
+        -->
+        <AppItemDiscussion
+          v-if="editing && !compact"
+          :base-path="basePath"
+          subject="calendar_event"
+          :item-id="editing.id"
+          :can-edit="canEdit"
+        />
       </div>
     </div>
   </div>

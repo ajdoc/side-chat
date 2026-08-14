@@ -84,6 +84,41 @@ const SCREEN_MAX_BITRATE = 2_500_000
 const CAMERA_MAX_BITRATE = 600_000
 
 /**
+ * What a share is allowed to cost *in total*, rather than per peer.
+ *
+ * SCREEN_MAX_BITRATE above is a per-encoding cap, and in a mesh that's only half the story:
+ * the same picture is encoded and uploaded once per other person, so the flat 2.5Mbps that
+ * is comfortable in a call of two is ~17Mbps of upstream in a call of eight — well past what
+ * a domestic connection will carry, on a machine that is very often also running the game
+ * being shared. That's the stutter people report on movie nights and not on pair-programming:
+ * motion content is the only thing that actually spends its whole budget.
+ *
+ * So the per-peer cap becomes budget ÷ peers, clamped: never above SCREEN_MAX_BITRATE (two
+ * people shouldn't get a worse picture than they do today), never below the floor (past a
+ * point a smaller number stops buying smoothness and just looks broken — better to let the
+ * encoder degrade on the axis the content mode chose).
+ */
+const SCREEN_UPLOAD_BUDGET = 6_000_000
+const SCREEN_MIN_BITRATE = 500_000
+
+/**
+ * Congestion backoff, applied on top of the budget above.
+ *
+ * The budget is arithmetic about the *mesh*; it knows nothing about the pipe. `getStats()`
+ * does: libwebrtc reports `qualityLimitationReason` on the outbound video, which is its own
+ * answer to "am I being held back, and by what". When any peer says `bandwidth` or `cpu` we
+ * scale every screen encoding down a step; when nobody has complained for a while we give it
+ * back slowly. Down fast and up slow, because the cost of the two mistakes isn't symmetric —
+ * over-sending judders the picture for everyone, under-sending just looks softer.
+ */
+const SCREEN_STATS_INTERVAL_MS = 3000
+const SCREEN_BACKOFF_STEP = 0.75
+const SCREEN_RECOVER_STEP = 1.1
+const SCREEN_MIN_SCALE = 0.35
+/** Consecutive clean polls before the scale is allowed to climb again (~4 × 3s). */
+const SCREEN_RECOVER_AFTER_POLLS = 4
+
+/**
  * Voice is mono speech, and it goes up your upload pipe once per *other person in the call* —
  * so a few dozen kbps per peer is both plenty and the thing worth being stingy about. Capped on
  * the mic *sender's* encoding (applyMicParams) so it's the microphone that's held down and not
@@ -141,6 +176,12 @@ const SCREEN_MAX_FRAMERATE = 30
  * speeds back up on its own — the axis it's easy to be wrong about is the one it re-checks.
  */
 const SCREEN_DETAIL_FRAMERATE = 10
+
+/**
+ * Consecutive still samples (one a second) before 'auto' drops back to the detail encoding.
+ * Only guards that direction — see sampleScreen for why the two aren't symmetric.
+ */
+const SCREEN_DETAIL_DWELL_SAMPLES = 4
 
 /**
  * How a share is encoded, as a trade the sender picks:
@@ -504,6 +545,19 @@ let sampleVideo: HTMLVideoElement | null = null
 let sampleCanvas: HTMLCanvasElement | null = null
 let samplePrev: Uint8ClampedArray | null = null
 let resolvedScreenMode: 'detail' | 'motion' = 'detail'
+/** How many samples in a row have disagreed with what's applied. See sampleScreen. */
+let sampleDissent = 0
+
+// --- screen congestion control (see SCREEN_UPLOAD_BUDGET) ---
+// The multiplier the mesh budget is scaled by, and how many polls in a row have come back
+// clean. Module scope for the same reason the sampler is: one screen, many useVoice()s.
+// Per *peer*, because in a mesh each peer connection encodes and sends its own copy: a
+// bandwidth limit hit on the way to one person says nothing about the others, and throttling
+// everyone for it is the "one weak receiver drags the call down" behaviour we're fixing.
+// A cpu limit is the exception — one machine, one CPU — and is applied across the board.
+const screenScale = new Map<number, number>()
+const screenCleanPolls = new Map<number, number>()
+let screenStatsTimer: ReturnType<typeof setInterval> | undefined
 
 /**
  * Where the call's audio elements live: a container hung off <body>, outside the Vue tree.
@@ -1575,16 +1629,49 @@ export function useVoice() {
    * {@link adoptedVideo}) — a peer who joined while we were already sharing has to get the same
    * treatment as everyone who was there when it started, or they receive an uncapped stream.
    */
-  function applyScreenParams(sender: RTCRtpSender) {
+  /**
+   * What one peer's copy of the screen may cost right now.
+   *
+   * The mesh budget split across everyone we're sending to, then scaled by whatever the
+   * congestion poll has learned, then clamped. Recomputed rather than stored because both
+   * inputs move underneath it: people join and leave, and the poll adjusts the scale.
+   */
+  function screenSendBitrate(peerId?: number) {
+    // Peers we're out of earshot of in a Side Space have no screen track on them either, so
+    // they aren't spending any of the budget and shouldn't shrink anyone else's share of it.
+    const receivers = Math.max(1, [...handles.values()].filter(h => h.screenTransceiver?.sender.track).length)
+    const share = SCREEN_UPLOAD_BUDGET / receivers
+    const scale = peerId === undefined ? 1 : (screenScale.get(peerId) ?? 1)
+
+    return Math.round(Math.min(SCREEN_MAX_BITRATE, Math.max(SCREEN_MIN_BITRATE, share * scale)))
+  }
+
+  function applyScreenParams(sender: RTCRtpSender, peerId?: number) {
     const { degradation, maxFramerate } = screenModeSettings(resolvedScreenMode)
     const params = sender.getParameters()
 
     params.encodings = params.encodings?.length ? params.encodings : [{}]
-    params.encodings[0]!.maxBitrate = SCREEN_MAX_BITRATE
+    params.encodings[0]!.maxBitrate = screenSendBitrate(peerId)
     params.encodings[0]!.maxFramerate = maxFramerate
     params.degradationPreference = degradation
 
     return sender.setParameters(params).catch(() => {})
+  }
+
+  /**
+   * Re-cap every live screen sender.
+   *
+   * The per-peer budget is a function of how many peers there are, so the arrival or
+   * departure of one person changes what *everyone else* is allowed to send. Without this
+   * the eighth person to join a share gets the tight cap while the seven already receiving
+   * keep the roomy one — which is precisely the over-send the budget exists to prevent.
+   */
+  function refreshScreenBitrate() {
+    if (!screenTrack) return
+    return Promise.all([...handles.entries()].map(([id, handle]) => {
+      const sender = handle.screenTransceiver?.sender
+      return sender?.track ? applyScreenParams(sender, id) : undefined
+    }))
   }
 
   /**
@@ -1608,7 +1695,10 @@ export function useVoice() {
 
     void transceiver.sender.replaceTrack(track).then(async () => {
       if (screen) {
-        await applyScreenParams(transceiver.sender)
+        // This new receiver takes a share of the upload budget, which means everyone already
+        // receiving now has a smaller one. refreshScreenBitrate covers this sender too, so
+        // there's no separate applyScreenParams call to make here.
+        await refreshScreenBitrate()
 
         return
       }
@@ -1971,6 +2061,16 @@ export function useVoice() {
 
     handles.delete(id)
     peers.value = peers.value.filter(p => p.id !== id)
+
+    // Their congestion history goes with them: someone who drops and rejoins on a different
+    // network shouldn't inherit the throttle their last connection earned.
+    screenScale.delete(id)
+    screenCleanPolls.delete(id)
+
+    // One fewer copy of the screen to send: the survivors' share of the upload budget just
+    // grew, so hand it back to them rather than leaving the call permanently throttled to
+    // its busiest moment.
+    void refreshScreenBitrate()
 
     // One fewer voice to share the arc between. Skipped during teardown, where every peer is
     // going and re-spreading the survivors is work nobody will hear.
@@ -3053,9 +3153,15 @@ export function useVoice() {
     // The audio track only exists if the source had sound and the user ticked "share audio".
     screenAudioTrack = display.getAudioTracks()[0] ?? null
 
-    // Resolve the content mode for the first frames. 'auto' opens as 'detail' and the sampler
-    // (started below) corrects it within a second or two once it can see what's on screen.
-    const initialMode = screenMode.value === 'auto' ? 'detail' : screenMode.value
+    // Resolve the content mode for the first frames; the sampler (started below) corrects an
+    // 'auto' guess within a second or two once it can see what's on screen.
+    //
+    // 'auto' opens as *motion*, which is the cheaper mistake. Opening as detail meant every
+    // share began at SCREEN_DETAIL_FRAMERATE — so a film or a game visibly juddered for its
+    // first second or two and then snapped to full rate, which is exactly the moment someone
+    // is watching to see whether the share works. The other way round costs a fraction of a
+    // second of bitrate on a slide deck that nobody can perceive.
+    const initialMode = screenMode.value === 'auto' ? 'motion' : screenMode.value
     resolvedScreenMode = initialMode
     screenTrack.contentHint = screenModeSettings(initialMode).hint
 
@@ -3093,10 +3199,15 @@ export function useVoice() {
         await applySharedAudioParams(sound.sender)
       }
     }))
+    // The loop above filled the senders one at a time, so each applyScreenParams saw a
+    // different number of receivers and the first peers were capped as though they were the
+    // only one. One pass now that every slot is filled settles them all on the same figure.
+    await refreshScreenBitrate()
     await renegotiateAll()
 
     screenStream.value = markRaw(display)
     startScreenSampler() // a no-op unless the mode is 'auto'
+    startScreenStats()
     await publishState()
   }
 
@@ -3104,6 +3215,7 @@ export function useVoice() {
     if (!isSharing.value) return
 
     stopScreenSampler()
+    stopScreenStats()
 
     await Promise.all(
       [...handles.values()].map(async (handle) => {
@@ -3289,6 +3401,85 @@ export function useVoice() {
   }
 
   /**
+   * Ask every peer connection how the screen encode is actually going, and adjust.
+   *
+   * `qualityLimitationReason` on the outbound video is libwebrtc's own verdict: 'bandwidth'
+   * means the pipe couldn't carry what we asked for, 'cpu' that the machine couldn't encode
+   * it — the two ways a movie night turns to slideshow.
+   *
+   * A 'bandwidth' verdict is scoped to the peer it was reported on, because each connection
+   * carries its own encoding to its own destination: the person on hotel wifi gets a smaller
+   * picture and nobody else notices. 'cpu' is the opposite — there is one processor doing all
+   * the encoding — so it backs every peer off at once.
+   *
+   * Recovery needs several consecutive clean polls, so a share doesn't oscillate between the
+   * bitrate that just failed and the one below it.
+   */
+  async function pollScreenCongestion() {
+    if (!screenTrack) return
+
+    const limited = new Map<number, 'bandwidth' | 'cpu'>()
+
+    await Promise.all([...handles.entries()].map(async ([id, handle]) => {
+      const sender = handle.screenTransceiver?.sender
+      if (!sender?.track) return
+
+      const stats = await sender.getStats().catch(() => null)
+      stats?.forEach((report: any) => {
+        if (report.type !== 'outbound-rtp' || report.kind !== 'video') return
+        const reason = report.qualityLimitationReason
+        if (reason === 'bandwidth' || reason === 'cpu') limited.set(id, reason)
+      })
+    }))
+
+    // One machine, one encoder budget: a cpu limit anywhere is a cpu limit everywhere.
+    const cpuBound = [...limited.values()].includes('cpu')
+    let changed = false
+
+    for (const id of handles.keys()) {
+      const scale = screenScale.get(id) ?? 1
+      let next = scale
+
+      if (cpuBound || limited.has(id)) {
+        screenCleanPolls.set(id, 0)
+        next = Math.max(SCREEN_MIN_SCALE, scale * SCREEN_BACKOFF_STEP)
+      } else if (scale < 1) {
+        const clean = (screenCleanPolls.get(id) ?? 0) + 1
+        if (clean >= SCREEN_RECOVER_AFTER_POLLS) {
+          screenCleanPolls.set(id, 0)
+          next = Math.min(1, scale * SCREEN_RECOVER_STEP)
+        } else {
+          screenCleanPolls.set(id, clean)
+        }
+      }
+
+      if (next !== scale) {
+        screenScale.set(id, next)
+        changed = true
+      }
+    }
+
+    // setParameters on every sender every few seconds, for nothing, is not free.
+    if (changed) await refreshScreenBitrate()
+  }
+
+  function startScreenStats() {
+    stopScreenStats()
+    // A share always opens at full budget: the last one's congestion tells us nothing about
+    // this one, which may be a different network, a different room, or a different day.
+    screenScale.clear()
+    screenCleanPolls.clear()
+    screenStatsTimer = setInterval(() => { void pollScreenCongestion() }, SCREEN_STATS_INTERVAL_MS)
+  }
+
+  function stopScreenStats() {
+    clearInterval(screenStatsTimer)
+    screenStatsTimer = undefined
+    screenScale.clear()
+    screenCleanPolls.clear()
+  }
+
+  /**
    * Start the adaptive sampler that guesses detail vs motion from the picture itself.
    *
    * Only meaningful while a screen is up and the mode is 'auto'. It draws the shared track
@@ -3310,6 +3501,7 @@ export function useVoice() {
     sampleCanvas.width = 32
     sampleCanvas.height = 32
     samplePrev = null
+    sampleDissent = 0
 
     sampleTimer = setInterval(sampleScreen, 1000)
   }
@@ -3345,7 +3537,21 @@ export function useVoice() {
       // a line of scrolling text isn't mistaken for motion.
       const meanChange = diff / ((data.length / 4) * 3)
       const guess: 'detail' | 'motion' = meanChange > 8 ? 'motion' : 'detail'
-      if (guess !== resolvedScreenMode) void applyScreenMode(guess)
+
+      if (guess === resolvedScreenMode) {
+        sampleDissent = 0
+      } else {
+        sampleDissent++
+        // Asymmetric on purpose. Motion is believed immediately: a video that starts playing
+        // should get the full framerate this second, not in three. Going *back* to detail
+        // needs a run of quiet samples, because a film is full of them — a dialogue shot, a
+        // slow pan, a fade — and dropping a movie to SCREEN_DETAIL_FRAMERATE every time the
+        // camera stops moving is the flapping this counter exists to stop.
+        if (guess === 'motion' || sampleDissent >= SCREEN_DETAIL_DWELL_SAMPLES) {
+          sampleDissent = 0
+          void applyScreenMode(guess)
+        }
+      }
     }
 
     samplePrev = data

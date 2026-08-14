@@ -187,6 +187,17 @@ function popOut() {
       :readonly-hint="readonlyHint"
     />
 
+    <!-- Tracker — projects and their tasks. The same component an app channel fills its whole
+         window with; in a side panel it simply has less room. -->
+    <TrackerApp
+      v-else-if="resolved === 'tracker'"
+      :key="`${basePath}-tracker`"
+      :base-path="basePath"
+      :stream-name="streamName"
+      :can-edit="canEdit"
+      :channel-id="channelId"
+    />
+
     <!-- Docs — a view-only shelf of uploaded PDF / Word / Excel files. -->
     <SideDeskDocs
       v-else-if="resolved === 'docs'"

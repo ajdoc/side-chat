@@ -1,6 +1,7 @@
 <script setup lang="ts">
-import { Hash, Map as MapIcon, Volume2 } from 'lucide-vue-next'
-import type { ChannelType } from '~/types'
+import { Hash, LayoutGrid, Map as MapIcon, Volume2 } from 'lucide-vue-next'
+import type { ChannelType, SideDeskAppId } from '~/types'
+import { CHANNELABLE_APPS } from '~/composables/useDeskApps'
 import { Button } from '~/components/ui/button'
 import { Input } from '~/components/ui/input'
 import { Label } from '~/components/ui/label'
@@ -32,7 +33,17 @@ const channelTypes: { value: ChannelType, label: string, hint: string, icon: any
   { value: 'text', label: 'Text', hint: 'Post messages, images, and links', icon: Hash },
   { value: 'voice', label: 'Voice', hint: 'Hang out together with voice', icon: Volume2 },
   { value: 'space', label: 'Side Space', hint: 'A room you walk around — you hear whoever is near you', icon: MapIcon },
+  { value: 'app', label: 'App', hint: 'The channel *is* an app — a tracker, a board, a doc shelf', icon: LayoutGrid },
 ]
+
+/**
+ * Which app an app channel will be.
+ *
+ * The list is a filter over the one app registry rather than a list of its own — see
+ * CHANNELABLE_APPS. Defaults to the Tracker: it's the app built for this slot, and the one
+ * somebody picking "App" most likely came for.
+ */
+const appId = ref<SideDeskAppId>('tracker')
 
 /** Loaded only when it's needed — most channels aren't Side Spaces. */
 async function loadPresets() {
@@ -56,6 +67,8 @@ async function submit() {
       type: type.value,
       // Only sent for a Side Space; the API requires it there and refuses it being absent.
       ...(type.value === 'space' ? { preset: preset.value } : {}),
+      // Same contract one type over: an app channel has to say which app it is.
+      ...(type.value === 'app' ? { app_id: appId.value } : {}),
     })
     await navigateTo(
       // A voice channel is somewhere you *join*, so creating one drops you back at the server
@@ -112,6 +125,29 @@ function cancel() {
                 </span>
               </button>
             </div>
+          </div>
+
+          <!-- Which app the channel will be. A plain grid of the registry's channelable apps;
+               no thumbnails, because an app's identity is its icon and its name, not a
+               screenshot of an empty one. -->
+          <div v-if="type === 'app'" class="space-y-2">
+            <Label>Which app</Label>
+            <div class="grid grid-cols-2 gap-2">
+              <button
+                v-for="a in CHANNELABLE_APPS"
+                :key="a.id"
+                type="button"
+                class="flex items-center gap-2 rounded-lg border p-2.5 text-left transition-colors"
+                :class="appId === a.id ? 'border-primary bg-muted' : 'hover:bg-muted/50'"
+                @click="appId = a.id"
+              >
+                <component :is="a.icon" class="h-4 w-4 shrink-0 text-muted-foreground" />
+                <span class="truncate text-sm font-medium">{{ a.label }}</span>
+              </button>
+            </div>
+            <p class="text-xs text-muted-foreground">
+              The channel still has a conversation underneath — the app just takes the window.
+            </p>
           </div>
 
           <!-- Which room to start from. A real thumbnail of the grid, not an illustration —

@@ -74,8 +74,13 @@ export interface AuthResponse {
  * `space` is a Side Space — a room you walk an avatar around, hearing whoever is near you.
  * Like `voice` it's a text channel that also holds a call, so everything addressed by channel
  * id works in one unchanged; only the surface above the timeline differs.
+ *
+ * `app` is the same idea applied to software rather than a room: the channel's body is an
+ * application — a tracker, a board, a doc shelf — sitting over a timeline that carries on
+ * existing underneath. Which app is `app_id`, and it's the one field a client needs to know
+ * what to draw.
  */
-export type ChannelType = 'text' | 'voice' | 'space'
+export type ChannelType = 'text' | 'voice' | 'space' | 'app'
 
 export interface Channel {
   id: number
@@ -95,6 +100,14 @@ export interface Channel {
   discussions?: Channel[]
   name: string
   type: ChannelType
+  /**
+   * Which app this channel *is*, for `type: 'app'`.
+   *
+   * Undefined rather than null when the response didn't load it — the sidebar listing and the
+   * create response both carry it, but a channel serialised on its own may not, and "no app"
+   * and "didn't ask" have to stay distinguishable.
+   */
+  app_id?: SideDeskAppId | null
   position: number
   /** Restricted to an allow-list rather than open to the whole server. */
   is_private?: boolean
@@ -816,7 +829,7 @@ export interface WhiteboardStroke {
  *
  * `canvas` is in the union but never in a stored list: the Open Canvas can't be removed.
  */
-export type SideDeskSurfaceAppId = 'board' | 'notes' | 'docs' | 'canvas' | 'calendar'
+export type SideDeskSurfaceAppId = 'board' | 'notes' | 'docs' | 'canvas' | 'calendar' | 'tracker'
 export type SideDeskWidgetAppId = WidgetType
 export type SideDeskAppId = SideDeskSurfaceAppId | SideDeskWidgetAppId
 
@@ -1736,4 +1749,101 @@ export interface PokerState {
   seats: number[]
   players: Record<string, PokerPlayer>
   log: string[]
+}
+
+// --- The Tracker app, and the comments/tags any app can borrow ------------------------------
+
+/**
+ * A task's status. The board draws one group per value, in this order, and `done` is the one
+ * with behaviour attached — reaching it stamps `completed_at`, which is what a project's
+ * progress bar counts.
+ */
+export type TrackerStatus = 'backlog' | 'todo' | 'in_progress' | 'in_review' | 'done'
+
+export type TrackerPriority = 'low' | 'mid' | 'high' | 'urgent'
+
+/** A named colour the client maps to theme tokens — never a hex. See the tags migration. */
+export type AppTagColor = 'slate' | 'primary' | 'green' | 'amber' | 'red' | 'violet' | 'sky'
+
+export interface AppTag {
+  id: number
+  /** The normalized, lowercased form the API matches on. */
+  name: string
+  /** What gets drawn — whatever capitalisation was typed. */
+  label: string
+  color: AppTagColor
+  /** How many things wear it. Only on the tag listing, which counts them. */
+  usage_count?: number
+}
+
+/**
+ * A comment on a work item.
+ *
+ * Carries its target so a client holding several items open can route an arriving broadcast
+ * without guessing which one it belongs to.
+ */
+export interface AppComment {
+  id: number
+  commentable_type: string
+  commentable_id: number
+  body: string
+  user?: User
+  /** Set once it's been edited, so the client can say so. */
+  edited_at?: string | null
+  created_at: string
+}
+
+/**
+ * One line of an item's history.
+ *
+ * `kind` plus `data` rather than a rendered sentence: the wording belongs to the client, so a
+ * history written months ago still reads in the current copy. See `activityLine()`.
+ */
+export interface AppActivity {
+  id: number
+  kind: string
+  data: Record<string, any>
+  user?: User
+  created_at: string
+}
+
+export interface TrackerTask {
+  id: number
+  project_id: number
+  number: number
+  /** The reference people quote — HRIP-2. Composed server-side so every surface agrees. */
+  key: string
+  title: string
+  description?: string | null
+  status: TrackerStatus
+  priority: TrackerPriority
+  assignee?: User | null
+  creator?: User | null
+  /** A plain Y-m-d: a due date is a day, not an instant. */
+  due_date?: string | null
+  position: number
+  completed_at?: string | null
+  tags?: AppTag[]
+  /** Detail view only — absent, not empty, on a board listing. */
+  comments?: AppComment[]
+  activity?: AppActivity[]
+  created_at: string
+  updated_at: string
+}
+
+export interface TrackerProject {
+  id: number
+  channel_id: number
+  /** The prefix on every task key in it. */
+  key: string
+  name: string
+  description?: string | null
+  archived: boolean
+  position: number
+  creator?: User
+  /** The two numbers the progress bar is made of. Absent when the listing didn't count them. */
+  task_count?: number
+  done_count?: number
+  created_at: string
+  updated_at: string
 }

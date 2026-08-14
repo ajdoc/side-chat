@@ -33,7 +33,7 @@ class ChannelController extends Controller
     public function store(StoreChannelRequest $request, Server $server, CreateChannelAction $action): ChannelResource
     {
         return new ChannelResource(
-            $action->handle($server, CreateChannelData::fromArray($request->validated()))
+            $action->handle($server, CreateChannelData::fromArray($request->validated()), $request->user())
         );
     }
 

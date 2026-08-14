@@ -45,7 +45,17 @@ final class ChannelService
                     ->where('is_private', false)
                     ->orWhereHas('allowedMembers', fn ($m) => $m->whereKey($user->getKey())));
             }
+
+            // Which app each discussion is, for the app channels among them. Eager-loaded here
+            // rather than fetched when one is opened, because the sidebar itself needs it: an
+            // app channel's row carries its app's icon, so the answer has to arrive with the
+            // tree rather than one request after it.
+            $discussions->with('app');
         }]);
+
+        // And on the containers, for the same reason — a container is drawn with the icon of
+        // what it holds.
+        $query->with('app');
 
         $channels = $query->paginate(self::PER_PAGE);
 

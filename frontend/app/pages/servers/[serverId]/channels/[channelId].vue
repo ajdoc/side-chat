@@ -2,6 +2,7 @@
 import { Hash, Info, LayoutList, LayoutPanelLeft, Map as MapIcon, MessagesSquare, Volume2 } from 'lucide-vue-next'
 import { useLocalStorage } from '@vueuse/core'
 import { Button } from '~/components/ui/button'
+import { deskApp } from '~/composables/useDeskApps'
 
 definePageMeta({ middleware: 'auth', layout: 'app' })
 
@@ -84,6 +85,28 @@ const canEditMap = computed(() => !!server.value)
  */
 const chatHidden = useLocalStorage('side-space:chat-hidden', true)
 
+/**
+ * An app channel — the channel's body is an application rather than a timeline.
+ *
+ * Three lines again, and for exactly the reason in this file's header comment: the app goes in
+ * the same slot the Side Space's room and the voice channel's call go in, and everything below
+ * that slot stays unaware of it.
+ */
+const isApp = computed(() => channel.value?.type === 'app')
+
+/**
+ * Whether the app has the window to itself.
+ *
+ * A second preference rather than sharing the Side Space's: they're different rooms with
+ * different habits. Somebody who keeps chat open beside a walkable room may well want it folded
+ * away behind a tracker, and one shared key would make each visit re-litigate the other's
+ * choice.
+ */
+const appChatHidden = useLocalStorage('app-channel:chat-hidden', true)
+
+/** The icon an app channel wears in the header — its app's own, from the registry. */
+const appIcon = computed(() => (channel.value?.app_id ? deskApp(channel.value.app_id)?.icon : undefined))
+
 function openThreadsList() {
   // Open the channel's Threads list beside anything already up (a side chat stays put),
   // clearing a channel thread that was in view and the full-column Info / Side Desk.
@@ -106,15 +129,18 @@ function openDesk() {
     :key="channel.id"
     :channel="channel"
     :title="title"
-    :prefix="isVoice || isSpace ? '' : '#'"
-    :collapse-timeline="isSpace && chatHidden"
+    :prefix="isVoice || isSpace || isApp ? '' : '#'"
+    :collapse-timeline="(isSpace && chatHidden) || (isApp && appChatHidden)"
   >
     <template v-if="parent" #breadcrumb>
       <DiscussionPicker :parent="parent" :current="channel" />
     </template>
 
     <template #icon>
-      <MapIcon v-if="isSpace" class="h-5 w-5 shrink-0 text-muted-foreground" />
+      <!-- An app channel wears its app's icon, so the header says which app it is without
+           spending the title on it. -->
+      <component :is="appIcon" v-if="isApp && appIcon" class="h-5 w-5 shrink-0 text-muted-foreground" />
+      <MapIcon v-else-if="isSpace" class="h-5 w-5 shrink-0 text-muted-foreground" />
       <Volume2 v-else-if="isVoice" class="h-5 w-5 shrink-0 text-muted-foreground" />
       <Hash v-else class="h-5 w-5 shrink-0 text-muted-foreground" />
     </template>
@@ -158,6 +184,12 @@ function openDesk() {
          working inside a walkable room without a line of their own. -->
     <template v-if="isSpace" #call>
       <SideSpaceStage v-model:chat-hidden="chatHidden" :channel="channel" :can-edit="canEditMap" />
+    </template>
+    <!-- An app channel takes the identical slot — which is the whole of why the timeline,
+         threads, side chats, search, reads and encryption all work inside one without a line
+         of their own. -->
+    <template v-else-if="isApp" #call>
+      <AppChannel v-model:chat-hidden="appChatHidden" :channel="channel" :can-edit="!!server" />
     </template>
     <template v-else-if="isVoice" #call>
       <VoiceChannel :channel="channel" />

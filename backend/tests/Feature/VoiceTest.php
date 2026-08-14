@@ -767,6 +767,46 @@ it('mints a cloudflare turn credential and hands it to the browser', function ()
         && str_contains($request->url(), '/keys/key-123/credentials/'));
 });
 
+it('mints from the list-shaped response the live api actually returns', function () {
+    config([
+        'webrtc.cloudflare.key_id' => 'key-123',
+        'webrtc.cloudflare.api_token' => 'secret-token',
+    ]);
+
+    // The shape Cloudflare really sends: a list, STUN first, the relay second. The test above
+    // fakes the bare-object form the docs show, and passing it was not evidence this worked —
+    // against the live API the parser read `urls` off the list and found nothing.
+    Http::fake([
+        'rtc.live.cloudflare.com/*' => Http::response([
+            'iceServers' => [
+                ['urls' => ['stun:stun.cloudflare.com:3478']],
+                [
+                    'urls' => ['turn:turn.cloudflare.com:3478?transport=udp', 'turns:turn.cloudflare.com:5349?transport=tcp'],
+                    'username' => 'minted-user',
+                    'credential' => 'minted-secret',
+                ],
+            ],
+        ]),
+    ]);
+
+    [$user, , $channel] = ownerWithVoiceChannel();
+
+    Passport::actingAs($user);
+
+    $response = $this->postJson("/api/channels/{$channel->id}/voice/join")->assertOk();
+
+    expect(collect($response->json('ice_servers'))->firstWhere('username', 'minted-user'))
+        ->toMatchArray([
+            'urls' => ['turn:turn.cloudflare.com:3478?transport=udp', 'turns:turn.cloudflare.com:5349?transport=tcp'],
+            'credential' => 'minted-secret',
+        ]);
+
+    // The credential-less STUN entry is Cloudflare's, not ours to relay — our own STUN config
+    // already covers it, and this method's contract is a single TURN entry.
+    expect(collect($response->json('ice_servers'))->pluck('urls')->flatten())
+        ->not->toContain('stun:stun.cloudflare.com:3478');
+});
+
 it('still serves a call when cloudflare turn is down', function () {
     config([
         'webrtc.cloudflare.key_id' => 'key-123',

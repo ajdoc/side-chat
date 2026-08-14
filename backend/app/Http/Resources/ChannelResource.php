@@ -21,6 +21,20 @@ class ChannelResource extends JsonResource
             'name' => $this->name,
             'type' => $this->type,
             'position' => $this->position,
+            // Which app this channel *is*, for `type: 'app'` — the one field the client needs
+            // to know what to render in place of a timeline.
+            //
+            // Via displayAppId() rather than straight off the relation, because a *container*
+            // has no app row: the row hangs off the discussion. The sidebar draws containers,
+            // so reporting null for them is how an app channel ends up wearing a `#`.
+            //
+            // Gated on a relation actually being loaded, so a channel serialised on its own
+            // reports absent rather than a confident null — "no app" and "didn't ask" have to
+            // stay distinguishable.
+            'app_id' => $this->when(
+                $this->resource->relationLoaded('app') || $this->resource->relationLoaded('discussions'),
+                fn () => $this->resource->displayAppId(),
+            ),
             // Restricted to an allow-list rather than open to the whole server.
             'is_private' => (bool) $this->is_private,
             // Whether messages sent *now* are encrypted, and which key era they belong to.

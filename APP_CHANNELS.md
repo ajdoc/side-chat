@@ -1,194 +1,150 @@
-# Proposal: App Channels
-
-**Status:** proposal, nothing built. Written 2026-08-10, revised against Root's own docs.
+# App channels
 
 A fourth channel type — `app` — whose body is an application instead of a timeline. Where
-`text` gives you messages, `voice` a call and `space` a walkable room, an app channel gives
-you *one app, full-bleed, shared by everyone who opens it*.
+`text` gives you messages, `voice` a call and `space` a walkable room, an app channel gives you
+**one app, full-bleed, shared by everyone who opens it**.
 
-## What Root actually does
+Modelled on [Root](https://www.rootapp.com)'s app channels, where installing an app creates a
+dedicated channel and each app "runs inside its own channel". This is that idea on our own
+architecture — see [Relation to Root](#relation-to-root) for what we took and what we didn't.
 
-Sourced from [docs.rootapp.com](https://docs.rootapp.com/docs/app-docs/get-started/app-overview/),
-[support.rootapp.com](https://support.rootapp.com/docs/leader/apps/install-apps/) and
-[their blog](https://www.rootapp.com/blogs/why-were-building-root). Worth stating plainly,
-because it's more ambitious than "embed a web page in a channel":
+## The shape
 
-- **The pitch is apps *instead of* chat.** "Not Just Chat, Built for Action." Their CEO's
-  framing: existing tools "weren't built for what we actually use them for." Chat is the
-  fallback, not the centre.
-- **An app is a real client/server program, in TypeScript.** The **client** is a full GUI
-  (React/Vue/whatever) running in a Chromium-like sandbox inside their native client — most
-  browser features, but no filesystem, no webcam. The **server** is Node, with **SQLite** for
-  persistence, backed up and restored by Root. The two talk over **Protobuf**, and their build
-  tooling generates both sides' networking code.
-- **Root hosts all of it.** "Every app on Root runs directly on the platform. No hosting, no
-  scaling, no security overhead." That is the entire developer promise.
-- **Each community gets its own instance of the app's server**, with its own SQLite database.
-  Data isolation is structural, not a query filter.
-- **Apps and bots are the same thing minus a channel.** Installing an App creates a dedicated
-  channel; installing a Bot "runs in the background without a channel." Installing an app is
-  literally: right-click a channel group → Create channel → **App channel** → pick from the
-  store → name it, set visibility, assign roles.
-- **An app acts with a member's permissions, not with API scopes.** "Your code runs with
-  permissions just like a human member" — it needs *Manage Channel* to make a channel, *Kick
-  Members* to kick. It cannot send push notifications, accept join invites, or touch friends
-  lists. Only *Manage Apps* holders can install.
-- **Uninstalling is destructive and says so:** removing an app "permanently deletes the App,
-  its channel, and all associated data."
-- **Installs are metered by slots** tied to community level; over the limit, apps suspend and
-  are deleted after three days.
-
-The reference video ([Ask Root Ep. 1, "Can we replace Discord?"](https://www.youtube.com/watch?v=teVLql3gVpE))
-had no transcript I could retrieve — nothing below is drawn from it.
-
-### What this means for us
-
-My first draft guessed this was a sandboxed iframe pointing at a third-party URL. **That was
-wrong in the way that matters**: the whole value is that developers don't host anything. An
-iframe-plus-your-own-backend is the thing Root is explicitly selling against.
-
-The good news is that two of their central ideas already exist in our codebase, and one of them
-we got right by accident:
-
-| Root | Us, today |
-| --- | --- |
-| An app acts with a member's permissions | A bot **is** a `User` with `is_bot` — so channel permissions and `scopeVisibleTo` already apply to it, with no new code |
-| Apps = bots + a channel | We have the bot half already: tokens, webhooks, signing secrets, audit log |
-| App = a shared surface in a channel | `Widget` is shared JSON state per channel; `DESK_APPS` is a registry of app surfaces |
-| A non-timeline channel type | Side Space proved the slot exists — a map on top of a timeline that nothing below is aware of |
-
-So the honest summary: **we can have Root's *product* in three phases without much new
-machinery, and their *platform* only if we're willing to run untrusted Node per community.**
-Those are separable, and I'd separate them.
-
-## The core idea
-
-An app channel is a channel with `type = 'app'` and one row saying which app it is. The
-timeline still exists underneath, exactly as it does for a Side Space, where the map sits on
-the same timeline and everything below it stays unaware
-([`Channel::TYPES`](backend/app/Models/Channel.php#L25)). That inheritance is why this is
-cheap: reads, mentions, search, notifications, threads and E2EE keep working because none of
-them ever knew what a channel *looked* like.
-
-## Data model
-
-One enum value, one table.
-
-```php
-public const TYPES = ['text', 'voice', 'space', 'app'];
-```
+An app channel is a channel with `type = 'app'` and one row saying which app it is. **The
+timeline still exists underneath**, exactly as it does for a Side Space, where the map sits over
+a real timeline and everything below it is unaware. That inheritance is why this was cheap:
+reads, mentions, search, threads, side chats, notifications and E2EE all keep working because
+none of them ever knew what a channel *looked* like.
 
 ```
 channel_apps
-  id
-  channel_id      unique, cascade delete   — one app per channel; that's the point of it
-  app_id          string  — 'kanban' | 'board' | 'raid-planner' | 'ext:<slug>'
-  bot_id          nullable → bots.id       — the identity the app acts as (phase 3)
-  config          json nullable            — per-app settings; shape owned by the handler
-  installed_by    user id nullable
-  timestamps
+  channel_id   unique — one app per channel
+  app_id       'tracker' | 'board' | 'notes' | 'calendar' | 'docs' | 'canvas' | widgets
+  config       json, free-form — shape belongs to whatever renders the app
+  installed_by
 ```
 
-`config` as untyped JSON copies [`Widget::state`](backend/app/Models/Widget.php) deliberately:
-the shape belongs to the app's handler, so a new app is a handler plus a Vue component and no
-schema change. Mind [the `validated()` gotcha](backend/app/Models/Channel.php) — read
-free-form JSON off `input()`, not `validated()`, or the parent array vanishes when its nested
-rule is absent.
+**The row hangs off the discussion, not the container** — the same place a Side Space's map
+hangs. That is the whole of the grouping story: a discussion *is* a channel with a parent, so
+one app container with three discussions is three apps under one sidebar entry ("Design" holding
+a tracker, a board and a doc shelf), and none of it needed a second mechanism. A new discussion
+inherits its siblings' app unless it names another.
 
-Add `Channel::isApp()` and `Channel::app(): HasOne` alongside `isSpace()`/`spaceMap()`.
-`allowsCalls()` returns false for `app`. `scopeVisibleTo` is untouched — all visibility keeps
-flowing through it, which is what keeps search correct.
+### One registry, three questions
 
-**Follow Root on destructive uninstall.** Deleting the channel deletes the app's data, and the
-confirm dialog must say so in those words. The alternative — orphaned app data no UI can reach
-— is worse.
-
-## The app registry
-
-We already maintain a registry of apps with declared capabilities: `DESK_APPS` in
-[useDeskApps.ts](frontend/app/composables/useDeskApps.ts), where each entry declares `family`,
-`removable`, `canvasable`, `group`. Add one field:
+`DESK_APPS` in [useDeskApps.ts](frontend/app/composables/useDeskApps.ts) already declared where
+each app may appear. It gained one field:
 
 ```ts
-/** Can this app be the entire content of a channel? */
-channelable: boolean
+canvasable: boolean   // may it be a card on the Open Canvas?
+channelable: boolean  // may it be an entire channel?     ← new
 ```
 
-Then the create-channel app picker, the Side Desk tab picker and the canvas card picker are
-all *filters over one list* — the same collapse that file already performed once ("those were
-two lists of the same idea, and the seam showed"). Following that precedent is the reason
-phase 1 is small.
+So the create-channel picker, the Side Desk tab picker and the canvas card toolbar are three
+filters over **one** list. `App\Support\Apps\AppCatalogue` mirrors the channelable set
+server-side — the client decides what an app *looks* like, the server decides what may be
+stored. The games are deliberately not channelable: a game is something a room starts, plays and
+finishes, and a permanent channel for one would be an empty table most of the time.
 
-## Frontend
+`AppChannel.vue` is a thin dispatcher that renders the component the Side Desk already renders,
+full-size. An app id this client doesn't know draws an honest "update to open it" notice rather
+than an empty panel — a real state for a client a release behind the server.
 
-[`ChannelView.vue`](frontend/app/components/ChannelView.vue#L398) branches on `isSpace`; it
-gains a sibling branch for `type === 'app'` rendering `<AppChannel>` in place of the timeline,
-with chat as a collapsible side panel. Staying inside `ChannelView` is what gets the app
-channel its chat wiring free — [bubbles are fed from `ChannelView`, not the stage](frontend/app/components/ChannelView.vue).
+## The Tracker
 
-`AppChannel.vue` is a thin dispatcher: look up `app_id`, render the component the Side Desk
-tab already renders, at full size. For phase 1 that component exists and is already wired to
-the right endpoints.
+The one app built *for* the channel slot rather than adapted into it. Three screens with one
+Back button: **home** (your tasks, your projects) → **board** (a project's tasks grouped by
+status) → **task** (description, activity, comments, and the fields down the right).
 
-**Native shells:** app channels sit inside the existing allowlist because they're still
-`/channels/:id` — no `native-scope.global.ts` change. What needs real work is the sub-768px
-layout, the same fitting exercise the Side Space needed. Root wrote a whole blog post on
-bringing apps to mobile; treat that as a warning, not a footnote.
+- **Task keys** are `PROJECT-N` (`HRIP-2`). The number comes from `tracker_projects.next_number`
+  under a row lock, and is **never reused** — task keys get quoted in chat and in commits, so a
+  number that could come back would be a reference that silently changes meaning.
+- **Statuses** are `backlog → todo → in_progress → in_review → done`, drawn as collapsible
+  groups down the page rather than columns across it. Columns are right when you drag between
+  them all day and wrong here, where the common act is opening a task to read it — and a phone
+  would get five columns of one-word wrapping.
+- **`done` is the only status with behaviour**: it stamps `completed_at`, and leaving it *clears*
+  the stamp. A reopened task isn't finished, and a stale stamp would leave every progress bar
+  counting it forever.
+- **Filtering happens client-side.** Everything on screen is already held, so a keystroke that
+  re-queried would be slower and would flicker.
 
-## Phasing
+## Comments, tags and history — for every app
 
-| Phase | Scope | Size |
-| --- | --- | --- |
-| **1** | `app` type, `channel_apps`, `channelable` flag, `AppChannel.vue`, first-party board/kanban/canvas/calendar channels | Small |
-| **2** | Widget-family apps as channels (music, poll, poker, skribbl); per-app config UI; channel icon reflects its app; **new first-party apps that only make sense full-screen** — a task tracker, an event planner | Medium |
-| **3** | Third-party apps: install flow on top of bots, client bundle hosting, sandbox, storage API | Large |
-| **4** | App store / per-server catalogue, install slots, app-authored slash commands via the existing bot command path | Medium |
+The part worth reusing. Three polymorphic tables, built that way from the first line rather than
+as `tracker_comments` that later grows siblings:
 
-Phases 1–2 stand on their own even if 3 never ships: they turn "the channel where the team's
-board lives" from a tab you navigate to into a place in the sidebar. **Note that Root's own
-headline apps — Task Tracker, Raid Planner, Stickerwall — are all first-party.** The store is
-the long game; the product is those three. We should ship phase 2 and judge it before
-committing to a platform.
+| Table | What it holds |
+| --- | --- |
+| `app_comments` | A discussion under any work item |
+| `app_tags` + `app_taggables` | A **channel-wide** vocabulary, and what wears it |
+| `app_activity` | Append-only history — `kind` + `data`, never a rendered sentence |
 
-## Phase 3: the part that needs a real decision
+Adding them to a model is one `use HasAppActivity` line plus a resolver in `AppSubjects`.
+Already wired: `tracker_task`, `calendar_event`, `canvas_item`. The routes are generic —
+`channels/{channel}/apps/{type}/{id}/comments`.
 
-Root's model is: developer ships TS client + TS server, Root runs both, one server instance
-with its own SQLite per community. Reproducing that means running untrusted Node in
-per-community containers with backup, restore, quotas and isolation. That is a platform
-engineering programme, not a feature.
+Three deliberate choices:
 
-**My recommendation is the 80% version:**
+- **Not `App\Models\Comment`.** That one is the reaction-shaped comment on a timeline message —
+  keyed to `message_id`, grouped by normalized body, carrying an emoji. Same word, different
+  feature; merging them would be one table where half the columns are null for half the rows.
+- **Tags belong to the channel, not the project.** That's what makes a tag worth filtering on:
+  "blocked" means the same thing on a tracker task as on a calendar entry.
+- **Activity stores `kind` + `data`, never wording.** The client owns the phrasing, so a history
+  written today still reads in whatever copy a later release uses.
 
-- **Client:** a static JS bundle we host and serve from a **separate origin**, rendered in a
-  sandboxed iframe (`allow-scripts allow-forms`, *not* `allow-same-origin`), with a per-app
-  CSP `frame-src`. We host the bundle, so "no hosting" holds for the part users see.
-- **Server:** for most apps, **none**. We provide a scoped **storage API** — per-install
-  key-value plus a small structured store — that the client calls directly with its install
-  token. That's Root's SQLite promise minus the compute, and it covers a task tracker, a
-  planner, a stickerwall.
-- **When an app needs real compute:** it registers a webhook. We already have that —
-  [`Bot`](backend/app/Models/Bot.php) carries `token_hash`, `webhook_url`, `webhook_secret`
-  and hashed-token lookup. The developer hosts that piece, which is a real gap versus Root,
-  and an honest one to state.
-- **Identity and permissions:** the install creates a bot `User`, and the app acts as it.
-  This is Root's "runs with permissions just like a human member," and we get it free because
-  our bots are already users. No new permission system.
-- **`postMessage` bridge, deny by default.** The app gets context (channel id, display name,
-  locale). It never gets a session.
+Deleting cascades **in PHP, not in the database** — `commentable_id` points at whichever table
+owns the row, so there's no key to cascade along. Model events cover deleting one item;
+anything deleting a *parent* whose children go in the database must call
+`purgeAppActivityFor()` first. `TrackerProjectController::destroy` does.
 
-**E2EE is a hard boundary.** An encrypted channel refuses third-party apps outright. There's
-no coherent story where third-party code sits in a room whose whole promise is that the server
-can't read it, and "reversible but never retroactive" makes a half-answer worse than a refusal.
-First-party apps in phase 1–2 can be allowed case by case.
+## Decisions taken
 
-## Open questions
+| Question | Answer |
+| --- | --- |
+| One app per channel, or a set? | **One.** A set of apps in a channel is the Side Desk, which already exists; rebuilding it here would reopen the seam `useDeskApps` closed. |
+| Can a discussion be an app channel? | **Yes** — it falls out of `parent_id` for free, and it's how you group apps. |
+| Install slots / metering? | **No.** Root meters them; that's a monetisation decision, not a technical one. |
+| Unread badge? | **Deferred.** An app channel has a timeline so it *can* badge, but a board changing isn't a message. Unread follows the timeline only. |
 
-1. **Does an app channel carry an unread badge?** It has a timeline so it can — but a board
-   changing isn't a message. My inclination: unread follows the timeline only in phase 1, and
-   we revisit once apps can raise activity.
-2. **One app per channel, or a set?** One. "A set of apps in a channel" is the Side Desk, and
-   rebuilding it here would reopen the seam `useDeskApps` closed.
-3. **Can a discussion be an app channel?** A discussion *is* a channel with `parent_id` set, so
-   it falls out free — but it's more rope than it's worth on day one. Gate it off initially.
-4. **Do we want install slots?** Root meters them. That's a monetisation decision, not a
-   technical one, and it only becomes real in phase 4.
+## Relation to Root
+
+What we took: the channel-is-an-app model, one app per channel, install-creates-a-channel, the
+destructive-uninstall warning, and the Task Tracker as the first-party app worth leading with.
+
+What we didn't, and why it matters for third-party apps later: **Root hosts the app itself** —
+a TypeScript client in a Chromium sandbox plus a Node server with its own SQLite, one instance
+per community, talking over Protobuf. That's their whole developer promise ("no hosting, no
+scaling, no security overhead") and reproducing it means running untrusted Node in
+per-community containers with backup, restore and quotas. A platform programme, not a feature.
+
+Everything above is first-party apps, which is where Root's own product actually lives — Task
+Tracker, Raid Planner, Stickerwall are all theirs. If third-party apps are ever wanted, the
+groundwork that matters is already here: **a bot is a `User` with `is_bot`**, so an app
+installed as a bot acts "with permissions just like a human member" (Root's model) through
+`Channel::hasMember` and `scopeVisibleTo` with no new permission system. The remaining pieces
+would be a sandboxed iframe client we host and a scoped per-install storage API. **An encrypted
+channel must refuse third-party apps outright** — there is no coherent story where third-party
+code sits in a room whose promise is that the server can't read it.
+
+## Where things are
+
+| | |
+| --- | --- |
+| Channel type, app row | `Channel::TYPES`, `App\Models\ChannelApp`, `AppCatalogue` |
+| Creation | `CreateChannelData`, `CreateChannelAction`, `CreateDiscussionAction` |
+| Tracker API | `TrackerProjectController`, `TrackerTaskController` |
+| Shared comments/tags | `AppCommentController`, `AppTagController`, `AppSubjects`, `HasAppActivity` |
+| Client state | `useTracker`, `useTrackerTask`, `useAppItem` |
+| Client UI | `AppChannel.vue`, `TrackerApp.vue`, `TrackerBoard.vue`, `TrackerTaskDetail.vue`, `TrackerHome.vue`, `AppItemDiscussion.vue` |
+| Presentation rules | `frontend/app/lib/tracker.ts` |
+| Tests | `tests/Feature/AppChannelTest.php`, `tests/Feature/TrackerTest.php` |
+
+## Known gaps
+
+- **Canvas cards are commentable server-side but not in the UI.** A default card is 240×180; a
+  comment thread inside one is a scrollbar in a postage stamp. It needs a card detail view first.
+- **Task reordering within a status group** has a `position` column and no drag handle yet.
+- **The Tracker has no mobile-specific layout pass.** It's responsive and usable, but the detail
+  pane's two columns stack rather than having been designed for a phone.

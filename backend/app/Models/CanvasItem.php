@@ -3,6 +3,7 @@
 namespace App\Models;
 
 use App\Http\Controllers\ChannelCanvasController;
+use App\Models\Concerns\HasAppActivity;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 
@@ -15,6 +16,9 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
  */
 class CanvasItem extends Model
 {
+    /** Comments, tags and a history — see the trait. */
+    use HasAppActivity;
+
     protected $fillable = ['side_chat_id', 'channel_id', 'user_id', 'widget_id', 'kind', 'content', 'x', 'y', 'w', 'h', 'z'];
 
     /** @return array<string, string> */
