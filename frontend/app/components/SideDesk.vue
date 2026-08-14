@@ -198,6 +198,24 @@ function popOut() {
       :channel-id="channelId"
     />
 
+    <!-- Polls — the channel's wall of questions. -->
+    <AppPollsApp
+      v-else-if="resolved === 'polls'"
+      :key="`${basePath}-polls`"
+      :base-path="basePath"
+      :stream-name="streamName"
+      :can-edit="canEdit"
+    />
+
+    <!-- Sticker Wall — the shared collage. -->
+    <StickerWallApp
+      v-else-if="resolved === 'stickers'"
+      :key="`${basePath}-stickers`"
+      :base-path="basePath"
+      :stream-name="streamName"
+      :can-edit="canEdit"
+    />
+
     <!-- Docs — a view-only shelf of uploaded PDF / Word / Excel files. -->
     <SideDeskDocs
       v-else-if="resolved === 'docs'"

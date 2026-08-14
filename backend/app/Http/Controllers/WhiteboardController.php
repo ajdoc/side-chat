@@ -42,6 +42,8 @@ class WhiteboardController extends Controller
         $stroke = $sideChat->whiteboardStrokes()->create([
             'user_id' => $request->user()->id,
             'kind' => $request->validated('kind'),
+            // Defaults to 0 for a client that predates layers — see StrokeRules.
+            'layer' => (int) $request->validated('layer', 0),
             'payload' => $request->validated('payload'),
             'client_id' => $request->validated('client_id'),
         ]);

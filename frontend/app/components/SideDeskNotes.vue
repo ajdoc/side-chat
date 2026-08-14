@@ -22,7 +22,7 @@ const props = defineProps<{
 }>()
 
 const {
-  content, updatedBy, updatedAt, loading, saving,
+  content, noteId, updatedBy, updatedAt, loading, saving,
   load, save, subscribe, unsubscribe,
 } = useSpaceNote(props.basePath, props.streamName)
 
@@ -167,5 +167,21 @@ onBeforeUnmount(() => {
       @focus="focused = true"
       @blur="onBlur"
     />
+
+    <!--
+      Talk *about* the note, under it.
+
+      Distinct from the note itself, which is the thing being agreed on — a shared document
+      whose margins fill with "should this say X?" stops being the shared document. Only once
+      the note exists: there is nothing to discuss before its first save.
+    -->
+    <div v-if="noteId != null" class="shrink-0 border-t px-4 py-2">
+      <AppItemDiscussion
+        :base-path="basePath"
+        subject="space_note"
+        :item-id="noteId"
+        :can-edit="canEdit"
+      />
+    </div>
   </div>
 </template>

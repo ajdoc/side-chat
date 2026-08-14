@@ -5,7 +5,7 @@ namespace App\Http\Requests\Channel;
 use App\Http\Requests\MemberRequest;
 use App\Models\Channel;
 use App\Models\Server;
-use App\Support\Apps\AppCatalogue;
+use App\Support\Apps\AppRegistry;
 use Illuminate\Validation\Rule;
 
 /**
@@ -48,7 +48,7 @@ class StoreDiscussionRequest extends MemberRequest
             ],
             // Which app the new discussion is, for an app channel. Optional even there —
             // omitting it inherits whatever its siblings are, which is the common case.
-            'app_id' => ['nullable', 'string', 'in:'.implode(',', AppCatalogue::ids())],
+            'app_id' => ['nullable', 'string', 'in:'.implode(',', AppRegistry::channelIds())],
         ];
     }
 }

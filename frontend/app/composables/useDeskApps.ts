@@ -1,6 +1,6 @@
 import {
-  CalendarDays, Columns3, FileText, Film, Flag, Gamepad2, LayoutGrid, ListChecks, Music,
-  NotebookPen, Palette, PenTool, Spade, Vote,
+  BarChart3, CalendarDays, Columns3, FileText, Film, Flag, Gamepad2, LayoutGrid, ListChecks,
+  Music, NotebookPen, Palette, PenTool, Spade, Sticker, Vote,
 } from 'lucide-vue-next'
 import type { Component } from 'vue'
 import type { SideDeskAppId, WidgetType } from '~/types'
@@ -73,6 +73,14 @@ export interface DeskApp {
   card?: { w: number, h: number }
   /** Groups the "add an app" picker; games are a shelf you go to on purpose. */
   group: 'workspace' | 'tool' | 'game'
+  /**
+   * Superseded, and hidden from the picker — but still rendered where it's already in use.
+   *
+   * The Poll widget is the case: the Polls app replaced it as a tab, and offering both was the
+   * confusion. Removing it outright would blank the tab on every desk that already has one, so
+   * it stays renderable and stops being offered.
+   */
+  deprecated?: boolean
 }
 
 /**
@@ -92,6 +100,12 @@ export const DESK_APPS: DeskApp[] = [
   // than adapted into it — a board of fifty tasks with a detail pane beside it was never going
   // to be a tab, and it's deliberately not canvasable for the same reason Docs isn't.
   { id: 'tracker', label: 'Tracker', icon: ListChecks, family: 'surface', removable: true, canvasable: false, channelable: true, group: 'workspace' },
+  // A wall of polls with results, reactions and a thread under each — distinct from the `poll`
+  // widget below, which is the single card a `p!` command drops in a timeline.
+  { id: 'polls', label: 'Polls', icon: BarChart3, family: 'surface', removable: true, canvasable: false, channelable: true, group: 'workspace' },
+  // A shared collage. Not canvasable for the same reason the Board isn't much use in a card:
+  // it *is* a canvas, and nesting one in another is a scrollbar inside a scrollbar.
+  { id: 'stickers', label: 'Sticker Wall', icon: Sticker, family: 'surface', removable: true, canvasable: false, channelable: true, group: 'workspace' },
   // Docs is a file shelf with its own upload flow and viewers; squeezed into a canvas card it's
   // a scrollbar around a scrollbar, so it stays a tab.
   { id: 'docs', label: 'Docs', icon: FileText, family: 'surface', removable: true, canvasable: false, channelable: true, group: 'workspace' },
@@ -101,7 +115,9 @@ export const DESK_APPS: DeskApp[] = [
   // Taller than the rest: the card leads with a 16:9 screen, so a short one clips it.
   { id: 'video', label: 'Video', icon: Film, family: 'widget', removable: true, canvasable: true, channelable: true, card: { w: 400, h: 520 }, group: 'tool' },
   { id: 'kanban', label: 'Kanban', icon: Columns3, family: 'widget', removable: true, canvasable: true, channelable: true, card: { w: 340, h: 320 }, group: 'tool' },
-  { id: 'poll', label: 'Poll', icon: Vote, family: 'widget', removable: true, canvasable: true, channelable: true, card: { w: 280, h: 260 }, group: 'tool' },
+  // The `p!` poll card. A canvas card and a timeline card, but not a tab or a channel — the
+  // Polls app above is that, and it's the same poll: the widget points at an AppPoll.
+  { id: 'poll', label: 'Poll', icon: Vote, family: 'widget', removable: true, canvasable: true, channelable: false, deprecated: true, card: { w: 280, h: 260 }, group: 'tool' },
   { id: 'shooter', label: 'Galaga', icon: Gamepad2, family: 'widget', removable: true, canvasable: true, channelable: false, card: { w: 320, h: 420 }, group: 'game' },
   { id: 'racing', label: 'Racing', icon: Flag, family: 'widget', removable: true, canvasable: true, channelable: false, card: { w: 340, h: 380 }, group: 'game' },
   { id: 'poker', label: 'Poker', icon: Spade, family: 'widget', removable: true, canvasable: true, channelable: false, card: { w: 360, h: 460 }, group: 'game' },

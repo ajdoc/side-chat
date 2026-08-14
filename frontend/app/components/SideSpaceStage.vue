@@ -10,7 +10,6 @@ import {
   Megaphone,
   MessageCircle,
   MessageCircleOff,
-  MessageSquare,
   MoreHorizontal,
   Mic,
   MicOff,
@@ -2653,8 +2652,6 @@ watch(inThisRoom, (now) => {
       <div class="scroll-strip flex min-w-0 flex-1 items-center gap-2 text-sm [&>*]:shrink-0">
         <MapIcon class="h-4 w-4 shrink-0 text-muted-foreground" />
         <span class="truncate font-medium">{{ map?.name ?? channel.name }}</span>
-        <!-- A "we're still building this" note is the first thing to go when room is short. -->
-        <AlphaBadge v-if="!narrow" stage="Beta" hint="Proximity audio and the room editor are still settling — expect rough edges." />
         <span class="flex shrink-0 items-center gap-1 text-xs text-muted-foreground">
           <Users class="h-3.5 w-3.5" /> {{ occupantCount }}
         </span>
@@ -2782,21 +2779,10 @@ watch(inThisRoom, (now) => {
             </button>
           </template>
 
-          <!-- Show or hide the conversation. Hidden by default, and remembered. It stays mounted
-               either way and keeps its scroll, draft and subscription — see ChannelView's
-               `collapseTimeline` — so this is free to flip as often as you like. -->
-          <button
-            type="button"
-            :class="[
-              narrow ? toolClass : 'flex items-center gap-1.5 rounded px-2 py-1 text-xs transition-colors hover:bg-muted',
-              'text-muted-foreground hover:text-foreground',
-            ]"
-            :title="chatHidden ? 'Show the channel chat below the room' : 'Hide the chat and give the room the whole window'"
-            @click="fromMenu(() => (chatHidden = !chatHidden))"
-          >
-            <MessageSquare class="h-3.5 w-3.5 shrink-0" />
-            {{ chatHidden ? 'Show chat' : 'Hide chat' }}
-          </button>
+          <!-- Showing and hiding the conversation used to live here, as a toolbar button that
+               folded into this `⋯` menu on a phone — two taps for the control people reach for
+               most. It's a floating pill over the room now (see ChatTogglePill), which is also
+               what an app channel uses, so it sits in the same place in both. -->
 
           <!-- What you look like walking around. Yours, not the room's, so it isn't owner-gated. -->
           <button
@@ -3475,6 +3461,9 @@ watch(inThisRoom, (now) => {
         @resize="startPeopleResize"
       />
     </div>
+
+    <!-- The way back to the conversation. Same pill an app channel uses. -->
+    <ChatTogglePill v-model="chatHidden" />
 
     <!-- Drag the room's bottom edge to trade height with the conversation. Pointless when the
          chat is hidden, since there is nothing to trade against. -->

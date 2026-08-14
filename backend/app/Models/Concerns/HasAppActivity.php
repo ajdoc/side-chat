@@ -4,6 +4,7 @@ namespace App\Models\Concerns;
 
 use App\Models\AppActivity;
 use App\Models\AppComment;
+use App\Models\AppReaction;
 use App\Models\AppTag;
 use App\Models\User;
 use Illuminate\Database\Eloquent\Relations\MorphMany;
@@ -37,9 +38,14 @@ trait HasAppActivity
     protected static function bootHasAppActivity(): void
     {
         static::deleting(function (self $model) {
-            $model->comments()->delete();
-            $model->activity()->delete();
-            $model->tags()->detach();
+            // Through the same bulk purge the cascade case uses, rather than
+            // `$model->comments()->delete()`.
+            //
+            // That looks equivalent and isn't: `comments()` and `activity()` carry an `oldest()`
+            // ordering, and a DELETE with an ORDER BY silently deletes nothing here. The bug it
+            // caused was invisible — the row vanished, its comments didn't, and nothing ever
+            // read them again to notice. One code path for both cases means it can't come back.
+            static::purgeAppActivityFor([$model->getKey()]);
         });
     }
 
@@ -62,6 +68,7 @@ trait HasAppActivity
 
         AppComment::where('commentable_type', $type)->whereIn('commentable_id', $ids)->delete();
         AppActivity::where('subject_type', $type)->whereIn('subject_id', $ids)->delete();
+        AppReaction::where('reactable_type', $type)->whereIn('reactable_id', $ids)->delete();
         DB::table('app_taggables')
             ->where('taggable_type', $type)
             ->whereIn('taggable_id', $ids)
@@ -84,6 +91,34 @@ trait HasAppActivity
     public function activity(): MorphMany
     {
         return $this->morphMany(AppActivity::class, 'subject')->oldest();
+    }
+
+    /** @return MorphMany<AppReaction, $this> */
+    public function reactions(): MorphMany
+    {
+        return $this->morphMany(AppReaction::class, 'reactable');
+    }
+
+    /**
+     * This item's reactions, grouped for rendering: one row per emoji, with a count and
+     * whether *you* are in it.
+     *
+     * Grouped here rather than in each app's resource because every app draws the same chip
+     * row, and "did I react" is the one part a per-emoji count can't answer on its own.
+     *
+     * @return array<int, array{emoji: string, count: int, reacted: bool}>
+     */
+    public function reactionSummary(?User $viewer = null): array
+    {
+        return $this->reactions
+            ->groupBy('emoji')
+            ->map(fn ($group, $emoji) => [
+                'emoji' => (string) $emoji,
+                'count' => $group->count(),
+                'reacted' => $viewer !== null && $group->contains('user_id', $viewer->getKey()),
+            ])
+            ->values()
+            ->all();
     }
 
     /**

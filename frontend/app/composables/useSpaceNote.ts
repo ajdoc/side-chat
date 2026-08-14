@@ -24,6 +24,11 @@ export function useSpaceNote(basePath: string, streamName: string) {
   const { hold, release } = useEchoStream()
 
   const content = ref('')
+  /**
+   * The note's row id — used only as a comment/reaction target, never to address the note.
+   * Null until the first load, and null for a surface that has never had one saved.
+   */
+  const noteId = ref<number | null>(null)
   const updatedBy = ref<User | null>(null)
   const updatedAt = ref<string | null>(null)
   const loading = ref(true)
@@ -53,6 +58,7 @@ export function useSpaceNote(basePath: string, streamName: string) {
     try {
       const res = await api<{ data: SpaceNote }>(`${basePath}/notes`)
       content.value = res.data.content ?? ''
+      noteId.value = res.data.id ?? null
       applyServer(res.data)
     } finally {
       loading.value = false
@@ -118,5 +124,5 @@ export function useSpaceNote(basePath: string, streamName: string) {
     release(streamName)
   }
 
-  return { content, updatedBy, updatedAt, loading, saving, base, version, load, save, subscribe, unsubscribe }
+  return { content, noteId, updatedBy, updatedAt, loading, saving, base, version, load, save, subscribe, unsubscribe }
 }

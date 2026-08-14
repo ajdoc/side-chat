@@ -3,6 +3,7 @@
 namespace App\Models;
 
 use App\Http\Controllers\ChannelDocumentController;
+use App\Models\Concerns\HasAppActivity;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Support\Facades\Storage;
@@ -16,6 +17,9 @@ use Illuminate\Support\Facades\URL;
  */
 class SpaceDocument extends Model
 {
+    /** Comments, tags, reactions and a history — see the trait. */
+    use HasAppActivity;
+
     protected $fillable = ['side_chat_id', 'channel_id', 'user_id', 'disk', 'path', 'name', 'mime_type', 'extension', 'size'];
 
     /** @return array<string, string> */

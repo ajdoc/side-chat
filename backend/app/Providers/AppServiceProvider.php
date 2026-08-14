@@ -5,8 +5,12 @@ namespace App\Providers;
 use App\Events\MessageSent;
 use App\Listeners\NotifyBotsOfMessage;
 use App\Listeners\RunMessageAutomations;
+use App\Models\AppPoll;
+use App\Models\AppSticker;
 use App\Models\CalendarEvent;
 use App\Models\CanvasItem;
+use App\Models\SpaceDocument;
+use App\Models\SpaceNote;
 use App\Models\TrackerTask;
 use App\Search\LikeSearchDriver;
 use App\Search\PostgresSearchDriver;
@@ -71,6 +75,10 @@ class AppServiceProvider extends ServiceProvider
             // App\Support\Apps\AppSubjects — no schema change, no new controller.
             'canvas_item' => CanvasItem::class,
             'calendar_event' => CalendarEvent::class,
+            'app_poll' => AppPoll::class,
+            'app_sticker' => AppSticker::class,
+            'space_document' => SpaceDocument::class,
+            'space_note' => SpaceNote::class,
         ]);
 
         // Bot webhooks ride on the message event rather than on the send path — see

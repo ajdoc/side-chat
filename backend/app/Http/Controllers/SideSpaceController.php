@@ -288,7 +288,7 @@ class SideSpaceController extends Controller
         // A surface app is opened by name. Nothing is created here, because there is nothing to
         // create: the board exists as soon as somebody draws on it, and the client already
         // knows how to float one from the channel it's standing in.
-        if (! in_array($app, DeskApps::WIDGET_APPS, true)) {
+        if (! in_array($app, DeskApps::widgets(), true)) {
             abort_unless(in_array($app, DeskApps::all(), true), 404);
 
             return response()->json(['type' => 'app', 'app' => $app]);

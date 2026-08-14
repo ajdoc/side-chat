@@ -2,7 +2,7 @@
 
 namespace App\Http\Requests\DeskApps;
 
-use App\Support\DeskApps;
+use App\Support\Apps\AppRegistry;
 
 /**
  * Validation for a Side Desk's tab strip, shared by the channel and side chat gates so both
@@ -22,7 +22,7 @@ final class DeskAppsRules
             // `present`, not `required`: an empty strip is a legitimate desk (the Open Canvas is
             // pinned by the client and never stored), and `required` rejects an empty array.
             'apps' => ['present', 'array', 'max:20'],
-            'apps.*' => ['string', 'distinct', 'in:'.implode(',', DeskApps::all())],
+            'apps.*' => ['string', 'distinct', 'in:'.implode(',', AppRegistry::deskIds())],
         ];
     }
 }

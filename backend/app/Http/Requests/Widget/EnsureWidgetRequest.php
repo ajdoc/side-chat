@@ -17,7 +17,7 @@ class EnsureWidgetRequest extends MemberRequest
     public function rules(): array
     {
         return [
-            'type' => ['required', 'string', 'in:'.implode(',', DeskApps::WIDGET_APPS)],
+            'type' => ['required', 'string', 'in:'.implode(',', DeskApps::widgets())],
         ];
     }
 }

@@ -131,6 +131,23 @@ onBeforeUnmount(unsubscribe)
           </a>
         </div>
       </div>
+
+      <!--
+        Talk about the open file.
+
+        Shelf files only. A `chat` document is an attachment on a message, which already has a
+        timeline thread of its own — giving it a second, separate discussion here would split
+        the conversation about one file across two places, and the message is where it started.
+      -->
+      <div v-if="selected.source === 'shelf'" class="shrink-0 border-t px-3 py-2">
+        <AppItemDiscussion
+          :key="selected.id"
+          :base-path="basePath"
+          subject="space_document"
+          :item-id="selected.id"
+          :can-edit="canEdit"
+        />
+      </div>
     </template>
 
     <!-- LIST — the default view -->

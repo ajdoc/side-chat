@@ -804,10 +804,23 @@ export interface WhiteboardStrokePayload {
   w?: number
 }
 
+/**
+ * A board layer's name and whether it's shown.
+ *
+ * The array index *is* the layer number strokes carry, which is why the list has no ids and is
+ * never reordered — reordering would silently renumber every mark on the board.
+ */
+export interface BoardLayer {
+  name: string
+  visible: boolean
+}
+
 export interface WhiteboardStroke {
   /** Server id once committed. Optimistic strokes carry a temporary negative id until then. */
   id: number
   kind: WhiteboardStrokeKind
+  /** Which layer it's painted on. 0 for every stroke drawn before layers existed. */
+  layer: number
   payload: WhiteboardStrokePayload
   /** The drawer's own id for this stroke, for reconciling the optimistic copy with the broadcast. */
   client_id: string
@@ -829,7 +842,7 @@ export interface WhiteboardStroke {
  *
  * `canvas` is in the union but never in a stored list: the Open Canvas can't be removed.
  */
-export type SideDeskSurfaceAppId = 'board' | 'notes' | 'docs' | 'canvas' | 'calendar' | 'tracker'
+export type SideDeskSurfaceAppId = 'board' | 'notes' | 'docs' | 'canvas' | 'calendar' | 'tracker' | 'polls' | 'stickers'
 export type SideDeskWidgetAppId = WidgetType
 export type SideDeskAppId = SideDeskSurfaceAppId | SideDeskWidgetAppId
 
@@ -1846,4 +1859,71 @@ export interface TrackerProject {
   done_count?: number
   created_at: string
   updated_at: string
+}
+
+// --- Polls and the Sticker Wall -------------------------------------------------------------
+
+/** How many options a voter may pick. `yes_no` is `single` with its options written for it. */
+export type AppPollType = 'yes_no' | 'single' | 'multiple'
+
+export interface AppPollOption {
+  id: number
+  label: string
+  /** How many people picked it. Counted server-side — clients never see raw votes. */
+  votes: number
+}
+
+/** One emoji chip: the emoji, how many chose it, and whether you're among them. */
+export interface AppReactionSummary {
+  emoji: string
+  count: number
+  reacted: boolean
+}
+
+export interface AppPoll {
+  id: number
+  channel_id: number
+  type: AppPollType
+  question: string
+  description?: string | null
+  /** Votes are counted but never attributed. A property of the question, not of the viewer. */
+  anonymous: boolean
+  closed: boolean
+  closed_at?: string | null
+  creator?: User
+  options?: AppPollOption[]
+  /**
+   * People who answered, versus rows cast. A multiple-choice poll gets several rows from one
+   * person, so the two differ and the client labels them differently.
+   */
+  voter_count?: number
+  vote_count?: number
+  /** Which options *you* picked — the only per-person vote data that crosses the wire. */
+  my_option_ids?: number[]
+  reactions?: AppReactionSummary[]
+  tags?: AppTag[]
+  /** Detail view only; the wall carries `comment_count` instead. */
+  comments?: AppComment[]
+  comment_count?: number
+  created_at: string
+}
+
+/**
+ * One sticker on a channel's wall.
+ *
+ * `content` is the drawing, in whatever shape the editor writes and the renderer reads — free
+ * form for the same reason a widget's state is.
+ */
+export interface AppSticker {
+  id: number
+  name?: string | null
+  content: Record<string, any>
+  x: number
+  y: number
+  z: number
+  w: number
+  h: number
+  rotation: number
+  user?: User
+  created_at: string
 }

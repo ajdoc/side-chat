@@ -20,7 +20,7 @@ class WhiteboardStroke extends Model
     /** @use HasFactory<WhiteboardStrokeFactory> */
     use HasFactory;
 
-    protected $fillable = ['side_chat_id', 'channel_id', 'user_id', 'kind', 'payload', 'client_id'];
+    protected $fillable = ['side_chat_id', 'channel_id', 'user_id', 'kind', 'layer', 'payload', 'client_id'];
 
     /** @return array<string, string> */
     protected function casts(): array

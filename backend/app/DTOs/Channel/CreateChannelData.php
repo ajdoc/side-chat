@@ -3,7 +3,7 @@
 namespace App\DTOs\Channel;
 
 use App\Models\Channel;
-use App\Support\Apps\AppCatalogue;
+use App\Support\Apps\AppRegistry;
 use App\Support\SideSpace\MapPresets;
 use WendellAdriel\ValidatedDTO\ValidatedDTO;
 
@@ -44,7 +44,7 @@ final class CreateChannelData extends ValidatedDTO
             'name' => ['required', 'string', 'max:100'],
             'type' => ['required', 'string', 'in:'.implode(',', Channel::TYPES)],
             'preset' => ['nullable', 'required_if:type,space', 'string', 'in:'.implode(',', MapPresets::keys())],
-            'app_id' => ['nullable', 'required_if:type,app', 'string', 'in:'.implode(',', AppCatalogue::ids())],
+            'app_id' => ['nullable', 'required_if:type,app', 'string', 'in:'.implode(',', AppRegistry::channelIds())],
         ];
     }
 

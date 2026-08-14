@@ -1,6 +1,10 @@
 <?php
 
+use App\Http\Controllers\AppCatalogueController;
 use App\Http\Controllers\AppCommentController;
+use App\Http\Controllers\AppPollController;
+use App\Http\Controllers\AppReactionController;
+use App\Http\Controllers\AppStickerController;
 use App\Http\Controllers\AppTagController;
 use App\Http\Controllers\ArpgCharacterController;
 use App\Http\Controllers\AttachmentController;
@@ -8,6 +12,7 @@ use App\Http\Controllers\Auth\AuthController;
 use App\Http\Controllers\Auth\SocialAuthController;
 use App\Http\Controllers\AutomationController;
 use App\Http\Controllers\BadgeController;
+use App\Http\Controllers\BoardLayerController;
 use App\Http\Controllers\BotAuditLogController;
 use App\Http\Controllers\BotCommandController;
 use App\Http\Controllers\BotController;
@@ -443,6 +448,11 @@ Route::middleware('auth:api')->group(function () {
      * be here without the tracker knowing anything about permissions — and what scopes the
      * storage, so two tracker channels are two trackers.
      */
+    // What apps exist — built-in flags plus whatever has been installed. Feeds the
+    // create-channel picker and the Side Desk's "add an app" list, which are two filters over
+    // one catalogue rather than two lists.
+    Route::get('apps/catalogue', AppCatalogueController::class);
+
     Route::get('channels/{channel}/tracker/fields', [TrackerProjectController::class, 'fields']);
     Route::get('channels/{channel}/tracker/projects', [TrackerProjectController::class, 'index']);
     Route::post('channels/{channel}/tracker/projects', [TrackerProjectController::class, 'store']);
@@ -472,6 +482,31 @@ Route::middleware('auth:api')->group(function () {
     // the channel in the path is what authorises reaching it.
     Route::patch('channels/{channel}/app-comments/{comment}', [AppCommentController::class, 'update']);
     Route::delete('channels/{channel}/app-comments/{comment}', [AppCommentController::class, 'destroy']);
+
+    /*
+     * Polls — a wall of them, with results, reactions and a thread under each. Distinct from the
+     * `poll` widget, which is the single card a `p!` command drops in a timeline. See the
+     * app_polls migration for why both exist.
+     */
+    Route::get('channels/{channel}/polls', [AppPollController::class, 'index']);
+    Route::post('channels/{channel}/polls', [AppPollController::class, 'store']);
+    Route::get('channels/{channel}/polls/{poll}', [AppPollController::class, 'show']);
+    Route::patch('channels/{channel}/polls/{poll}', [AppPollController::class, 'update']);
+    Route::delete('channels/{channel}/polls/{poll}', [AppPollController::class, 'destroy']);
+    // The body is the set of options you now stand behind, not a delta — see the controller.
+    Route::put('channels/{channel}/polls/{poll}/vote', [AppPollController::class, 'vote']);
+
+    // The Sticker Wall — a shared collage. Editing and deleting are yours-or-staff, unlike the
+    // rest of the desk apps; see the controller.
+    Route::get('channels/{channel}/stickers', [AppStickerController::class, 'index']);
+    Route::post('channels/{channel}/stickers', [AppStickerController::class, 'store']);
+    Route::patch('channels/{channel}/stickers/{sticker}', [AppStickerController::class, 'update']);
+    Route::delete('channels/{channel}/stickers/{sticker}', [AppStickerController::class, 'destroy']);
+
+    // Reactions on anything an app owns. One verb, because reacting and un-reacting are the
+    // same gesture on the same chip.
+    Route::get('channels/{channel}/apps/{type}/{id}/reactions', [AppReactionController::class, 'index']);
+    Route::post('channels/{channel}/apps/{type}/{id}/reactions', [AppReactionController::class, 'toggle']);
 
     // The channel's vocabulary — shared by every app in it, not per project.
     Route::get('channels/{channel}/app-tags', [AppTagController::class, 'index']);
@@ -659,6 +694,12 @@ Route::middleware('auth:api')->group(function () {
 
     // Which apps the channel's Side Desk shows. Shared by everyone in the channel, so this is
     // the whole surface's tab strip, not one person's — see the migration.
+    // A board's layers — names and visibility. The strokes carry the index; this is the rest.
+    Route::get('channels/{channel}/whiteboard/layers', [BoardLayerController::class, 'showChannel']);
+    Route::put('channels/{channel}/whiteboard/layers', [BoardLayerController::class, 'updateChannel']);
+    Route::get('side-chats/{sideChat}/whiteboard/layers', [BoardLayerController::class, 'showSideChat']);
+    Route::put('side-chats/{sideChat}/whiteboard/layers', [BoardLayerController::class, 'updateSideChat']);
+
     Route::get('channels/{channel}/desk-apps', [DeskAppsController::class, 'showChannel']);
     Route::put('channels/{channel}/desk-apps', [DeskAppsController::class, 'updateChannel']);
 

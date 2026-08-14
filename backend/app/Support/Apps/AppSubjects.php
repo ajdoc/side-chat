@@ -2,9 +2,13 @@
 
 namespace App\Support\Apps;
 
+use App\Models\AppPoll;
+use App\Models\AppSticker;
 use App\Models\CalendarEvent;
 use App\Models\CanvasItem;
 use App\Models\Channel;
+use App\Models\SpaceDocument;
+use App\Models\SpaceNote;
 use App\Models\TrackerTask;
 use Illuminate\Database\Eloquent\Model;
 
@@ -32,6 +36,10 @@ final class AppSubjects
         'tracker_task' => [self::class, 'trackerTask'],
         'canvas_item' => [self::class, 'canvasItem'],
         'calendar_event' => [self::class, 'calendarEvent'],
+        'app_poll' => [self::class, 'poll'],
+        'app_sticker' => [self::class, 'sticker'],
+        'space_document' => [self::class, 'document'],
+        'space_note' => [self::class, 'note'],
     ];
 
     public static function types(): array
@@ -73,6 +81,36 @@ final class AppSubjects
     private static function canvasItem(Channel $channel, int $id): ?CanvasItem
     {
         return CanvasItem::query()->where('channel_id', $channel->getKey())->find($id);
+    }
+
+    /** A poll on the channel's wall — comments, tags and reactions all hang off it. */
+    private static function poll(Channel $channel, int $id): ?AppPoll
+    {
+        return AppPoll::query()->where('channel_id', $channel->getKey())->find($id);
+    }
+
+    /** A sticker on the channel's wall. */
+    private static function sticker(Channel $channel, int $id): ?AppSticker
+    {
+        return AppSticker::query()->where('channel_id', $channel->getKey())->find($id);
+    }
+
+    /** A file on the channel's Docs shelf. Channel-owned only, as with the canvas card. */
+    private static function document(Channel $channel, int $id): ?SpaceDocument
+    {
+        return SpaceDocument::query()->where('channel_id', $channel->getKey())->find($id);
+    }
+
+    /**
+     * The channel's one shared note.
+     *
+     * A surface has exactly one, so the id in the URL is checked against it rather than used to
+     * look it up — otherwise any note id would resolve here and the channel scope would be the
+     * only thing standing between them.
+     */
+    private static function note(Channel $channel, int $id): ?SpaceNote
+    {
+        return SpaceNote::query()->where('channel_id', $channel->getKey())->whereKey($id)->first();
     }
 
     /** An entry on the shared Calendar. Channel-owned only, same as the canvas card above. */

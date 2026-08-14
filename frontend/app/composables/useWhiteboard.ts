@@ -1,4 +1,4 @@
-import type { WhiteboardStroke, WhiteboardStrokeKind, WhiteboardStrokePayload } from '~/types'
+import type { BoardLayer, WhiteboardStroke, WhiteboardStrokeKind, WhiteboardStrokePayload } from '~/types'
 import { simplify } from '~/lib/whiteboardEngine'
 
 /** How often the live drag / cursor may whisper — matches the co-op games' ~12Hz peer rate. */
@@ -62,6 +62,20 @@ export function useWhiteboard(basePath: string, streamName: string) {
   const { user } = useAuth()
 
   const strokes = ref<WhiteboardStroke[]>([])
+
+  /**
+   * The board's layers, and which one new marks land on.
+   *
+   * Null until the board has ever used layers — which the client draws as the single unnamed
+   * layer every existing board already has, rather than inventing a stored default. See the
+   * migration.
+   *
+   * `activeLayer` is per person and never persisted: which layer *you* are drawing on is a
+   * choice about your next stroke, not a property of the shared board, and syncing it would
+   * mean two people drawing at once fighting over one setting.
+   */
+  const layers = ref<BoardLayer[] | null>(null)
+  const activeLayer = ref(0)
   const liveStrokes = ref<Record<number, LiveStroke>>({})
   const cursors = ref<Record<number, RemoteCursor>>({})
 
@@ -80,20 +94,77 @@ export function useWhiteboard(basePath: string, streamName: string) {
   }
 
   async function load() {
-    const res = await api<{ data: WhiteboardStroke[] }>(basePath)
-    strokes.value = res.data
+    const [board, layerRes] = await Promise.all([
+      api<{ data: WhiteboardStroke[] }>(basePath),
+      // Never fatal: a board whose layer list failed to load is a board with one layer, which
+      // is exactly what it was before layers existed.
+      api<{ layers: BoardLayer[] | null }>(`${basePath}/layers`).catch(() => ({ layers: null })),
+    ])
+    strokes.value = board.data
+    layers.value = layerRes.layers
+    clampActiveLayer()
+  }
+
+  /**
+   * The layers as rendered — the stored list, or the implicit single layer.
+   *
+   * Everything drawing or picking a layer reads this rather than `layers`, so "no layers yet"
+   * and "one layer called Layer 1" are the same thing to every caller.
+   */
+  const resolvedLayers = computed<BoardLayer[]>(() =>
+    layers.value?.length ? layers.value : [{ name: 'Layer 1', visible: true }])
+
+  /** Layer indices that are hidden, for the renderer to skip. */
+  const hiddenLayers = computed(() =>
+    new Set(resolvedLayers.value.flatMap((l, i) => (l.visible ? [] : [i]))))
+
+  /** A layer that was deleted out from under you must not leave you drawing into nowhere. */
+  function clampActiveLayer() {
+    if (activeLayer.value >= resolvedLayers.value.length) activeLayer.value = 0
+  }
+
+  async function saveLayers(next: BoardLayer[]) {
+    const previous = layers.value
+    layers.value = next
+    clampActiveLayer()
+    try {
+      await api(`${basePath}/layers`, {
+        method: 'PUT', body: { layers: next }, headers: socketHeaders(),
+      })
+    }
+    catch (e) {
+      layers.value = previous
+      throw e
+    }
+  }
+
+  function addLayer() {
+    return saveLayers([...resolvedLayers.value, { name: `Layer ${resolvedLayers.value.length + 1}`, visible: true }])
+  }
+
+  function renameLayer(index: number, name: string) {
+    const next = resolvedLayers.value.map((l, i) => (i === index ? { ...l, name } : l))
+    return saveLayers(next)
+  }
+
+  function toggleLayer(index: number) {
+    const next = resolvedLayers.value.map((l, i) => (i === index ? { ...l, visible: !l.visible } : l))
+    return saveLayers(next)
   }
 
   /** Commit a stroke: paint it locally at once, then persist + reconcile by client_id. */
   async function addStroke(kind: WhiteboardStrokeKind, payload: WhiteboardStrokePayload, clientId: string) {
+    // A background fill is the board's ground and belongs under everything, so it ignores the
+    // active layer — putting one on layer 3 would paint over the work on layers 0–2.
+    const layer = kind === 'bg' ? 0 : activeLayer.value
     const optimistic: WhiteboardStroke = {
-      id: -Date.now(), kind, payload, client_id: clientId, user: user.value ?? undefined,
+      id: -Date.now(), kind, layer, payload, client_id: clientId, user: user.value ?? undefined,
     }
     strokes.value = [...strokes.value, optimistic]
     try {
       const res = await api<{ data: WhiteboardStroke }>(`${basePath}/strokes`, {
         method: 'POST',
-        body: { kind, payload, client_id: clientId },
+        body: { kind, layer, payload, client_id: clientId },
         headers: socketHeaders(),
       })
       const idx = strokes.value.findIndex(s => s.client_id === clientId)
@@ -211,6 +282,11 @@ export function useWhiteboard(basePath: string, streamName: string) {
         strokes.value = strokes.value.filter(x => x.id !== p.id)
       })
       .listen('.WhiteboardCleared', () => { strokes.value = [] })
+      // Layers are a property of the shared board, so somebody hiding one hides it here too.
+      .listen('.BoardLayersSaved', (p: { layers: BoardLayer[] }) => {
+        layers.value = p.layers
+        clampActiveLayer()
+      })
       .listenForWhisper('wb-move', (m: { strokeId: number, payload: WhiteboardStrokePayload }) => {
         const idx = strokes.value.findIndex(x => x.id === m.strokeId)
         if (idx !== -1) strokes.value.splice(idx, 1, { ...strokes.value[idx]!, payload: m.payload })
@@ -427,6 +503,8 @@ export function useWhiteboard(basePath: string, streamName: string) {
 
   return {
     strokes, liveStrokes, cursors,
+    layers: resolvedLayers, hiddenLayers, activeLayer,
+    addLayer, renameLayer, toggleLayer, saveLayers,
     load, addStroke, updateStroke, removeStroke,
     draw, erase, editStroke, asOneGesture, clear: clearAll,
     undo, redo, canUndo, canRedo,

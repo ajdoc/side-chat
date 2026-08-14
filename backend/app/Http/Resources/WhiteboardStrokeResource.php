@@ -20,6 +20,7 @@ class WhiteboardStrokeResource extends JsonResource
         return [
             'id' => $this->id,
             'kind' => $this->kind,
+            'layer' => (int) $this->layer,
             'payload' => $this->payload,
             'client_id' => $this->client_id,
             'user' => new UserResource($this->whenLoaded('user')),

@@ -2,30 +2,34 @@
 
 namespace App\Services\Widgets;
 
+use App\Models\AppPoll;
 use App\Models\User;
 use App\Models\Widget;
 use App\Support\Commands\ParsedCommand;
 
 /**
- * A shared poll — one question, a list of options, and a live tally everyone sees, driven
- * by `p!` commands and the card's buttons alike.
+ * A shared poll, driven by `p!` commands and the card's buttons alike.
  *
- * Like the board, an option is referenced by a stable number, not a position: `p!vote 2`
- * always means the option minted as #2, whatever's since been added or removed above it.
- * That number is `seq`, handed out once and never reused, so a vote a user casts after
- * glancing at the card can't land on the wrong option because the list shifted.
+ * ## What changed, and why
  *
- * A vote records *who* cast it (id + name), so the tally is a live count, a voter can
- * toggle their own vote off, and the card can show each person what they picked. In
- * single-choice mode (the default) casting a vote clears that voter's other picks; `p!multi`
- * flips it to let-me-pick-several.
+ * This used to hold the whole poll in the widget's JSON state — question, options, and a list
+ * of voters per option. Then the Polls app arrived with real tables, and there were two poll
+ * systems in one product: a `p!` poll in the timeline and a poll on the channel's wall, which
+ * couldn't see each other. Two things called "Poll" that don't share an answer is exactly the
+ * confusion worth removing.
  *
- * State shape:
- *   seq:      int                                   — the last option number handed out
- *   question: string
- *   multi:    bool                                  — allow more than one pick per voter
- *   closed:   bool                                  — voting locked; the result stands
- *   options:  [ { id, text, voters: [{id,name}] } ]
+ * So the widget is now a **pointer**. Its whole state is `{"poll_id": 12}`, and every command
+ * reads and writes the {@see AppPoll} that id names. A `p!new` in the timeline puts a poll on
+ * the wall; voting on the wall moves the timeline card; closing it in either place closes it in
+ * both. There is one poll.
+ *
+ * The commands are unchanged — that was the constraint. `p!vote 2` still means "the option
+ * minted as #2", except the number is now the option's row id rather than a counter in a blob,
+ * which gives the same guarantee (never reused, never shifted by an edit above it) without the
+ * bookkeeping.
+ *
+ * A widget whose poll has been deleted from the wall is a card pointing at nothing; every
+ * command answers by saying so rather than resurrecting it, since the deletion was deliberate.
  */
 final class PollWidget implements WidgetHandler
 {
@@ -40,228 +44,243 @@ final class PollWidget implements WidgetHandler
         return 'poll';
     }
 
+    /** No poll yet — the first `p!new` creates one and writes its id here. */
     public function initialState(): array
     {
-        return ['seq' => 0, 'question' => '', 'multi' => false, 'closed' => false, 'options' => []];
+        return ['poll_id' => null];
     }
 
     public function command(Widget $widget, User $user, ParsedCommand $command): WidgetOutcome
     {
+        // The two verbs that don't need an existing poll.
+        if (in_array($command->verb, ['new', 'ask', 'poll', 'create', 'q'], true)) {
+            return $this->newPoll($widget, $command->args);
+        }
+
+        if (in_array($command->verb, ['help', 'h'], true)) {
+            return WidgetOutcome::reply($this->help());
+        }
+
+        $poll = $this->poll($widget);
+
+        if ($poll === null) {
+            return WidgetOutcome::reply('No poll here yet. Start one with `p!new <question> | option | option`.');
+        }
+
         return match ($command->verb) {
-            'new', 'ask', 'poll', 'create', 'q' => $this->newPoll($widget, $command->args),
-            'add', 'a', 'opt', 'option', 'o' => $this->addOption($widget, $command->args),
-            'edit', 'rename' => $this->edit($widget, $command),
-            'rm', 'del', 'delete', 'remove' => $this->remove($widget, $command->firstArg()),
-            'vote', 'v', 'pick' => $this->voteByCommand($widget, $user, $command->firstArg()),
-            'unvote', 'retract', 'clearvote' => $this->clearVotesFor($widget, $user),
-            'multi' => $this->toggleMulti($widget),
-            'close', 'end', 'lock' => $this->setClosed($widget, true),
-            'open', 'reopen', 'unlock' => $this->setClosed($widget, false),
-            'clear', 'resetvotes' => $this->clearAllVotes($widget),
+            'add', 'a', 'opt', 'option', 'o' => $this->addOption($poll, $command->args),
+            'edit', 'rename' => $this->edit($poll, $command),
+            'rm', 'del', 'delete', 'remove' => $this->removeOption($poll, (int) $command->firstArg()),
+            'vote', 'v', 'pick' => $this->toggleVote($poll, $user, (int) $command->firstArg()),
+            'unvote', 'retract', 'clearvote' => $this->clearVotesFor($poll, $user),
+            'multi' => $this->toggleMulti($poll),
+            'close', 'end', 'lock' => $this->setClosed($poll, true),
+            'open', 'reopen', 'unlock' => $this->setClosed($poll, false),
+            'clear', 'resetvotes' => $this->clearAllVotes($poll),
             'reset' => $this->reset($widget),
             'show', 'results', 'result', 'list', 'ls' => WidgetOutcome::show(),
-            'help', 'h' => WidgetOutcome::reply($this->help()),
             default => WidgetOutcome::reply("Unknown poll command `p!{$command->verb}`. Try `p!help`."),
         };
     }
 
+    /** The card's own buttons. `vote` is the only one it offers. */
     public function action(Widget $widget, User $user, string $action, array $payload): WidgetOutcome
     {
-        $id = (int) ($payload['id'] ?? 0);
+        $poll = $this->poll($widget);
+
+        if ($poll === null) {
+            return WidgetOutcome::noop();
+        }
 
         return match ($action) {
-            'vote' => $this->toggleVote($widget, $user, $id),
-            'add' => $this->addOption($widget, (string) ($payload['text'] ?? '')),
-            'edit' => $this->editOption($widget, $id, (string) ($payload['text'] ?? '')),
-            'remove' => $this->removeOption($widget, $id),
-            'multi' => $this->toggleMulti($widget),
-            'close' => $this->setClosed($widget, true),
-            'open' => $this->setClosed($widget, false),
-            'clear' => $this->clearAllVotes($widget),
-            default => WidgetOutcome::updated(),
+            'vote' => $this->toggleVote($poll, $user, (int) ($payload['id'] ?? 0)),
+            'close' => $this->setClosed($poll, true),
+            'open' => $this->setClosed($poll, false),
+            default => WidgetOutcome::noop(),
         };
     }
 
     /**
-     * Start a fresh poll, resetting question, options and votes. Options can ride along
-     * pipe-separated: `p!new Lunch? | Pizza | Sushi | Tacos`.
+     * The poll this widget points at, or null.
+     *
+     * Scoped to the widget's own channel as well as its id: a state blob is user-writable in
+     * principle, and a widget must not become a way to read or drive a poll in a channel you
+     * can't see.
      */
+    private function poll(Widget $widget): ?AppPoll
+    {
+        $id = $widget->state['poll_id'] ?? null;
+
+        return $id === null
+            ? null
+            : AppPoll::where('channel_id', $widget->channel_id)->with('options')->find($id);
+    }
+
     private function newPoll(Widget $widget, string $args): WidgetOutcome
     {
         $parts = array_map('trim', explode('|', $args));
         $question = mb_substr((string) array_shift($parts), 0, self::MAX_QUESTION);
+
         if ($question === '') {
             return WidgetOutcome::reply('What\'s the question? `p!new <question> | option | option`.');
         }
 
-        $state = $this->initialState();
-        $state['question'] = $question;
-        foreach ($parts as $text) {
-            if ($text !== '' && count($state['options']) < self::MAX_OPTIONS) {
-                $state['seq']++;
-                $state['options'][] = ['id' => $state['seq'], 'text' => mb_substr($text, 0, self::MAX_OPTION), 'voters' => []];
+        $poll = AppPoll::create([
+            'channel_id' => $widget->channel_id,
+            // `single` rather than `yes_no` even when no options are given: `p!add` is how a
+            // timeline poll usually grows, and a yes/no poll can't take extra options.
+            'type' => 'single',
+            'question' => $question,
+            'created_by' => $widget->user_id,
+        ]);
+
+        foreach (array_values(array_filter($parts)) as $i => $text) {
+            if ($i >= self::MAX_OPTIONS) {
+                break;
             }
+            $poll->options()->create(['label' => mb_substr($text, 0, self::MAX_OPTION), 'position' => $i]);
         }
-        $widget->state = $state;
+
+        // Points the widget at the new poll. `p!new` on a card that already had one starts a
+        // fresh poll and leaves the old one on the wall — the results of a finished poll are
+        // usually the reason it was asked.
+        $widget->state = ['poll_id' => $poll->id];
 
         return WidgetOutcome::card();
     }
 
-    private function addOption(Widget $widget, string $text): WidgetOutcome
+    private function addOption(AppPoll $poll, string $text): WidgetOutcome
     {
         $text = trim($text);
+
         if ($text === '') {
             return WidgetOutcome::reply('What\'s the option? `p!add <text>`.');
         }
 
-        $state = $widget->state;
-        if (count($state['options']) >= self::MAX_OPTIONS) {
+        if ($poll->options->count() >= self::MAX_OPTIONS) {
             return WidgetOutcome::reply('This poll already has the maximum of '.self::MAX_OPTIONS.' options.');
         }
 
-        $state['seq']++;
-        $state['options'][] = ['id' => $state['seq'], 'text' => mb_substr($text, 0, self::MAX_OPTION), 'voters' => []];
-        $widget->state = $state;
+        $poll->options()->create([
+            'label' => mb_substr($text, 0, self::MAX_OPTION),
+            'position' => (int) $poll->options()->max('position') + 1,
+        ]);
 
         return WidgetOutcome::updated();
     }
 
-    private function edit(Widget $widget, ParsedCommand $command): WidgetOutcome
+    /** `p!edit <n> <text>` rewords an option; `p!edit <text>` rewords the question. */
+    private function edit(AppPoll $poll, ParsedCommand $command): WidgetOutcome
     {
-        $id = (int) $command->firstArg();
-        $text = trim($command->restAfterFirst());
-        if ($text === '') {
-            return WidgetOutcome::reply('New text? `p!edit <n> <text>`.');
+        $first = $command->firstArg();
+        $rest = trim(mb_substr($command->args, mb_strlen($first)));
+
+        if (ctype_digit($first) && $rest !== '') {
+            $option = $poll->options->firstWhere('id', (int) $first);
+
+            if ($option === null) {
+                return WidgetOutcome::reply("There's no option #{$first}.");
+            }
+
+            $option->update(['label' => mb_substr($rest, 0, self::MAX_OPTION)]);
+
+            return WidgetOutcome::updated();
         }
 
-        return $this->editOption($widget, $id, $text, viaCommand: true);
-    }
-
-    private function editOption(Widget $widget, int $id, string $text, bool $viaCommand = false): WidgetOutcome
-    {
-        $text = trim($text);
-        $state = $widget->state;
-        $index = $this->indexOf($state, $id);
-        if ($index === null || $text === '') {
-            return $viaCommand ? WidgetOutcome::reply("There's no option #{$id}.") : WidgetOutcome::updated();
+        if (trim($command->args) === '') {
+            return WidgetOutcome::reply('Reword the question with `p!edit <question>`, or an option with `p!edit <n> <text>`.');
         }
-        $state['options'][$index]['text'] = mb_substr($text, 0, self::MAX_OPTION);
-        $widget->state = $state;
+
+        $poll->update(['question' => mb_substr(trim($command->args), 0, self::MAX_QUESTION)]);
 
         return WidgetOutcome::updated();
     }
 
-    private function remove(Widget $widget, string $ref): WidgetOutcome
+    private function removeOption(AppPoll $poll, int $id): WidgetOutcome
     {
-        $id = (int) $ref;
-        if ($this->indexOf($widget->state, $id) === null) {
+        $option = $poll->options->firstWhere('id', $id);
+
+        if ($option === null) {
             return WidgetOutcome::reply("There's no option #{$id}.");
         }
 
-        return $this->removeOption($widget, $id);
-    }
-
-    private function removeOption(Widget $widget, int $id): WidgetOutcome
-    {
-        $state = $widget->state;
-        $index = $this->indexOf($state, $id);
-        if ($index === null) {
-            return WidgetOutcome::updated();
-        }
-        array_splice($state['options'], $index, 1);
-        $widget->state = $state;
+        // Its votes go with it on the foreign key — a vote for an option that no longer exists
+        // is not an opinion anybody still holds.
+        $option->delete();
 
         return WidgetOutcome::updated();
     }
 
-    private function voteByCommand(Widget $widget, User $user, string $ref): WidgetOutcome
+    /**
+     * Cast or withdraw one vote.
+     *
+     * A toggle, so the card's button and `p!vote 2` behave the same way twice in a row. On a
+     * single-answer poll a new pick replaces the old one rather than adding to it.
+     */
+    private function toggleVote(AppPoll $poll, User $user, int $id): WidgetOutcome
     {
-        $id = (int) $ref;
-        if ($this->indexOf($widget->state, $id) === null) {
-            return WidgetOutcome::reply("There's no option #{$id}. Try `p!show` to see the poll.");
-        }
-        if ($widget->state['closed']) {
+        if (! $poll->isOpen()) {
             return WidgetOutcome::reply('This poll is closed.');
         }
 
-        return $this->toggleVote($widget, $user, $id);
-    }
+        $option = $poll->options->firstWhere('id', $id);
 
-    /** Toggle this voter's pick on option #id, honouring single- vs multi-choice. */
-    private function toggleVote(Widget $widget, User $user, int $id): WidgetOutcome
-    {
-        $state = $widget->state;
-        if ($state['closed']) {
+        if ($option === null) {
+            return WidgetOutcome::reply($id === 0
+                ? 'Which option? `p!vote <n>`.'
+                : "There's no option #{$id}.");
+        }
+
+        $existing = $poll->votes()->where('user_id', $user->id)->where('option_id', $id)->first();
+
+        if ($existing !== null) {
+            $existing->delete();
+
             return WidgetOutcome::updated();
         }
-        $index = $this->indexOf($state, $id);
-        if ($index === null) {
-            return WidgetOutcome::updated();
+
+        if (! $poll->allowsMultiple()) {
+            $poll->votes()->where('user_id', $user->id)->delete();
         }
 
-        $already = $this->hasVoted($state['options'][$index], $user->id);
-
-        // Single-choice: clear this voter everywhere first, so a new pick replaces the old.
-        // (Also runs when toggling off, which is a harmless no-op on the other options.)
-        if (! $state['multi'] || $already) {
-            foreach ($state['options'] as $i => $option) {
-                $state['options'][$i]['voters'] = $this->withoutVoter($option['voters'], $user->id);
-            }
-        }
-
-        if (! $already) {
-            $state['options'][$index]['voters'][] = ['id' => $user->id, 'name' => $user->name];
-        }
-        $widget->state = $state;
+        $poll->votes()->create(['option_id' => $id, 'user_id' => $user->id]);
 
         return WidgetOutcome::updated();
     }
 
-    private function clearVotesFor(Widget $widget, User $user): WidgetOutcome
+    private function clearVotesFor(AppPoll $poll, User $user): WidgetOutcome
     {
-        $state = $widget->state;
-        foreach ($state['options'] as $i => $option) {
-            $state['options'][$i]['voters'] = $this->withoutVoter($option['voters'], $user->id);
-        }
-        $widget->state = $state;
+        $poll->votes()->where('user_id', $user->id)->delete();
 
         return WidgetOutcome::updated();
     }
 
-    private function toggleMulti(Widget $widget): WidgetOutcome
+    private function toggleMulti(AppPoll $poll): WidgetOutcome
     {
-        $state = $widget->state;
-        $state['multi'] = ! $state['multi'];
-        $widget->state = $state;
+        $poll->update(['type' => $poll->allowsMultiple() ? 'single' : 'multiple']);
 
         return WidgetOutcome::updated();
     }
 
-    private function setClosed(Widget $widget, bool $closed): WidgetOutcome
+    private function setClosed(AppPoll $poll, bool $closed): WidgetOutcome
     {
-        $state = $widget->state;
-        if ($state['closed'] === $closed) {
-            return WidgetOutcome::updated();
+        if ($poll->isOpen() !== $closed) {
+            return WidgetOutcome::reply($closed ? 'This poll is already closed.' : 'This poll is already open.');
         }
-        $state['closed'] = $closed;
-        $widget->state = $state;
+
+        $poll->update(['closed_at' => $closed ? now() : null]);
 
         return WidgetOutcome::updated();
     }
 
-    /** Wipe every vote but keep the question and options — a clean re-run. */
-    private function clearAllVotes(Widget $widget): WidgetOutcome
+    private function clearAllVotes(AppPoll $poll): WidgetOutcome
     {
-        $state = $widget->state;
-        foreach ($state['options'] as $i => $option) {
-            $state['options'][$i]['voters'] = [];
-        }
-        $state['closed'] = false;
-        $widget->state = $state;
+        $poll->votes()->delete();
 
         return WidgetOutcome::updated();
     }
 
+    /** Forget the poll entirely and leave the card ready for a new one. */
     private function reset(Widget $widget): WidgetOutcome
     {
         $widget->state = $this->initialState();
@@ -269,44 +288,16 @@ final class PollWidget implements WidgetHandler
         return WidgetOutcome::updated();
     }
 
-    private function hasVoted(array $option, int $userId): bool
-    {
-        foreach ($option['voters'] as $voter) {
-            if ((int) $voter['id'] === $userId) {
-                return true;
-            }
-        }
-
-        return false;
-    }
-
-    /** @return list<array{id:int,name:string}> the voters minus the given user */
-    private function withoutVoter(array $voters, int $userId): array
-    {
-        return array_values(array_filter($voters, fn ($v) => (int) $v['id'] !== $userId));
-    }
-
-    /** @return int|null index into the options array, by stable option number */
-    private function indexOf(array $state, int $id): ?int
-    {
-        foreach ($state['options'] as $i => $option) {
-            if ((int) $option['id'] === $id) {
-                return $i;
-            }
-        }
-
-        return null;
-    }
-
     private function help(): string
     {
         return implode("\n", [
-            '📊 **Poll commands**',
-            '`p!new <question> | opt | opt` — start a poll (options optional)',
-            '`p!add <text>` — add an option · `p!edit <n> <text>` · `p!rm <n>`',
-            '`p!vote <n>` — cast/toggle your vote · `p!unvote` — take it back',
-            '`p!multi` — allow picking several · `p!close` / `p!open` — lock/unlock',
-            '`p!clear` — wipe votes · `p!show` — bring the poll back to the bottom',
+            '**Poll**  —  the same polls the Polls app shows, from the timeline.',
+            '`p!new <question> | option | option` — start one',
+            '`p!add <text>` — add an option    `p!edit <n> <text>` — reword one',
+            '`p!rm <n>` — remove an option     `p!edit <question>` — reword the question',
+            '`p!vote <n>` — vote or take it back    `p!unvote` — clear your picks',
+            '`p!multi` — allow several picks   `p!close` / `p!open`',
+            '`p!clear` — clear every vote      `p!reset` — start over',
         ]);
     }
 }

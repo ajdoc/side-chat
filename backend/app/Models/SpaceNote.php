@@ -4,6 +4,7 @@ namespace App\Models;
 
 use App\Http\Controllers\ChannelSpaceNoteController;
 use App\Http\Controllers\SpaceNoteController;
+use App\Models\Concerns\HasAppActivity;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 
@@ -17,6 +18,9 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
  */
 class SpaceNote extends Model
 {
+    /** Comments, tags, reactions and a history — see the trait. */
+    use HasAppActivity;
+
     protected $fillable = ['side_chat_id', 'channel_id', 'updated_by', 'content', 'version'];
 
     /**

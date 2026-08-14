@@ -1,5 +1,4 @@
 <script setup lang="ts">
-import { MessageSquare, PanelRightClose } from 'lucide-vue-next'
 import type { Channel } from '~/types'
 import { deskApp, isWidgetApp } from '~/composables/useDeskApps'
 
@@ -45,18 +44,9 @@ const app = computed(() => (props.channel.app_id ? deskApp(props.channel.app_id)
     Side Space strikes with its room.
   -->
   <div v-if="app" class="relative flex min-h-0 flex-1 flex-col border-b">
-    <!-- The way back to the conversation. Floated over the app rather than given a bar of its
-         own, because a permanent strip would cost every app a row of its window to hold one
-         button. -->
-    <button
-      type="button"
-      class="absolute bottom-3 right-3 z-10 flex items-center gap-1.5 rounded-full border bg-background/90 px-3 py-1.5 text-xs shadow-lg backdrop-blur transition-colors hover:bg-muted"
-      :title="chatHidden ? 'Show the conversation' : 'Hide the conversation'"
-      @click="chatHidden = !chatHidden"
-    >
-      <component :is="chatHidden ? MessageSquare : PanelRightClose" class="h-3.5 w-3.5" />
-      {{ chatHidden ? 'Chat' : 'Hide chat' }}
-    </button>
+    <!-- The way back to the conversation — the same pill a Side Space uses, so "show chat"
+         is in one place whichever kind of channel has taken the window. -->
+    <ChatTogglePill v-model="chatHidden" />
 
     <TrackerApp
       v-if="channel.app_id === 'tracker'"
@@ -64,6 +54,20 @@ const app = computed(() => (props.channel.app_id ? deskApp(props.channel.app_id)
       :stream-name="streamName"
       :can-edit="canEdit"
       :channel-id="channel.id"
+    />
+
+    <AppPollsApp
+      v-else-if="channel.app_id === 'polls'"
+      :base-path="basePath"
+      :stream-name="streamName"
+      :can-edit="canEdit"
+    />
+
+    <StickerWallApp
+      v-else-if="channel.app_id === 'stickers'"
+      :base-path="basePath"
+      :stream-name="streamName"
+      :can-edit="canEdit"
     />
 
     <SideDeskCanvas

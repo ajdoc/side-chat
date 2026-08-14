@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ChevronDown, ChevronUp, Loader2, Plus, Send, Trash2 } from 'lucide-vue-next'
+import { ChevronDown, ChevronUp, Loader2, Pencil, Plus, Send, Trash2 } from 'lucide-vue-next'
 import type { AppTag, ChannelMember, TrackerTask } from '~/types'
 import { TRACKER_PRIORITIES, TRACKER_STATUSES, activityLine, statusMeta, tagChip } from '~/lib/tracker'
 import { Input } from '~/components/ui/input'
@@ -34,6 +34,7 @@ const emit = defineEmits<{
   comment: [string]
   /** A label the channel doesn't have yet — the parent creates it, then attaches it here. */
   'create-tag': [string]
+  'edit-comment': [{ id: number, body: string }]
   'remove-comment': [number]
   remove: []
   step: [number]
@@ -146,6 +147,28 @@ function submitComment() {
   commentDraft.value = ''
 }
 
+/**
+ * Which comment is being edited, and its draft.
+ *
+ * One at a time by construction — an id rather than a per-comment flag — because two open
+ * editors in one thread is a way to lose an edit you forgot you'd started.
+ */
+const editingId = ref<number | null>(null)
+const editDraft = ref('')
+
+function startEditComment(c: { id: number, body: string }) {
+  editingId.value = c.id
+  editDraft.value = c.body
+}
+
+function commitEditComment() {
+  const id = editingId.value
+  const body = editDraft.value.trim()
+  if (id == null || !body || body.length > MAX_COMMENT) return
+  emit('edit-comment', { id, body })
+  editingId.value = null
+}
+
 function when(iso: string) {
   const d = new Date(iso)
   const mins = Math.round((Date.now() - d.getTime()) / 60000)
@@ -247,17 +270,37 @@ const status = computed(() => statusMeta(props.task.status))
                   <span v-if="c.edited_at" class="text-muted-foreground/60">(edited)</span>
                   <!-- Author only. Staff can delete too, but the server is what enforces that;
                        showing the button to everyone would just produce 403s. -->
-                  <button
-                    v-if="c.user?.id === user?.id"
-                    type="button"
-                    class="ml-auto opacity-0 transition-opacity hover:text-red-500 group-hover:opacity-100"
-                    title="Delete comment"
-                    @click="emit('remove-comment', c.id)"
-                  >
-                    <Trash2 class="h-3 w-3" />
-                  </button>
+                  <!-- Author only, for both. The server enforces it either way; showing the
+                       buttons to everyone would just produce 403s. -->
+                  <span v-if="c.user?.id === user?.id" class="ml-auto flex items-center gap-1.5 opacity-0 transition-opacity group-hover:opacity-100">
+                    <button type="button" title="Edit comment" class="hover:text-foreground" @click="startEditComment(c)">
+                      <Pencil class="h-3 w-3" />
+                    </button>
+                    <button type="button" title="Delete comment" class="hover:text-red-500" @click="emit('remove-comment', c.id)">
+                      <Trash2 class="h-3 w-3" />
+                    </button>
+                  </span>
                 </p>
-                <p class="whitespace-pre-wrap break-words text-sm">{{ c.body }}</p>
+
+                <!-- Editing happens in place, replacing the text with the same words in a box,
+                     so the comment never leaves the thread it belongs to. -->
+                <form v-if="editingId === c.id" class="mt-1 space-y-1" @submit.prevent="commitEditComment">
+                  <textarea
+                    v-model="editDraft"
+                    rows="2"
+                    class="w-full resize-y rounded border bg-transparent p-2 text-sm outline-none focus:border-primary"
+                    @keydown.esc="editingId = null"
+                    @keydown.enter.meta.prevent="commitEditComment"
+                    @keydown.enter.ctrl.prevent="commitEditComment"
+                  />
+                  <div class="flex items-center gap-2">
+                    <button type="submit" class="rounded bg-primary px-2 py-0.5 text-[11px] font-medium text-primary-foreground disabled:opacity-50" :disabled="!editDraft.trim()">
+                      Save
+                    </button>
+                    <button type="button" class="text-[11px] text-muted-foreground" @click="editingId = null">Cancel</button>
+                  </div>
+                </form>
+                <p v-else class="whitespace-pre-wrap break-words text-sm">{{ c.body }}</p>
               </div>
             </div>
 

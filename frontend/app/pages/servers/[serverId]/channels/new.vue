@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { Hash, LayoutGrid, Map as MapIcon, Volume2 } from 'lucide-vue-next'
 import type { ChannelType, SideDeskAppId } from '~/types'
-import { CHANNELABLE_APPS } from '~/composables/useDeskApps'
+
 import { Button } from '~/components/ui/button'
 import { Input } from '~/components/ui/input'
 import { Label } from '~/components/ui/label'
@@ -43,7 +43,36 @@ const channelTypes: { value: ChannelType, label: string, hint: string, icon: any
  * CHANNELABLE_APPS. Defaults to the Tracker: it's the app built for this slot, and the one
  * somebody picking "App" most likely came for.
  */
+// Which apps may be a channel comes from the server now, so an installed app appears here
+// without a client release. Falls back to the built-ins if the request fails — see the
+// composable.
+const { channelable: channelableApps, load: loadCatalogue } = useAppCatalogue()
+loadCatalogue()
+
 const appId = ref<SideDeskAppId>('tracker')
+
+/**
+ * Picking an app names the channel after it, unless you've typed a name yourself.
+ *
+ * "Tracker" is what people call the channel anyway, and making them type it is a required field
+ * with one obvious answer. Tracked with a flag rather than by comparing the box against the
+ * current app's label: once you've typed, the name is yours, even if you later clear it back to
+ * something that happens to match.
+ */
+const nameTouched = ref(false)
+
+watch(appId, (id) => {
+  if (nameTouched.value) return
+  name.value = channelableApps.value.find(a => a.id === id)?.label ?? ''
+}, { immediate: true })
+
+// Switching *to* the App type fills the box for the same reason; switching away leaves whatever
+// is there, since a name typed for a tracker is just as good for a text channel.
+watch(type, (t) => {
+  if (t === 'app' && !nameTouched.value) {
+    name.value = channelableApps.value.find(a => a.id === appId.value)?.label ?? ''
+  }
+})
 
 /** Loaded only when it's needed — most channels aren't Side Spaces. */
 async function loadPresets() {
@@ -117,10 +146,7 @@ function cancel() {
               >
                 <component :is="t.icon" class="h-5 w-5 shrink-0 text-muted-foreground" />
                 <span class="min-w-0">
-                  <span class="flex items-center gap-1.5">
-                    <span class="text-sm font-medium">{{ t.label }}</span>
-                    <AlphaBadge v-if="t.value === 'space'" stage="Beta" />
-                  </span>
+                  <span class="text-sm font-medium">{{ t.label }}</span>
                   <span class="block text-xs text-muted-foreground">{{ t.hint }}</span>
                 </span>
               </button>
@@ -134,7 +160,7 @@ function cancel() {
             <Label>Which app</Label>
             <div class="grid grid-cols-2 gap-2">
               <button
-                v-for="a in CHANNELABLE_APPS"
+                v-for="a in channelableApps"
                 :key="a.id"
                 type="button"
                 class="flex items-center gap-2 rounded-lg border p-2.5 text-left transition-colors"
@@ -182,7 +208,7 @@ function cancel() {
 
           <div class="space-y-2">
             <Label for="name">Channel name</Label>
-            <Input id="name" v-model="name" placeholder="e.g. general" required autofocus />
+            <Input id="name" v-model="name" @input="nameTouched = true" placeholder="e.g. general" required autofocus />
           </div>
 
           <p v-if="error" class="text-sm text-destructive">{{ error }}</p>

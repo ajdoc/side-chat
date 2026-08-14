@@ -49,6 +49,7 @@ class Channel extends Model
         'join_effect',
         'leave_effect',
         'desk_apps',
+        'board_layers',
         'encrypted',
         'encryption_epoch',
         'encryption_toggled_by',
@@ -62,6 +63,7 @@ class Channel extends Model
         // see the migration for why that isn't the same as storing the defaults.
         return [
             'desk_apps' => 'array',
+            'board_layers' => 'array',
             'is_private' => 'boolean',
             'encrypted' => 'boolean',
             'encryption_toggled_at' => 'datetime',
@@ -175,10 +177,15 @@ class Channel extends Model
         return $this->hasMany(Widget::class);
     }
 
-    /** The channel's own shared whiteboard: every committed stroke, oldest first (paint order). */
+    /**
+     * The channel's own shared whiteboard: every committed stroke in paint order.
+     *
+     * Layer first, then id. Layer *is* paint order now — that's the whole feature — and within
+     * a layer the older mark is still underneath.
+     */
     public function whiteboardStrokes(): HasMany
     {
-        return $this->hasMany(WhiteboardStroke::class)->orderBy('id');
+        return $this->hasMany(WhiteboardStroke::class)->orderBy('layer')->orderBy('id');
     }
 
     /** The channel's Side Desk note — its one shared markdown document. */
@@ -421,6 +428,26 @@ class Channel extends Model
     public function appTags(): HasMany
     {
         return $this->hasMany(AppTag::class);
+    }
+
+    /**
+     * This channel's Polls — the wall the Polls app draws.
+     *
+     * @return HasMany<AppPoll, $this>
+     */
+    public function polls(): HasMany
+    {
+        return $this->hasMany(AppPoll::class);
+    }
+
+    /**
+     * This channel's Sticker Wall.
+     *
+     * @return HasMany<AppSticker, $this>
+     */
+    public function stickers(): HasMany
+    {
+        return $this->hasMany(AppSticker::class);
     }
 
     /** The room itself, when this is a Side Space. Null for every other kind of channel. */

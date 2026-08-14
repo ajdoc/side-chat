@@ -20,6 +20,9 @@ trait StrokeRules
         return array_merge([
             'kind' => ['required', Rule::in(['pen', 'rect', 'ellipse', 'line', 'arrow', 'text', 'note', 'bg'])],
             'client_id' => ['required', 'string', 'max:64'],
+            // Which layer the mark lands on. Optional and defaulting to 0, so a client that
+            // predates layers keeps drawing on the one layer every board already had.
+            'layer' => ['sometimes', 'integer', 'min:0', 'max:63'],
         ], $this->payloadRules());
     }
 

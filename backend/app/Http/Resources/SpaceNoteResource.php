@@ -8,8 +8,11 @@ use Illuminate\Http\Resources\Json\JsonResource;
 
 /**
  * A Side Desk note as the client renders it: the whole markdown body, plus who last saved
- * it and when, for the "edited by" line. There's no id — a note is addressed by its surface,
- * never on its own.
+ * it and when, for the "edited by" line.
+ *
+ * `id` is here for exactly one reason: a note can carry comments, tags and reactions like any
+ * other app item, and those hang off a polymorphic id. It is *not* how a note is addressed —
+ * every read and write still goes through the surface, because a surface has exactly one note.
  *
  * `version` is the revision the body belongs to; an editor echoes it back as `base_version`
  * on its next save so a concurrent edit is merged instead of overwritten
@@ -23,6 +26,7 @@ class SpaceNoteResource extends JsonResource
     public function toArray(Request $request): array
     {
         return [
+            'id' => $this->id,
             'content' => $this->content,
             'version' => $this->version,
             'updated_by' => new UserResource($this->whenLoaded('editor')),

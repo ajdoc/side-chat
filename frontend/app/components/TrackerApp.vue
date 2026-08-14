@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ChevronLeft, MoreVertical } from 'lucide-vue-next'
+import { ChevronLeft } from 'lucide-vue-next'
 import type { ChannelMember, TrackerProject, TrackerTask } from '~/types'
 
 /**
@@ -25,7 +25,7 @@ const props = defineProps<{
 const {
   projects, tasks, tags, loaded,
   open: openTracker,
-  addProject, removeProject,
+  addProject, patchProject, removeProject,
   addTask, patchTask, removeTask,
   addTag,
 } = useTracker(props.basePath, props.streamName)
@@ -54,7 +54,7 @@ const openTask = computed(() => tasks.value.find((t: TrackerTask) => t.id === op
 const taskIndex = computed(() => projectTasks.value.findIndex((t: TrackerTask) => t.id === openTaskId.value))
 
 // The detail's own load — comments and history, which the board listing deliberately omits.
-const { task: detail, loading: detailLoading, addComment, removeComment } = useTrackerTask(
+const { task: detail, loading: detailLoading, addComment, editComment, removeComment } = useTrackerTask(
   props.basePath, props.streamName, openTaskId,
 )
 
@@ -85,6 +85,27 @@ const title = computed(() => {
   if (project.value) return project.value.name
   return 'Tracker'
 })
+
+// --- renaming the open project ----------------------------------------------------------
+
+const projectNameDraft = ref('')
+
+// Follows whichever project is open, and follows a rename arriving from somebody else —
+// except while you're typing in the box, where overwriting your edit is the worse failure.
+watch(project, (p) => {
+  if (p && document.activeElement?.tagName !== 'INPUT') projectNameDraft.value = p.name
+}, { immediate: true })
+
+function commitProjectName() {
+  const p = project.value
+  if (!p) return
+  const next = projectNameDraft.value.trim()
+  if (!next || next === p.name) {
+    projectNameDraft.value = p.name
+    return
+  }
+  void patchProject(p.id, { name: next })
+}
 
 function openProject(p: TrackerProject) {
   openProjectId.value = p.id
@@ -154,7 +175,24 @@ async function onCreateTag(label: string) {
       >
         <ChevronLeft class="h-4 w-4" /> Back
       </button>
-      <p class="truncate font-semibold">{{ title }}</p>
+      <!--
+        The project's name is editable in place, on the board where you're looking at it.
+
+        An input rather than a dialog behind a menu, on the same reasoning as the task title:
+        renaming is a correction, and a correction shouldn't cost two clicks and a modal. Saves
+        on blur and on Enter, reverts on Escape and on an empty value — a project with no name
+        is not a rename, it's a mistake.
+      -->
+      <input
+        v-if="project && !openTask && canEdit"
+        v-model="projectNameDraft"
+        class="min-w-0 flex-1 truncate rounded border border-transparent bg-transparent px-1 py-0.5 font-semibold outline-none transition-colors hover:border-border focus:border-primary"
+        :title="`Rename ${project.name}`"
+        @blur="commitProjectName"
+        @keydown.enter="($event.target as HTMLInputElement).blur()"
+        @keydown.esc="projectNameDraft = project!.name; ($event.target as HTMLInputElement).blur()"
+      >
+      <p v-else class="truncate font-semibold">{{ title }}</p>
       <span class="flex-1" />
     </header>
 
@@ -184,6 +222,7 @@ async function onCreateTag(label: string) {
       :loading="detailLoading"
       @patch="patchTask(openTask.id, $event)"
       @comment="addComment"
+      @edit-comment="editComment($event.id, $event.body)"
       @create-tag="onCreateTag"
       @remove-comment="removeComment"
       @remove="onRemoveTask"

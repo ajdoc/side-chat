@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { Gamepad2, GripVertical, ListChecks, StickyNote, Trash2 } from 'lucide-vue-next'
+import { Gamepad2, GripVertical, ListChecks, MessageSquare, StickyNote, Trash2, X } from 'lucide-vue-next'
 import type { CanvasItem, CanvasItemKind } from '~/types'
 import type { DeskApp } from '~/composables/useDeskApps'
 import {
@@ -36,6 +36,16 @@ const surface = ref<HTMLElement | null>(null)
 // logical geometry when the gesture began.
 type Op = { type: 'move' | 'resize', id: number, startX: number, startY: number, origX: number, origY: number, origW: number, origH: number }
 let op: Op | null = null
+
+/**
+ * Which card's discussion is open. See the panel in the template for why it isn't in the card.
+ */
+const inspecting = ref<CanvasItem | null>(null)
+
+watch(items, (list: CanvasItem[]) => {
+  // Somebody else deleted the card you had open.
+  if (inspecting.value && !list.some(i => i.id === inspecting.value!.id)) inspecting.value = null
+})
 
 function beginOp(type: Op['type'], e: PointerEvent, item: CanvasItem) {
   if (!props.canEdit) return
@@ -239,9 +249,16 @@ onBeforeUnmount(() => {
       <span v-if="!canEdit && readonlyHint" class="ml-auto text-xs text-muted-foreground">{{ readonlyHint }}</span>
     </div>
 
-    <!-- Scrollable board -->
-    <div ref="surface" class="relative min-h-0 flex-1 overflow-auto bg-muted/20">
-      <div class="relative h-[1500px] w-[2000px]">
+    <!--
+      Scrollable board, inside a non-scrolling wrapper.
+
+      The wrapper exists only so the discussion panel below can be `absolute` against the
+      *viewport* rather than against the board. Put inside the scroller, the panel flows after a
+      1500px-tall board and you have to scroll to the bottom of the canvas to find it.
+    -->
+    <div class="relative min-h-0 flex-1">
+      <div ref="surface" class="h-full w-full overflow-auto bg-muted/20">
+        <div class="relative h-[1500px] w-[2000px]">
         <div
           v-for="item in items"
           :key="item.id"
@@ -256,10 +273,21 @@ onBeforeUnmount(() => {
           >
             <GripVertical class="h-3.5 w-3.5 text-muted-foreground" />
             <span class="text-[10px] uppercase tracking-wide text-muted-foreground">{{ labelFor(item) }}</span>
+            <!-- The discussion opens in a panel rather than inside the card: a default card is
+                 240×180, and a comment thread in that is a scrollbar in a postage stamp. -->
+            <button
+              type="button"
+              class="ml-auto text-muted-foreground hover:text-foreground"
+              title="Comments and tags"
+              @pointerdown.stop
+              @click="inspecting = item"
+            >
+              <MessageSquare class="h-3.5 w-3.5" />
+            </button>
             <button
               v-if="canEdit"
               type="button"
-              class="ml-auto text-muted-foreground hover:text-destructive"
+              class="text-muted-foreground hover:text-destructive"
               title="Delete card"
               @pointerdown.stop
               @click="remove(item.id)"
@@ -324,10 +352,40 @@ onBeforeUnmount(() => {
           </div>
         </div>
 
-        <p v-if="!items.length" class="absolute left-8 top-8 text-sm text-muted-foreground">
-          {{ canEdit ? 'Add a note or checklist to start building.' : 'Nothing on the canvas yet.' }}
-        </p>
+          <p v-if="!items.length" class="absolute left-8 top-8 text-sm text-muted-foreground">
+            {{ canEdit ? 'Add a note or checklist to start building.' : 'Nothing on the canvas yet.' }}
+          </p>
+        </div>
       </div>
+
+      <!-- Pinned to the viewport, not the board, so it opens where you're looking and stays
+           put as the canvas scrolls under it. Full width on a phone, where a side panel would
+           leave neither half usable. -->
+      <aside
+        v-if="inspecting"
+        class="absolute inset-y-0 right-0 z-30 flex w-full flex-col border-l bg-background/95 backdrop-blur sm:w-72"
+      >
+        <header class="flex shrink-0 items-center gap-2 border-b p-2">
+          <span class="min-w-0 flex-1 truncate text-sm font-medium">{{ labelFor(inspecting) }}</span>
+          <button
+            type="button"
+            class="grid h-7 w-7 shrink-0 place-items-center rounded text-muted-foreground transition-colors hover:bg-muted"
+            title="Close"
+            @click="inspecting = null"
+          >
+            <X class="h-4 w-4" />
+          </button>
+        </header>
+        <div class="min-h-0 flex-1 overflow-y-auto p-2">
+          <AppItemDiscussion
+            :key="inspecting.id"
+            :base-path="basePath"
+            subject="canvas_item"
+            :item-id="inspecting.id"
+            :can-edit="canEdit"
+          />
+        </div>
+      </aside>
     </div>
   </div>
 </template>

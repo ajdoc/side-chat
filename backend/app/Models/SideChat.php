@@ -22,7 +22,7 @@ class SideChat extends Model
 
     public const MAX_TAG_LENGTH = 32;
 
-    protected $fillable = ['channel_id', 'side_chat_forum_id', 'user_id', 'message_id', 'name', 'tags', 'origin_author', 'origin_excerpt', 'desk_apps'];
+    protected $fillable = ['channel_id', 'side_chat_forum_id', 'user_id', 'message_id', 'name', 'tags', 'origin_author', 'origin_excerpt', 'desk_apps', 'board_layers'];
 
     /** @return array<string, string> */
     protected function casts(): array
@@ -30,7 +30,7 @@ class SideChat extends Model
         // The Side Desk's tab strip, as an ordered array of app ids. Null until customised —
         // see the migration for why that isn't the same as storing the defaults.
         // `tags` is the forum layer's labels: a flat array of strings, order as typed.
-        return ['desk_apps' => 'array', 'tags' => 'array'];
+        return ['desk_apps' => 'array', 'board_layers' => 'array', 'tags' => 'array'];
     }
 
     public function channel(): BelongsTo
@@ -94,7 +94,7 @@ class SideChat extends Model
     /** The shared whiteboard: every committed stroke, oldest first (paint order). */
     public function whiteboardStrokes(): HasMany
     {
-        return $this->hasMany(WhiteboardStroke::class)->orderBy('id');
+        return $this->hasMany(WhiteboardStroke::class)->orderBy('layer')->orderBy('id');
     }
 
     /** The Side Desk note — this side chat's one shared markdown document. */

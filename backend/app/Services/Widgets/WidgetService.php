@@ -122,7 +122,7 @@ final class WidgetService
             return $this->ephemeral($channel, $user, $this->appList());
         }
 
-        if (in_array($app, DeskApps::WIDGET_APPS, true)) {
+        if (in_array($app, DeskApps::widgets(), true)) {
             $handler = $this->handlerForType($app);
             if ($handler === null) {
                 return $this->ephemeral($channel, $user, $this->appList());
@@ -144,7 +144,7 @@ final class WidgetService
     /** Help text for `a!list` — every id the command accepts, grouped the way they behave. */
     private function appList(): string
     {
-        $widgets = implode(', ', array_map(fn ($a) => 'a!'.$a, DeskApps::WIDGET_APPS));
+        $widgets = implode(', ', array_map(fn ($a) => 'a!'.$a, DeskApps::widgets()));
         $surfaces = implode(', ', array_map(fn ($a) => 'a!'.$a, self::OPENABLE_SURFACE_APPS));
 
         return "Open an app from chat with `a!<app>`.\n\n"

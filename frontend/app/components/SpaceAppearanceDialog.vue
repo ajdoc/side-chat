@@ -196,7 +196,6 @@ function reset() {
       <header class="flex h-12 shrink-0 items-center justify-between border-b px-4">
         <span class="flex items-center gap-2 font-semibold">
           How you look
-          <AlphaBadge stage="Beta" hint="New — tell us which hairstyles are missing." />
         </span>
         <button class="rounded p-1 text-muted-foreground hover:text-foreground" aria-label="Close" @click="emit('close')">
           <X class="h-4 w-4" />

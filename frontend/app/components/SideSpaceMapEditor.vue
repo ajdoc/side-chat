@@ -2015,7 +2015,6 @@ onBeforeUnmount(() => {
       <div class="flex min-w-0 items-center gap-3">
         <span class="flex items-center gap-2 font-semibold">
           {{ isDecorMode ? 'Decorate the room' : 'Edit the room' }}
-          <AlphaBadge stage="Beta" hint="The editor is new — save often, and tell us what it gets wrong." />
         </span>
         <!-- Renaming is part of rebuilding the room, so it's the owner's alone. Off the phone's
              header entirely: it's the one control here that isn't needed to finish a change. -->

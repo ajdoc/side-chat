@@ -2,7 +2,7 @@
 
 namespace App\Models;
 
-use App\Support\Apps\AppCatalogue;
+use App\Support\Apps\AppRegistry;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 
@@ -37,6 +37,6 @@ class ChannelApp extends Model
     /** Does this app render the channel's widget rather than storage of its own? */
     public function isWidget(): bool
     {
-        return AppCatalogue::isWidget($this->app_id);
+        return AppRegistry::isWidget($this->app_id);
     }
 }

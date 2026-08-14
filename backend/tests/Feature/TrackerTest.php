@@ -273,3 +273,99 @@ it('refuses an unknown subject type', function () {
 
     $this->getJson("/api/channels/{$channel->id}/apps/not_a_thing/1/comments")->assertNotFound();
 });
+
+/**
+ * Every app whose items are real rows can carry comments, tags and reactions — that was the
+ * point of making those tables polymorphic. This walks the whole set, so adding an app without
+ * a resolver shows up here rather than as a 404 somebody hits in the UI.
+ */
+it('serves comments and reactions for every row-backed app', function () {
+    [$owner, , $channel] = ownerWithChannel();
+    Passport::actingAs($owner);
+
+    $project = $channel->trackerProjects()->create(['key' => 'P', 'name' => 'P']);
+
+    $subjects = [
+        'tracker_task' => $project->tasks()->create(['number' => 1, 'title' => 'T'])->id,
+        'calendar_event' => $channel->calendarEvents()->create(['title' => 'E', 'starts_at' => now()])->id,
+        'canvas_item' => $channel->canvasItems()->create(['kind' => 'note', 'content' => ['text' => 'hi']])->id,
+        'app_poll' => $channel->polls()->create(['question' => 'Q?'])->id,
+        'app_sticker' => $channel->stickers()->create(['content' => ['shape' => 'square']])->id,
+        'space_document' => $channel->spaceDocuments()->create([
+            'user_id' => $owner->id, 'disk' => 'local', 'path' => 'x.pdf',
+            'name' => 'x.pdf', 'mime_type' => 'application/pdf', 'extension' => 'pdf', 'size' => 1,
+        ])->id,
+        'space_note' => $channel->spaceNote()->create(['content' => 'note'])->id,
+    ];
+
+    foreach ($subjects as $type => $id) {
+        $this->postJson("/api/channels/{$channel->id}/apps/{$type}/{$id}/comments", ['body' => "on {$type}"])
+            ->assertCreated()
+            ->assertJsonPath('data.commentable_type', $type);
+
+        $this->postJson("/api/channels/{$channel->id}/apps/{$type}/{$id}/reactions", ['emoji' => '👍'])
+            ->assertOk()
+            ->assertJsonPath('reactions.0.count', 1);
+
+        $tag = $this->postJson("/api/channels/{$channel->id}/app-tags", ['label' => "t-{$type}"])->json('data.id');
+        $this->putJson("/api/channels/{$channel->id}/apps/{$type}/{$id}/tags/{$tag}")->assertOk();
+
+        $this->getJson("/api/channels/{$channel->id}/apps/{$type}/{$id}/comments")
+            ->assertOk()
+            ->assertJsonCount(1, 'data');
+    }
+
+    expect(DB::table('app_comments')->count())->toBe(count($subjects))
+        ->and(DB::table('app_reactions')->count())->toBe(count($subjects))
+        ->and(DB::table('app_taggables')->count())->toBe(count($subjects));
+});
+
+it('takes a sticker’s comments and reactions with it when it leaves the wall', function () {
+    [$owner, , $channel] = ownerWithChannel();
+    Passport::actingAs($owner);
+
+    $id = $this->postJson("/api/channels/{$channel->id}/stickers", [
+        'content' => ['shape' => 'star'],
+    ])->json('data.id');
+
+    $this->postJson("/api/channels/{$channel->id}/apps/app_sticker/{$id}/comments", ['body' => 'nice']);
+    $this->postJson("/api/channels/{$channel->id}/apps/app_sticker/{$id}/reactions", ['emoji' => '🔥']);
+
+    $this->deleteJson("/api/channels/{$channel->id}/stickers/{$id}")->assertNoContent();
+
+    // Polymorphic ids have no foreign key, so this is the model event doing the work.
+    expect(DB::table('app_comments')->count())->toBe(0)
+        ->and(DB::table('app_reactions')->count())->toBe(0);
+});
+
+it('reads back an item’s reactions, not just the toggle response', function () {
+    [$owner, , $channel] = ownerWithChannel();
+    Passport::actingAs($owner);
+
+    $note = $channel->spaceNote()->create(['content' => 'shared note']);
+
+    // A freshly-opened item has to draw the chip row before anybody clicks, which the toggle
+    // response alone can't answer — hence the GET.
+    $this->getJson("/api/channels/{$channel->id}/apps/space_note/{$note->id}/reactions")
+        ->assertOk()->assertJsonPath('reactions', []);
+
+    $this->postJson("/api/channels/{$channel->id}/apps/space_note/{$note->id}/reactions", ['emoji' => '💡']);
+
+    $this->getJson("/api/channels/{$channel->id}/apps/space_note/{$note->id}/reactions")
+        ->assertOk()
+        ->assertJsonPath('reactions.0.emoji', '💡')
+        ->assertJsonPath('reactions.0.reacted', true);
+});
+
+it('scopes a note to its own channel', function () {
+    [$owner, , $channel] = ownerWithChannel();
+    [, , $other] = ownerWithChannel();
+    $note = $other->spaceNote()->create(['content' => 'theirs']);
+
+    Passport::actingAs($owner);
+
+    // A surface has one note, so the id is checked against *this* channel's rather than used
+    // to look one up — otherwise any note id would resolve through any channel.
+    $this->getJson("/api/channels/{$channel->id}/apps/space_note/{$note->id}/comments")
+        ->assertNotFound();
+});

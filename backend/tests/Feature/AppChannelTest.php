@@ -153,3 +153,49 @@ it('reports the app on the container too, so the sidebar can draw its icon', fun
         // And the discussion, which is where it actually lives and what the page opens.
         ->and($container['discussions'][0]['app_id'])->toBe('tracker');
 });
+
+it('lets the Tracker be added to a Side Desk strip', function () {
+    [$owner, , $channel] = ownerWithChannel();
+    Passport::actingAs($owner);
+
+    // The bug this pins down: `tracker` existed as a channel app and in the client registry,
+    // but not in the *desk* validation list — so adding the tab 422'd and the app looked
+    // broken. One registry now answers both questions.
+    $this->putJson("/api/channels/{$channel->id}/desk-apps", [
+        'apps' => ['tracker', 'polls', 'stickers'],
+    ])->assertOk()->assertJsonPath('apps', ['tracker', 'polls', 'stickers']);
+});
+
+it('serves a catalogue of built-in and installed apps', function () {
+    [$owner] = ownerWithServer();
+    Passport::actingAs($owner);
+
+    \App\Models\InstalledApp::create([
+        'slug' => 'acme-crm', 'name' => 'Acme CRM', 'entry_url' => 'https://apps.example.test/crm',
+    ]);
+
+    $res = $this->getJson('/api/apps/catalogue')->assertOk();
+
+    expect(collect($res->json('built_in'))->pluck('id'))->toContain('tracker')
+        ->and($res->json('installed.0.id'))->toBe('acme-crm');
+});
+
+it('lets a channel be created as an installed app, and refuses a disabled one', function () {
+    [$owner, $server] = ownerWithServer();
+    Passport::actingAs($owner);
+
+    $app = \App\Models\InstalledApp::create(['slug' => 'acme-crm', 'name' => 'Acme CRM']);
+
+    // The whole point of the dynamic catalogue: an id that no PHP constant mentions.
+    $this->postJson("/api/servers/{$server->id}/channels", [
+        'name' => 'CRM', 'type' => 'app', 'app_id' => 'acme-crm',
+    ])->assertCreated();
+
+    // Disabling is the kill switch: no *new* channel can pick it, while existing ones keep
+    // their timelines.
+    $app->update(['enabled' => false]);
+
+    $this->postJson("/api/servers/{$server->id}/channels", [
+        'name' => 'CRM 2', 'type' => 'app', 'app_id' => 'acme-crm',
+    ])->assertStatus(422)->assertJsonValidationErrors('app_id');
+});

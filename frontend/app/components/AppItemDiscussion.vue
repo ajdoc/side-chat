@@ -21,12 +21,27 @@ const props = withDefaults(defineProps<{
   canEdit?: boolean
   /** Tags are worth showing on some items and only noise on others. */
   showTags?: boolean
-}>(), { canEdit: true, showTags: true })
+  /** Same for reactions — a doc shelf wants them, a one-line canvas note may not. */
+  showReactions?: boolean
+}>(), { canEdit: true, showTags: true, showReactions: true })
 
 const id = computed(() => props.itemId)
 
-const { comments, tags, loading, loadTags, addComment, removeComment, attachTag, detachTag }
+const { comments, tags, reactions, loading, loadTags, addComment, removeComment, attachTag, detachTag, react }
   = useAppItem(props.basePath, props.subject, id)
+
+/**
+ * The emoji offered under every item, everywhere.
+ *
+ * A short fixed row rather than a picker: this sits inside another app's panel, and a full
+ * emoji keyboard would be the largest thing in it. Always all five, always in the same order,
+ * so the counts stay in stable positions instead of the row reflowing as people pick.
+ */
+const QUICK_REACTIONS = ['👍', '❤️', '🔥', '💡', '👀']
+
+function countFor(emoji: string) {
+  return reactions.value.find((r: any) => r.emoji === emoji)
+}
 
 const { user } = useAuth()
 
@@ -97,6 +112,24 @@ function when(iso: string) {
         @keydown.esc="addingTag = false"
         @blur="addingTag = false"
       >
+    </div>
+
+    <!-- Reactions. Above the thread, because a chip is a reply that costs nothing and most
+         items get one of these and no comment at all. -->
+    <div v-if="showReactions" class="flex flex-wrap items-center gap-1">
+      <button
+        v-for="emoji in QUICK_REACTIONS"
+        :key="emoji"
+        type="button"
+        class="flex items-center gap-1 rounded-full border px-1.5 py-0.5 text-[11px] leading-none transition-colors"
+        :class="countFor(emoji)?.reacted ? 'border-primary bg-primary/15' : 'hover:bg-muted'"
+        :disabled="!canEdit"
+        :title="countFor(emoji)?.reacted ? `Remove ${emoji}` : `React ${emoji}`"
+        @click="react(emoji)"
+      >
+        {{ emoji }}
+        <span v-if="countFor(emoji)?.count" class="text-muted-foreground">{{ countFor(emoji)!.count }}</span>
+      </button>
     </div>
 
     <div class="flex items-center gap-1.5 text-[11px] font-medium text-muted-foreground">

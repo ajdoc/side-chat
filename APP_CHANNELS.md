@@ -41,10 +41,17 @@ channelable: boolean  // may it be an entire channel?     ← new
 ```
 
 So the create-channel picker, the Side Desk tab picker and the canvas card toolbar are three
-filters over **one** list. `App\Support\Apps\AppCatalogue` mirrors the channelable set
-server-side — the client decides what an app *looks* like, the server decides what may be
-stored. The games are deliberately not channelable: a game is something a room starts, plays and
-finishes, and a permanent channel for one would be an empty table most of the time.
+filters over **one** list.
+
+Server-side, `App\Support\Apps\AppRegistry` is the single mirror of it — one row per app with
+`desk` and `channel` flags. It replaced two overlapping lists (`AppCatalogue` and the old
+`DeskApps`), and it did so because **the duplication bit twice**: the Tracker was added as a
+channel app and to the client registry but not to the desk-strip validation list, so adding the
+Tracker tab 422'd; and `app` was added as a channel type but not to the sidebar's section list,
+so app channels rendered nowhere. Neither failed loudly. One registry now answers both
+questions, and adding an app is one row.
+
+The client still decides what an app *looks* like; the server decides what may be stored.
 
 `AppChannel.vue` is a thin dispatcher that renders the component the Side Desk already renders,
 full-size. An app id this client doesn't know draws an honest "update to open it" notice rather
@@ -79,10 +86,42 @@ as `tracker_comments` that later grows siblings:
 | `app_comments` | A discussion under any work item |
 | `app_tags` + `app_taggables` | A **channel-wide** vocabulary, and what wears it |
 | `app_activity` | Append-only history — `kind` + `data`, never a rendered sentence |
+| `app_reactions` | Emoji chips, toggled — one endpoint, because reacting and un-reacting are one gesture |
 
-Adding them to a model is one `use HasAppActivity` line plus a resolver in `AppSubjects`.
-Already wired: `tracker_task`, `calendar_event`, `canvas_item`. The routes are generic —
-`channels/{channel}/apps/{type}/{id}/comments`.
+Adding them to a model is one `use HasAppActivity` line plus a resolver in `AppSubjects`. The
+routes are generic — `channels/{channel}/apps/{type}/{id}/comments`, `.../reactions`,
+`.../tags/{tag}`.
+
+**Every app whose items are database rows has them, in the API and in the UI**:
+
+| App | Item | Where the thread lives |
+| --- | --- | --- |
+| Tracker | task | the task detail pane |
+| Polls | poll | under the results |
+| Calendar | event | in the event editor |
+| Sticker Wall | sticker | a panel beside the wall |
+| Canvas | card | a panel beside the board |
+| Docs | shelf file | under the viewer |
+| Notes | the note | under the editor |
+
+One test walks the whole set — posting a comment, a reaction and a tag to each — so an app
+added without a resolver fails there rather than as a 404 somebody finds in the UI.
+
+**Reactions are on all of them too.** A fixed five-emoji row lives in `AppItemDiscussion`, so
+adding it to an app is the same one tag that brings comments and tags. Chips are toggles, and
+the server answers with the whole row rather than "added"/"removed" so a click never leaves a
+count to be guessed at.
+
+Two placements are deliberate. A **canvas card** and a **sticker** get a *panel* rather than an
+in-card thread — a default canvas card is 240×180, and a comment thread in that is a scrollbar
+in a postage stamp. A **chat-sourced** file in Docs gets nothing: it's an attachment on a
+message that already has its own timeline thread, and a second discussion here would split one
+conversation across two places.
+
+The ones that *can't* are the widget-backed apps — **Kanban, Music, Video**. Their items aren't
+rows: a kanban card is an entry in the widget's JSON blob with an id from a counter, so there is
+nothing for `commentable_id` to point at. Giving them comments means promoting their items to
+tables first, which for tasks is a thing that already exists and is called the Tracker.
 
 Three deliberate choices:
 
@@ -98,6 +137,95 @@ Deleting cascades **in PHP, not in the database** — `commentable_id` points at
 owns the row, so there's no key to cascade along. Model events cover deleting one item;
 anything deleting a *parent* whose children go in the database must call
 `purgeAppActivityFor()` first. `TrackerProjectController::destroy` does.
+
+## Polls
+
+A wall of a channel's questions, each with results, reactions and a thread. **Not** the `poll`
+widget, which stays: that's the single card a `p!` command drops in a timeline, whose whole
+state is one JSON blob. This is a *place* polls live, outliving the messages they'd have
+scrolled past, answerable days later.
+
+Real tables rather than a blob because those are what a blob is bad at: a vote must be unique
+per person, results must be counted rather than recomputed from an array, and the comments hang
+off the polymorphic tables.
+
+- Three types — `yes_no`, `single`, `multiple`. Yes/No writes its own options server-side so
+  every client spells them the same.
+- **A vote is the full set you now stand behind, not a delta.** Changing your mind is one call,
+  withdrawing is `[]`. A delta would need the client to know its own previous answer — exactly
+  what goes stale when you vote from two tabs.
+- **Raw votes never cross the wire.** Per-option counts plus your own picks, and nothing else.
+  On an anonymous poll a vote list would be the answer to the question the anonymity was for.
+- `vote_count` and `voter_count` both ship, because on a multiple-choice poll they differ and
+  "27 votes" from 12 people is a number nobody can interpret.
+- Closing refuses new votes and keeps the old ones. Closed polls stay on the wall under their
+  own heading — a poll's answer is usually why it was asked.
+
+### One poll, three ways in
+
+There used to be two poll systems: the `p!` widget, whose whole state was a JSON blob in the
+timeline, and this app. Two things called Poll that couldn't see each other's answers.
+
+The widget is now a **pointer**: its entire state is `{"poll_id": 12}`, and every `p!` command
+reads and writes that `AppPoll`. A `p!new` in the timeline puts a poll on the wall; voting on
+the wall moves the timeline card; closing it in either place closes it in both. The commands are
+unchanged, and `p!vote 2` still names a stable option — the number is the option's row id now
+rather than a counter in a blob, which gives the same never-reused guarantee for free.
+
+`poll` is no longer offered as a Side Desk tab or an app channel, because `polls` *is* that. It
+stays **accepted** in stored desk strips (and keeps rendering) so that desks which already have
+the tab don't break — see the `deprecated` flag in the client registry.
+
+## Sticker Wall
+
+A shared collage. Draw a sticker in a small editor, place it, drag it around; overlap is allowed
+and wanted, because that's what makes a collage read as one picture.
+
+**It does not reuse the Board**, which was the first plan. A whiteboard stroke belongs to the
+*board*; a sticker is an object — drawn elsewhere, then placed, then moved, and the unit
+somebody deletes when they want their own thing gone. Strokes can't be moved or owned as a group
+without inventing exactly this row on top of them. What *is* reused is the geometry: a sticker's
+paths are points in a 0–100 space rendered as SVG, so nothing is rasterised and a sticker is
+sharp at 40px on the wall and at 400px in the editor. Composition, not a shared table.
+
+Ownership is stricter than every other Side Desk app: **moving and deleting are yours-or-staff**,
+not anyone-in-the-channel. A wall is a collage of individual contributions with a name on each,
+so "anyone may move anyone's" makes it quietly vandalisable. Staff keep the override because a
+wall also needs moderating.
+
+## The dynamic catalogue
+
+`installed_apps` is the half of the catalogue a PHP constant can't represent, and the
+prerequisite for third-party apps — a dynamic id has to exist before there's anything to
+sandbox. A row is a slug (sharing `channel_apps.app_id`'s namespace, checked against the
+built-ins), a name, an `entry_url` and an `enabled` kill switch.
+
+`entry_url` **must be an origin we don't serve the app from**: a sandboxed iframe is only a
+boundary if the framed document can't reach our cookies. Nothing renders it yet — the column
+exists so an install is describable before the renderer that honours it is written.
+
+Disabling stops *new* channels picking the app while existing ones keep their timelines and
+render the "app unavailable" notice. Deleting them would take their conversations too.
+
+## Layers
+
+Two implementations of one idea, deliberately different.
+
+**Board layers** are shared state. Strokes carry a `layer` index; the names and visibility live
+in `board_layers` on the surface (a name repeated across ten thousand strokes is ten thousand
+copies of one fact) and broadcast, because hiding a layer has to hide it for everybody or "it's
+on the Sketch layer" becomes untrue for whoever you said it to. Which layer *you* draw on is
+per-person and never persisted.
+
+Both are additive: `layer` defaults to 0, so every board that existed before them has its
+strokes on one layer and nothing moved. A `bg` fill ignores the active layer and stays on 0 —
+putting the ground on layer 3 would paint over the work beneath it. Hit-testing runs over
+*visible* strokes only, so you can't erase something on a hidden layer by clicking empty space.
+
+**Sticker layers** are part of the drawing — no endpoint, no sync, nothing to reconcile, because
+a sticker is made by one person in one sitting. `stickerLayers()` is the only place that knows
+about the pre-layers flat `paths` shape, so old stickers keep rendering and are converted on
+first edit.
 
 ## Decisions taken
 
@@ -146,5 +274,7 @@ code sits in a room whose promise is that the server can't read it.
 - **Canvas cards are commentable server-side but not in the UI.** A default card is 240×180; a
   comment thread inside one is a scrollbar in a postage stamp. It needs a card detail view first.
 - **Task reordering within a status group** has a `position` column and no drag handle yet.
-- **The Tracker has no mobile-specific layout pass.** It's responsive and usable, but the detail
-  pane's two columns stack rather than having been designed for a phone.
+- **Stickers can't be resized or rotated from the wall.** The columns and the API accept both;
+  the wall only offers drag, double-click-to-edit and delete.
+- **No mobile-specific layout pass** on the Tracker, Polls or the Sticker Wall. All three are
+  responsive and usable; none was designed for a phone.

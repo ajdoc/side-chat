@@ -36,7 +36,10 @@ const GROUPS = [
 ] as const
 
 const grouped = computed(() =>
-  GROUPS.map(g => ({ ...g, apps: DESK_APPS.filter(a => a.group === g.key) })).filter(g => g.apps.length),
+  // Superseded apps are hidden here but keep rendering where a desk already has them — see
+  // the `deprecated` flag.
+  GROUPS.map(g => ({ ...g, apps: DESK_APPS.filter(a => a.group === g.key && !a.deprecated) }))
+    .filter(g => g.apps.length),
 )
 </script>
 

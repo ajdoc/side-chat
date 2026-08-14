@@ -1,4 +1,4 @@
-import type { AppComment, AppTag } from '~/types'
+import type { AppComment, AppReactionSummary, AppTag } from '~/types'
 
 /**
  * Comments and tags for one item in any app — a calendar entry, a canvas card, a tracker task.
@@ -23,6 +23,8 @@ export function useAppItem(
 
   const comments = ref<AppComment[]>([])
   const tags = ref<AppTag[]>([])
+  /** The chip row: one entry per emoji, with a count and whether you're in it. */
+  const reactions = ref<AppReactionSummary[]>([])
   const loading = ref(false)
 
   function socketHeaders() {
@@ -33,18 +35,40 @@ export function useAppItem(
     const id = itemId.value
     if (id == null) {
       comments.value = []
+      reactions.value = []
       return
     }
     loading.value = true
     try {
-      const res = await api<{ data: AppComment[] }>(`${basePath}/apps/${subject}/${id}/comments`)
+      const [thread, chips] = await Promise.all([
+        api<{ data: AppComment[] }>(`${basePath}/apps/${subject}/${id}/comments`),
+        api<{ reactions: AppReactionSummary[] }>(`${basePath}/apps/${subject}/${id}/reactions`),
+      ])
       // The response for an item you've since navigated away from must not land on the one
       // you're now looking at.
-      if (itemId.value === id) comments.value = res.data
+      if (itemId.value === id) {
+        comments.value = thread.data
+        reactions.value = chips.reactions
+      }
     }
     finally {
       loading.value = false
     }
+  }
+
+  /**
+   * Toggle an emoji. The server answers with the whole chip row rather than "added"/"removed",
+   * so a click never leaves the count to be guessed at — see AppReactionController.
+   */
+  async function react(emoji: string) {
+    const id = itemId.value
+    if (id == null) return
+    const res = await api<{ reactions: AppReactionSummary[] }>(
+      `${basePath}/apps/${subject}/${id}/reactions`,
+      { method: 'POST', body: { emoji }, headers: socketHeaders() },
+    )
+    reactions.value = res.reactions
+    return res.reactions
   }
 
   /** The channel's whole vocabulary — what the tag picker offers. */
@@ -106,5 +130,8 @@ export function useAppItem(
 
   watch(itemId, () => void load(), { immediate: true })
 
-  return { comments, tags, loading, load, loadTags, addComment, removeComment, attachTag, detachTag }
+  return {
+    comments, tags, reactions, loading,
+    load, loadTags, addComment, removeComment, attachTag, detachTag, react,
+  }
 }

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ArrowUpRight, Circle, Eraser, Hand, Maximize, Minus, MousePointer2, PaintBucket, Pencil, Redo2, Square, StickyNote, Trash2, Type, Undo2, ZoomIn, ZoomOut } from 'lucide-vue-next'
+import { ArrowUpRight, Circle, Eraser, Eye, EyeOff, Hand, Layers3, Maximize, Minus, MousePointer2, PaintBucket, Pencil, Redo2, Square, StickyNote, Trash2, Type, Undo2, ZoomIn, ZoomOut } from 'lucide-vue-next'
 import type { WhiteboardStroke, WhiteboardStrokeKind, WhiteboardStrokePayload } from '~/types'
 import type { BoardEntry } from '~/composables/useWhiteboard'
 import { snapshot } from '~/composables/useWhiteboard'
@@ -37,6 +37,7 @@ const props = defineProps<{
 
 const {
   strokes, liveStrokes, cursors,
+  layers, hiddenLayers, activeLayer, addLayer, renameLayer, toggleLayer,
   load, addStroke, removeStroke,
   draw, erase, editStroke, asOneGesture, clear,
   undo, redo, canUndo, canRedo,
@@ -134,6 +135,7 @@ const fillColor = computed(() => (fill.value && fill.value !== NO_FILL ? fill.va
 const bucketColor = computed(() => (fill.value === NO_FILL ? null : fill.value ?? color.value))
 const canFill = computed(() => FILLABLE.includes(tool.value))
 /** Which swatch the palette is open for — the stroke colour, the fill, or nothing. */
+const layersOpen = ref(false)
 const paletteFor = ref<'stroke' | 'fill' | null>(null)
 
 /** The swatch the open palette is editing, so the grid can tick the current choice. */
@@ -284,14 +286,33 @@ function resize() {
 }
 
 /**
- * The board's marks in painting order: the backdrop first, then everything else in the order
- * it was drawn. A `bg` arrives like any other stroke — appended — so without this a board
- * painted after the fact would bury its own contents.
+ * The board's marks in painting order: the backdrop first, then everything else by layer and
+ * then by the order it was drawn.
+ *
+ * A `bg` arrives like any other stroke — appended — so without pulling it forward a board
+ * painted after the fact would bury its own contents. Layer order comes second because it's
+ * what "layers" means; within a layer the older mark is still underneath.
+ *
+ * Hidden layers are dropped here rather than skipped in `renderStroke`, so hit-testing (which
+ * reads `strokes` directly) is the only thing that still sees them — and that's deliberate:
+ * see `visibleStrokes`.
  */
-const orderedStrokes = computed(() => [
-  ...strokes.value.filter(s => s.kind === 'bg'),
-  ...strokes.value.filter(s => s.kind !== 'bg'),
-])
+const orderedStrokes = computed(() => {
+  const visible = strokes.value.filter(s => !hiddenLayers.value.has(s.layer ?? 0))
+  return [
+    ...visible.filter(s => s.kind === 'bg'),
+    ...visible.filter(s => s.kind !== 'bg').sort((a, b) => (a.layer ?? 0) - (b.layer ?? 0)),
+  ]
+})
+
+/**
+ * What the pointer may select or erase: only what's on screen.
+ *
+ * Hit-testing used to walk `strokes` backwards. With layers that would let you erase a mark on
+ * a hidden layer by clicking empty space above it — the worst kind of bug, since you can't see
+ * what you destroyed. Everything that resolves a click goes through this instead.
+ */
+const visibleStrokes = computed(() => strokes.value.filter(s => !hiddenLayers.value.has(s.layer ?? 0)))
 
 function paint() {
   const ctx = canvas.value?.getContext('2d')
@@ -479,8 +500,8 @@ function onPointerDown(e: PointerEvent) {
       drag = { mode: 'resize', stroke: sel, offX: 0, offY: 0, before: snapshot(sel.payload) }
       return
     }
-    for (let i = strokes.value.length - 1; i >= 0; i--) {
-      const s = strokes.value[i]!
+    for (let i = visibleStrokes.value.length - 1; i >= 0; i--) {
+      const s = visibleStrokes.value[i]!
       if (MOVABLE.includes(s.kind) && s.id > 0 && hitStroke({ kind: s.kind, payload: s.payload }, p, 6)) {
         canvas.value?.setPointerCapture(e.pointerId)
         selectedId.value = s.id
@@ -635,8 +656,8 @@ async function onPointerUp(e: PointerEvent) {
  * board belongs to the room.
  */
 async function fillAt(p: { x: number, y: number }) {
-  for (let i = strokes.value.length - 1; i >= 0; i--) {
-    const s = strokes.value[i]!
+  for (let i = visibleStrokes.value.length - 1; i >= 0; i--) {
+    const s = visibleStrokes.value[i]!
     if (!hitStroke({ kind: s.kind, payload: s.payload }, p, 6)) continue
     if (s.id <= 0) return // still awaiting its server id; nothing to PATCH yet
 
@@ -693,8 +714,8 @@ async function paintBoard() {
 
 function eraseAt(p: { x: number, y: number }) {
   // Erase from the top down, so the topmost mark under the cursor goes first.
-  for (let i = strokes.value.length - 1; i >= 0; i--) {
-    const s = strokes.value[i]!
+  for (let i = visibleStrokes.value.length - 1; i >= 0; i--) {
+    const s = visibleStrokes.value[i]!
     if (hitStroke({ kind: s.kind, payload: s.payload }, p, 8)) {
       void erase(s)
       break
@@ -1011,6 +1032,81 @@ onBeforeUnmount(() => {
          so the wrapper scrolls it; the surface inside carries the canvas and anything anchored
          to it. -->
     <div class="relative min-h-0 flex-1">
+      <!--
+        Layers.
+
+        Floated over the board rather than added to the toolbar, which is already a scrolling
+        strip on a phone, and collapsed to a single button by default — most boards have one
+        layer and never want to think about it. Opening it is the moment you do.
+
+        Top-right, so it stays clear of the chat pill an app channel or a Side Space floats
+        bottom-right.
+      -->
+      <div class="absolute right-2 top-2 z-10">
+        <button
+          type="button"
+          class="flex items-center gap-1.5 rounded-md border bg-background/90 px-2 py-1 text-xs shadow backdrop-blur transition-colors hover:bg-muted"
+          :title="layersOpen ? 'Hide layers' : 'Layers'"
+          @click="layersOpen = !layersOpen"
+        >
+          <Layers3 class="h-3.5 w-3.5" />
+          <span v-if="layers.length > 1">{{ activeLayer + 1 }}/{{ layers.length }}</span>
+        </button>
+
+        <div
+          v-if="layersOpen"
+          class="mt-1 w-52 space-y-1 rounded-lg border bg-background/95 p-1.5 shadow-lg backdrop-blur"
+        >
+          <!--
+            Drawn top-first, because that's how a stack reads on screen: the last layer is the
+            one painted over everything. The stored order is bottom-first (index 0 is the
+            bottom), so this is reversed for display only — the indices handed to the callbacks
+            are the real ones.
+          -->
+          <div
+            v-for="(layer, i) in [...layers].reverse()"
+            :key="layers.length - 1 - i"
+            class="flex items-center gap-1 rounded px-1 py-0.5 transition-colors"
+            :class="activeLayer === layers.length - 1 - i ? 'bg-primary/15' : 'hover:bg-muted'"
+          >
+            <button
+              type="button"
+              class="shrink-0 text-muted-foreground transition-colors hover:text-foreground"
+              :title="layer.visible ? `Hide ${layer.name}` : `Show ${layer.name}`"
+              :disabled="!canDraw"
+              @click="toggleLayer(layers.length - 1 - i)"
+            >
+              <component :is="layer.visible ? Eye : EyeOff" class="h-3.5 w-3.5" />
+            </button>
+
+            <!-- One control for two jobs: click selects the layer to draw on, and the text is
+                 editable in place so renaming isn't a second menu. -->
+            <input
+              :value="layer.name"
+              class="min-w-0 flex-1 truncate rounded border border-transparent bg-transparent px-1 text-xs outline-none transition-colors hover:border-border focus:border-primary"
+              :class="!layer.visible && 'text-muted-foreground line-through'"
+              :readonly="!canDraw"
+              @focus="activeLayer = layers.length - 1 - i"
+              @click="activeLayer = layers.length - 1 - i"
+              @change="renameLayer(layers.length - 1 - i, ($event.target as HTMLInputElement).value.trim() || layer.name)"
+              @keydown.enter="($event.target as HTMLInputElement).blur()"
+            >
+          </div>
+
+          <button
+            v-if="canDraw && layers.length < 64"
+            type="button"
+            class="w-full rounded border border-dashed px-2 py-1 text-[11px] text-muted-foreground transition-colors hover:bg-muted"
+            @click="addLayer"
+          >
+            + Add layer
+          </button>
+          <p class="px-1 text-[10px] leading-tight text-muted-foreground">
+            New marks land on the highlighted layer.
+          </p>
+        </div>
+      </div>
+
       <div ref="wrap" class="h-full w-full overflow-auto bg-white dark:bg-neutral-900">
         <div class="relative" :style="{ width: `${cssW}px`, height: `${cssH}px` }">
           <canvas
