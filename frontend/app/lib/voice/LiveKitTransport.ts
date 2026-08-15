@@ -82,9 +82,34 @@ function kindForSource(source: Track.Source): TrackKind | null {
  */
 const SCREEN_PUBLISH = {
   simulcast: true,
-  // Matches the mesh's own ceiling (SCREEN_MAX_BITRATE in useVoice) so the picture doesn't
-  // visibly change quality when a call falls back — the failure should be invisible.
-  videoEncoding: { maxBitrate: 2_500_000, maxFramerate: 30 },
+
+  /*
+   * `screenShareEncoding`, emphatically not `videoEncoding`.
+   *
+   * The SDK reads this field for a ScreenShare publish and ignores `videoEncoding` entirely
+   * (that one is the camera's). Setting the wrong one doesn't warn — it silently leaves the
+   * default in place, which is `ScreenSharePresets.h1080fps15`: **15fps**, against the 30 the
+   * mesh sends. That alone is why a share looked worse the moment it moved to the server, and
+   * it is most obvious on exactly the content this feature exists for, a film or a game.
+   *
+   * 30fps at the mesh's own ceiling, so moving a share between the two changes the route and
+   * not the picture.
+   */
+  screenShareEncoding: { maxBitrate: 2_500_000, maxFramerate: 30 },
+
+  /*
+   * VP9, to match what the mesh negotiates.
+   *
+   * The mesh reorders codecs to prefer VP9 (see preferEfficientVideo in sdp.ts) because it is
+   * noticeably sharper on screen text at the same bitrate. LiveKit defaults to VP8, so without
+   * this the two routes were not merely differently tuned but differently *encoded* — a second,
+   * quieter reason the server looked worse.
+   *
+   * `backupCodec` keeps a VP8 encoding alongside it for any viewer whose browser can't take
+   * VP9, so preferring it costs nobody the picture.
+   */
+  videoCodec: 'vp9',
+  backupCodec: true,
 } as const
 
 /** Voice is mono speech and gets the mesh's budget, for the same reason. */
@@ -92,10 +117,18 @@ const MIC_PUBLISH = { audioPreset: undefined, dtx: true, red: true } as const
 
 export function createLiveKitTransport(): VoiceTransport {
   const room = new Room({
-    // Let the SDK stop paying for video nobody is looking at — a tile scrolled out of view or
-    // rendered tiny doesn't need full resolution. Free on the mesh (there was no server to ask)
-    // and one of the things an SFU buys.
-    adaptiveStream: true,
+    /*
+     * Adaptive stream is off, deliberately, and it is the third reason a share looked soft.
+     *
+     * It picks a simulcast layer from the *rendered size* of the video element, which is a good
+     * trade for a grid of faces and a bad one for the single thing everybody is squinting at:
+     * a share in a modestly-sized tile gets served a low layer, and it looks blurry however
+     * much bitrate the sender is spending. The mesh has no layers to pick from and so never
+     * did this, which is exactly why the two looked different.
+     *
+     * Dynacast stays on: pausing a layer *nobody* is consuming costs no one anything.
+     */
+    adaptiveStream: false,
     dynacast: true,
   })
 

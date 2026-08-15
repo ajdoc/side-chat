@@ -238,6 +238,32 @@ describe('publish', () => {
     expect(options.simulcast).toBe(true)
   })
 
+  it('encodes a screen share at the mesh\'s own settings, not the SDK\'s default', async () => {
+    await transport.connect(context(), handlers)
+    await transport.publish('screen', { id: 'screen' } as any)
+
+    const [, options] = room.localParticipant.publishTrack.mock.calls[0]! as unknown as [any, any]
+
+    // `videoEncoding` is the camera's field and is *ignored* for a screen share — setting it
+    // instead of this one silently leaves LiveKit's h1080fps15 default in place, which is half
+    // the framerate the mesh sends. That is a quality drop with no warning attached.
+    expect(options.screenShareEncoding).toEqual({ maxBitrate: 2_500_000, maxFramerate: 30 })
+
+    // And the same codec the mesh negotiates, or the two routes look different for a reason
+    // that has nothing to do with the route.
+    expect(options.videoCodec).toBe('vp9')
+    expect(options.backupCodec).toBe(true)
+  })
+
+  it('does not let the SDK pick a layer from how big the video element happens to be', async () => {
+    await transport.connect(context(), handlers)
+
+    // Good for a grid of faces, wrong for the one thing everybody is squinting at: a share in
+    // a modest tile would be served a low layer however much the sender is spending.
+    expect(room.options.adaptiveStream).toBe(false)
+    expect(room.options.dynacast).toBe(true)
+  })
+
   it('retracts a track without stopping it, because the caller still owns it', async () => {
     await transport.connect(context(), handlers)
 
