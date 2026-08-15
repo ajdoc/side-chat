@@ -1,0 +1,5 @@
+# Build output. The *wasm* is committed, over in public/worklets/ — this is the 29MB of
+# intermediate objects that produced it, and it is rebuilt from Cargo.lock on demand.
+# build.sh keeps this inside the container, so it should only appear if someone ran cargo
+# against a host toolchain directly.
+/target/

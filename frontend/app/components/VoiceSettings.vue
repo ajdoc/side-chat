@@ -238,6 +238,12 @@ const modeOptions = [
             don't ride under your voice. Switch to Standard if you're playing or singing —
             this is tuned for speech and will chew on a held note.
           </span>
+          <span v-if="noiseSuppression === 'voice'" class="block text-xs text-muted-foreground">
+            Everything that isn't a voice is removed — typing, clapping, a barking dog — including
+            while you're talking, which the other settings can't do. The trade is that it decides
+            what counts as a voice: don't use it for music, singing, or a room with someone else
+            talking in it.
+          </span>
         </label>
 
         <!-- How hard that cleanup works. Live: draggable mid-call, audible as you drag. -->

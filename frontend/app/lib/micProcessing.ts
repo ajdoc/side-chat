@@ -17,6 +17,33 @@
  *   {@link noise-suppressor}, a {@link noise-gate}, and a little compression. This is for the
  *   case the browser is weakest at — a room that is *not quiet*, where a fan, rain on the
  *   window or the road outside sits under your voice.
+ * - `voice` — the same chain with a neural denoiser ({@link rnnoise}) in the suppressor's slot.
+ *   For the case *everything above* is weakest at: noise that isn't steady, and so can't be
+ *   measured. See below.
+ *
+ * ## Why `voice` is a fourth level and not a better `high`
+ *
+ * Every level above `off` works by measuring the room and subtracting it, which quietly assumes
+ * the room holds still long enough to be measured. Against a fan that assumption is free.
+ * Against a keyboard, a clap, a door or a dog it is simply false — the sound is over before any
+ * estimate has moved, so it arrives at the far end untouched, and worse, every envelope
+ * downstream lurches around it. No amount of tuning reaches that, because the information
+ * needed isn't in the signal's history.
+ *
+ * `voice` gets it from a model instead: a small recurrent network trained on what speech sounds
+ * like, which can therefore call a clap "not speech" the first time it hears one. It is the only
+ * level that removes non-stationary noise, and it is the answer to "my friend on Discord can't
+ * hear clapping" — that is the same class of tool.
+ *
+ * It is not the default and should not become one. It is trained on speech, at 48kHz, and it
+ * will happily decide that a guitar, a sung note or a second person across the room is noise to
+ * be removed. `high` colours a voice; `voice` can delete a sound outright. That is the right
+ * trade for a loud room and the wrong one for almost anything else, so it stays a choice made by
+ * someone who knows their own problem.
+ *
+ * It also replaces the spectral suppressor rather than stacking with it. Two estimators each
+ * subtracting from the other's output is precisely how you arrive at the underwater artefacts
+ * both of them are tuned to avoid.
  *
  * ## Why `high` needs both a suppressor and a gate
  *
@@ -66,14 +93,26 @@
  * microphone is no call at all.
  */
 
-export const NOISE_SUPPRESSION_LEVELS = ['off', 'standard', 'high'] as const
+export const NOISE_SUPPRESSION_LEVELS = ['off', 'standard', 'high', 'voice'] as const
 export type NoiseSuppression = (typeof NOISE_SUPPRESSION_LEVELS)[number]
 
 export const DEFAULT_NOISE_SUPPRESSION: NoiseSuppression = 'standard'
 
+/**
+ * The rate the neural model is defined at, exported because the *context* has to be built at it.
+ *
+ * RNNoise's features are computed against fixed frequency bands over a 480-sample frame; at any
+ * other rate those bands land on the wrong frequencies and the network is being asked about a
+ * signal it has never seen. It doesn't fail — it just denoises badly and confidently. Since an
+ * AudioContext's rate is fixed at construction and defaults to whatever the output device wants
+ * (44.1kHz on plenty of machines), the call's context has to ask for this explicitly.
+ */
+export const RNNOISE_SAMPLE_RATE = 48000
+
 export const NOISE_SUPPRESSION_OPTIONS: { value: NoiseSuppression, label: string, hint: string }[] = [
   { value: 'standard', label: 'Standard', hint: 'Your browser\'s echo and noise cleanup' },
   { value: 'high', label: 'Aggressive', hint: 'Removes fans, rain and traffic from under your voice, and silences the gaps' },
+  { value: 'voice', label: 'Voice isolation', hint: 'Sends your voice and nothing else — keyboards, claps and barking go. Not for music' },
   { value: 'off', label: 'Off', hint: 'Raw microphone — for music, or a good mic in a quiet room' },
 ]
 
@@ -83,13 +122,21 @@ export const NOISE_SUPPRESSION_OPTIONS: { value: NoiseSuppression, label: string
  *
  * `off` turns the browser's processing off at the *constraint*, which is the only place it
  * can be turned off — nothing downstream can put back what echo cancellation removed.
+ *
+ * `voice` is the one level that splits them apart. Echo cancellation stays on and has to: it
+ * needs the far end's signal as a reference, which only the browser has, and no denoiser can
+ * substitute for it. Auto gain stays on because the model was trained on speech at a sensible
+ * level. But the browser's *noise suppression* comes off, because leaving it on means two
+ * denoisers in series, the first one handing the second a signal that has already had holes cut
+ * in it — and a network trained on real speech does measurably worse on speech that has been
+ * through a spectral subtractor first.
  */
 export function micConstraints(level: NoiseSuppression): MediaTrackConstraints {
   const processed = level !== 'off'
 
   return {
     echoCancellation: processed,
-    noiseSuppression: processed,
+    noiseSuppression: processed && level !== 'voice',
     autoGainControl: processed,
     channelCount: 1,
   }
@@ -225,6 +272,42 @@ function loadWorklet(ctx: AudioContext, name: string): Promise<boolean> {
   return loading
 }
 
+/** The wasm the model lives in. Compiled once per page, not per call. */
+let rnnoiseModule: Promise<WebAssembly.Module | null> | null = null
+
+/**
+ * Fetch and compile the denoiser, here on the main thread.
+ *
+ * This is not a stylistic choice about where to put a fetch. An `AudioWorkletGlobalScope` has no
+ * `fetch` and no `XMLHttpRequest` at all, so the bytes genuinely cannot be obtained from inside
+ * the worklet — the only way in is to compile out here and hand the resulting
+ * `WebAssembly.Module` down through `processorOptions`, which is structured-cloneable. That
+ * clone is legal because a worklet shares an agent cluster with the window; the identical
+ * postMessage to a cross-origin worker would be rejected.
+ *
+ * Cached as the promise so a join and a device swap racing each other share one fetch, and
+ * cached including its `null` so a browser or a network that failed once isn't asked on every
+ * subsequent call.
+ */
+function loadRnnoiseModule(): Promise<WebAssembly.Module | null> {
+  rnnoiseModule ??= (async () => {
+    try {
+      if (typeof WebAssembly?.compileStreaming !== 'function') return null
+      // Streaming compilation needs the server to send application/wasm; the non-streaming
+      // path is the fallback for the dev servers and proxies that don't.
+      const response = await fetch('/worklets/rnnoise.wasm')
+      if (!response.ok) return null
+
+      return await WebAssembly.compileStreaming(response.clone())
+        .catch(async () => WebAssembly.compile(await response.arrayBuffer()))
+    } catch {
+      return null
+    }
+  })()
+
+  return rnnoiseModule
+}
+
 /**
  * A slow automatic gain: measure what's leaving, ride a gain toward {@link TARGET_RMS}.
  *
@@ -314,10 +397,20 @@ export async function buildMicChain(
   // Without the worklet there's nothing in the gate half the browser isn't already doing.
   // Each is asked for separately: a browser that can load one and not the other should get the
   // one it can, and losing the suppressor is not a reason to lose the gate as well.
-  const wantsGate = level === 'high' && await loadWorklet(ctx, 'noise-gate')
+  const cleaning = level === 'high' || level === 'voice'
+  const wantsGate = cleaning && await loadWorklet(ctx, 'noise-gate')
   const wantsSuppressor = level === 'high' && await loadWorklet(ctx, 'noise-suppressor')
+  // Three things have to be true and any of them can fail independently: the worklet loads, the
+  // wasm compiles, and the context is running at the 48kHz the model is defined at. A context
+  // at another rate is the interesting one — the processor would run and produce confident
+  // nonsense — so it is checked here as well as inside, and the level quietly degrades to the
+  // `high`-shaped chain around it rather than to nothing.
+  const rnnoiseModule = level === 'voice' && ctx.sampleRate === RNNOISE_SAMPLE_RATE
+    && await loadWorklet(ctx, 'rnnoise')
+    ? await loadRnnoiseModule()
+    : null
 
-  if (!wantsGate && !wantsSuppressor && !wantsNormalizer) return passthrough(raw)
+  if (!wantsGate && !wantsSuppressor && !rnnoiseModule && !wantsNormalizer) return passthrough(raw)
 
   const built: AudioNode[] = []
   let stopNormalizer: (() => void) | null = null
@@ -348,7 +441,7 @@ export async function buildMicChain(
     built.push(source)
     let tail: AudioNode = source
 
-    if (wantsGate || wantsSuppressor) {
+    if (wantsGate || wantsSuppressor || rnnoiseModule) {
       // Below ~85Hz there is no speech, only rumble: desk knocks, footsteps, breath on the
       // capsule, mains hum. Removing it is the single cheapest thing in this chain.
       //
@@ -390,6 +483,31 @@ export async function buildMicChain(
 
       built.push(suppressor)
       tail = tail.connect(suppressor)
+    }
+
+    if (rnnoiseModule) {
+      // The suppressor's slot, never alongside it — see the note on `voice` at the top.
+      const rnnoise = new AudioWorkletNode(ctx, 'rnnoise', {
+        numberOfInputs: 1,
+        numberOfOutputs: 1,
+        outputChannelCount: [1],
+        processorOptions: { module: rnnoiseModule },
+      })
+
+      // Every failure inside the processor is a *passthrough*, which is the right behaviour and
+      // an awful thing to debug: picking "Voice isolation" and getting the raw microphone looks
+      // exactly like picking it and having it not work very well. The processor says which
+      // happened; without this nobody could ever tell.
+      rnnoise.port.onmessage = (event) => {
+        const data = event.data
+        if (typeof data?.ready !== 'boolean') return
+
+        if (data.ready) console.info('[mic] voice isolation active')
+        else console.warn(`[mic] voice isolation inactive, passing audio through: ${data.reason}`)
+      }
+
+      built.push(rnnoise)
+      tail = tail.connect(rnnoise)
     }
 
     if (wantsGate) {

@@ -1,0 +1,24 @@
+[package]
+name = "side-rnnoise"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+# cdylib, and deliberately *not* wasm-bindgen. An AudioWorkletGlobalScope has no fetch, no
+# document and no module loader, so any generated JS glue is dead weight at best. Targeting
+# wasm32-unknown-unknown directly emits a module with no imports at all, which is what lets the
+# worklet do `new WebAssembly.Instance(module, {})` and nothing else.
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+nnnoiseless = { version = "0.5", default-features = false }
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+# No unwinding on the audio thread. A panic here is a bug we cannot recover from mid-call
+# anyway; the worklet's job is to notice the instance died and fall back, not to catch it.
+panic = "abort"
+strip = true

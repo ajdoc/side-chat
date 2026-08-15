@@ -29,6 +29,7 @@ import {
   clampStrength,
   micConstraints,
   NOISE_SUPPRESSION_LEVELS,
+  RNNOISE_SAMPLE_RATE,
   NOISE_SUPPRESSION_OPTIONS,
   resetMicProcessing,
   SUPPRESSION_STRENGTH_RANGE,
@@ -612,6 +613,28 @@ async function getMicStream(deviceId: string | null, level: NoiseSuppression): P
   }
 
   return navigator.mediaDevices.getUserMedia({ audio, video: false })
+}
+
+/**
+ * The call's AudioContext, asked for at 48kHz.
+ *
+ * Left to itself an AudioContext runs at whatever the *output* device reports, which is 44.1kHz
+ * on a great many machines. That is fine for everything else in the chain and fatal for the
+ * neural denoiser, whose frequency bands are defined against 48kHz and which produces confident
+ * nonsense at any other rate rather than failing — see {@link RNNOISE_SAMPLE_RATE}. 48kHz is
+ * also what Opus encodes at, so asking for it costs a resample here and saves one later.
+ *
+ * The fallback is not decoration. A browser is entitled to refuse a rate the hardware can't
+ * take, and some have historically thrown `NotSupportedError` outright — in which case a call
+ * at the device's own rate with one level unavailable is obviously right, and no call at all
+ * because we insisted on a sample rate is obviously wrong.
+ */
+function createCallContext(): AudioContext {
+  try {
+    return new AudioContext({ sampleRate: RNNOISE_SAMPLE_RATE })
+  } catch {
+    return new AudioContext()
+  }
 }
 
 export function useVoice() {
@@ -1944,7 +1967,7 @@ export function useVoice() {
       // *is* what gets sent — building it after the peers were wired would mean handing
       // everybody the raw capture and swapping it out under them a moment later.
       resetMicProcessing() // the worklet module belongs to the context, and this one is new
-      audioCtx = new AudioContext()
+      audioCtx = createCallContext()
       await audioCtx.resume()
       centreListener(audioCtx)
       // The context has its own output device, and a spatialised call plays out of it rather
