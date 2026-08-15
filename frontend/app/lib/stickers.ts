@@ -100,6 +100,23 @@ export const STICKER_SHAPES: { id: StickerShape, label: string }[] = [
  *
  * @see snapshot in useWhiteboard, which is the same fix for the same reason.
  */
+/**
+ * How big a sticker's drawing may get, serialised.
+ *
+ * A wall is a collage of doodles, not a file host, and an unbounded blob is a row that gets
+ * slower to load for everybody forever. 24KB is roughly a very busy sticker — a few hundred
+ * simplified strokes — and well under what a request should carry.
+ *
+ * Deliberately larger than the 10KB event cap: the drawing never travels over the socket (see
+ * AppStickerResource), so the two limits are unrelated.
+ */
+export const MAX_STICKER_BYTES = 24_000
+
+/** Serialised size of a sticker's drawing, for the editor's guard. */
+export function stickerSize(content: StickerContent): number {
+  return JSON.stringify(content).length
+}
+
 export function plainCopy<T>(value: T): T {
   return JSON.parse(JSON.stringify(value))
 }
@@ -138,6 +155,84 @@ export function shapePath(shape: StickerShape): string {
     case 'burst':
       return 'M50 2 L58 18 L74 8 L74 26 L92 24 L83 40 L98 50 L83 60 L92 76 L74 74 L74 92 L58 82 L50 98 L42 82 L26 92 L26 74 L8 76 L17 60 L2 50 L17 40 L8 24 L26 26 L26 8 L42 18 Z'
     case 'none': return ''
+  }
+}
+
+/**
+ * Drop points a stroke doesn't need — Ramer–Douglas–Peucker, on the 0–100 space.
+ *
+ * A pointer emits a sample every few milliseconds, so a single flick is easily 200 points
+ * describing a line that four would draw identically. Left alone that is most of a sticker's
+ * weight, in the database, in every wall load, and in the editor's undo snapshots.
+ *
+ * Run once on save rather than while drawing: simplifying mid-stroke fights the pen, and the
+ * cost of the full-resolution copy is only borne until you press Place.
+ *
+ * The tolerance is in the same units the points are — 0–100 across the whole sticker — so 0.35
+ * is about a third of a percent of its width, below what any wall zoom can show.
+ */
+export function simplifyPoints(points: Array<[number, number]>, tolerance = 0.35): Array<[number, number]> {
+  if (points.length <= 2) return points
+
+  const first = points[0]!
+  const last = points[points.length - 1]!
+
+  let maxDist = 0
+  let index = 0
+
+  for (let i = 1; i < points.length - 1; i++) {
+    const d = perpendicularDistance(points[i]!, first, last)
+    if (d > maxDist) {
+      maxDist = d
+      index = i
+    }
+  }
+
+  if (maxDist <= tolerance) return [first, last]
+
+  return [
+    ...simplifyPoints(points.slice(0, index + 1), tolerance).slice(0, -1),
+    ...simplifyPoints(points.slice(index), tolerance),
+  ]
+}
+
+function perpendicularDistance(p: [number, number], a: [number, number], b: [number, number]): number {
+  const dx = b[0] - a[0]
+  const dy = b[1] - a[1]
+  const lenSq = dx * dx + dy * dy
+
+  // A degenerate segment (the stroke doubled back to where it started) has no perpendicular —
+  // fall back to plain distance from the point, which is what the caller means by "how far off
+  // the line is this".
+  if (lenSq === 0) return Math.hypot(p[0] - a[0], p[1] - a[1])
+
+  const t = Math.max(0, Math.min(1, ((p[0] - a[0]) * dx + (p[1] - a[1]) * dy) / lenSq))
+
+  return Math.hypot(p[0] - (a[0] + t * dx), p[1] - (a[1] + t * dy))
+}
+
+/**
+ * A sticker with every stroke simplified and every coordinate rounded to one decimal.
+ *
+ * One decimal is a tenth of a percent of the sticker's width — finer than a screen pixel at any
+ * zoom the wall offers — and it halves the length of a typical coordinate in JSON.
+ */
+export function compactSticker(content: StickerContent): StickerContent {
+  const round = (n: number) => Math.round(n * 10) / 10
+
+  return {
+    ...content,
+    layers: stickerLayers(content).map(layer => ({
+      ...layer,
+      paths: layer.paths
+        .map(path => ({
+          ...path,
+          points: simplifyPoints(path.points).map(([x, y]) => [round(x), round(y)] as [number, number]),
+        }))
+        // A stroke reduced to a single point draws nothing.
+        .filter(path => path.points.length >= 2),
+    })),
+    paths: undefined,
   }
 }
 

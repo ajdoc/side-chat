@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ChevronLeft, Maximize, Plus, Trash2, X, ZoomIn, ZoomOut } from 'lucide-vue-next'
+import { ChevronLeft, Maximize, Pencil, Plus, Trash2, X, ZoomIn, ZoomOut } from 'lucide-vue-next'
 import type { AppSticker } from '~/types'
 import type { StickerContent } from '~/lib/stickers'
 import { emptySticker } from '~/lib/stickers'
@@ -349,18 +349,32 @@ async function onRemove(s: AppSticker) {
         >
           <StickerCanvas :content="s.content as StickerContent" />
 
-          <!-- Yours to remove, on hover. Deliberately small and unlabelled: the wall is the
-               content, and a delete button on every tile would be the loudest thing on it. -->
-          <button
+          <!-- Yours to edit or remove, on hover. Deliberately small and unlabelled: the wall is
+               the content, and permanent buttons on every tile would be the loudest thing on it.
+               Redrawing used to be double-click only, which nobody finds. -->
+          <span
             v-if="mayMove(s)"
-            type="button"
-            class="absolute -right-1 -top-1 grid h-5 w-5 place-items-center rounded-full border bg-background text-red-500 opacity-0 shadow transition-opacity group-hover:opacity-100"
-            title="Remove from the wall"
-            @pointerdown.stop
-            @click.stop="onRemove(s)"
+            class="absolute -right-1 -top-1 flex gap-0.5 opacity-0 transition-opacity group-hover:opacity-100"
           >
-            <Trash2 class="h-2.5 w-2.5" />
-          </button>
+            <button
+              type="button"
+              class="grid h-5 w-5 place-items-center rounded-full border bg-background text-muted-foreground shadow transition-colors hover:text-foreground"
+              title="Redraw this sticker"
+              @pointerdown.stop
+              @click.stop="editSticker(s)"
+            >
+              <Pencil class="h-2.5 w-2.5" />
+            </button>
+            <button
+              type="button"
+              class="grid h-5 w-5 place-items-center rounded-full border bg-background text-red-500 shadow transition-colors hover:bg-red-500/10"
+              title="Remove from the wall"
+              @pointerdown.stop
+              @click.stop="onRemove(s)"
+            >
+              <Trash2 class="h-2.5 w-2.5" />
+            </button>
+          </span>
         </div>
 
             <p v-if="!stickers.length" class="absolute left-1/2 top-24 -translate-x-1/2 text-sm text-muted-foreground">
@@ -390,6 +404,15 @@ async function onRemove(s: AppSticker) {
               {{ inspecting.user?.name ?? 'Someone' }}
             </span>
           </span>
+          <button
+            v-if="mayMove(inspecting)"
+            type="button"
+            class="grid h-7 w-7 shrink-0 place-items-center rounded text-muted-foreground transition-colors hover:bg-muted"
+            title="Redraw this sticker"
+            @click="editSticker(inspecting)"
+          >
+            <Pencil class="h-4 w-4" />
+          </button>
           <button
             type="button"
             class="grid h-7 w-7 shrink-0 place-items-center rounded text-muted-foreground transition-colors hover:bg-muted"

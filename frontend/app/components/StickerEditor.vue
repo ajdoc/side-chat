@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { Check, ChevronDown, ChevronUp, Eye, EyeOff, Pen, Redo2, Trash2, Type, Undo2, X, ZoomIn, ZoomOut } from 'lucide-vue-next'
 import type { StickerContent, StickerShape } from '~/lib/stickers'
-import { STICKER_COLORS, STICKER_SHAPES, emptySticker, plainCopy, shapePath, stickerLayers } from '~/lib/stickers'
+import { MAX_STICKER_BYTES, STICKER_COLORS, STICKER_SHAPES, compactSticker, emptySticker, plainCopy, shapePath, stickerLayers, stickerSize } from '~/lib/stickers'
 import { Input } from '~/components/ui/input'
 
 /**
@@ -251,12 +251,41 @@ function pickShape(shape: StickerShape) {
 
 /** What the live preview draws: every visible layer's paths, in order. */
 const visiblePaths = computed(() => layers.value.filter(l => l.visible).flatMap(l => l.paths))
+
+/**
+ * How full the sticker is, as a fraction of what may be stored.
+ *
+ * Measured on the *compacted* copy, since that's what gets saved — showing the raw size would
+ * warn people about weight that's about to be thrown away.
+ */
+const fullness = computed(() => stickerSize(compactSticker(content.value)) / MAX_STICKER_BYTES)
+
+const tooBig = computed(() => fullness.value > 1)
+
+/**
+ * Commit: simplify every stroke, then hand it up.
+ *
+ * Simplifying here rather than while drawing is the whole trick — a pointer emits a sample every
+ * few milliseconds, so a flick is hundreds of points describing a line four would draw. Doing it
+ * mid-stroke fights the pen; doing it on save costs nothing and is typically a 5–10× reduction.
+ */
+function place() {
+  if (tooBig.value) return
+  emit('save', { content: compactSticker(content.value), name: name.value.trim() || 'Sticker' })
+}
 </script>
 
 <template>
   <div class="flex min-h-0 flex-1 flex-col">
     <header class="flex shrink-0 items-center gap-2 border-b p-2">
       <Input v-model="name" class="h-8 max-w-[16rem] text-sm font-medium" placeholder="Sticker name" />
+      <!-- Silent until a sticker is getting genuinely heavy — a meter on an empty canvas is
+           a warning about nothing. -->
+      <span
+        v-if="fullness > 0.6"
+        class="shrink-0 text-[11px] tabular-nums"
+        :class="tooBig ? 'font-medium text-red-500' : 'text-muted-foreground'"
+      >{{ tooBig ? 'Too detailed to save' : `${Math.round(fullness * 100)}% full` }}</span>
       <span class="flex-1" />
       <button type="button" class="grid h-8 w-8 place-items-center rounded border transition-colors hover:bg-muted disabled:opacity-40" :disabled="!undoStack.length" title="Undo" @click="undo">
         <Undo2 class="h-4 w-4" />
@@ -273,7 +302,9 @@ const visiblePaths = computed(() => layers.value.filter(l => l.visible).flatMap(
       <button
         type="button"
         class="flex items-center gap-1.5 rounded bg-primary px-3 py-1.5 text-sm font-medium text-primary-foreground"
-        @click="emit('save', { content, name: name.trim() || 'Sticker' })"
+        :disabled="tooBig"
+        :title="tooBig ? 'This sticker is too detailed to save — undo a few strokes' : 'Place it on the wall'"
+        @click="place"
       >
         <Check class="h-4 w-4" /> Place
       </button>

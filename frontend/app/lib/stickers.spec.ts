@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { reactive, ref } from 'vue'
-import { emptySticker, plainCopy, stickerLayers } from './stickers'
+import { compactSticker, emptySticker, plainCopy, simplifyPoints, stickerLayers, stickerSize } from './stickers'
 
 /**
  * The pure half of sticker layers — the shape conversion, which is where a silent
@@ -77,5 +77,76 @@ describe('plainCopy', () => {
     const held = ref(emptySticker())
     expect(() => plainCopy(held.value)).not.toThrow()
     expect(plainCopy(held.value).layers).toHaveLength(1)
+  })
+})
+
+/**
+ * Simplification — the half of the payload fix that shrinks what's *stored*, as opposed to what
+ * crosses the socket.
+ */
+describe('simplifyPoints', () => {
+  it('reduces a straight line to its endpoints', () => {
+    const line: Array<[number, number]> = Array.from({ length: 50 }, (_, i) => [i * 2, i * 2])
+    expect(simplifyPoints(line)).toEqual([[0, 0], [98, 98]])
+  })
+
+  it('keeps the corner of an L', () => {
+    const bend: Array<[number, number]> = [[0, 0], [25, 0], [50, 0], [50, 25], [50, 50]]
+    const out = simplifyPoints(bend)
+    expect(out).toContainEqual([50, 0])
+    expect(out[0]).toEqual([0, 0])
+    expect(out.at(-1)).toEqual([50, 50])
+  })
+
+  it('leaves a two-point stroke alone', () => {
+    expect(simplifyPoints([[1, 1], [2, 2]])).toEqual([[1, 1], [2, 2]])
+  })
+
+  it('survives a stroke that doubles back on itself', () => {
+    // Degenerate segment: first and last are the same point, so there is no perpendicular.
+    const loop: Array<[number, number]> = [[10, 10], [20, 30], [10, 10]]
+    expect(() => simplifyPoints(loop)).not.toThrow()
+    expect(simplifyPoints(loop)).toContainEqual([20, 30])
+  })
+})
+
+describe('compactSticker', () => {
+  it('shrinks a hand-drawn sticker substantially', () => {
+    // What a pointer actually emits: a sample every few ms along a gentle curve.
+    const dense: Array<[number, number]> = Array.from({ length: 400 }, (_, i) => [
+      i / 4,
+      50 + Math.sin(i / 60) * 8,
+    ])
+    const sticker = {
+      ...emptySticker(),
+      layers: [{ name: 'Ink', visible: true, paths: [{ points: dense, color: '#000', width: 3 }] }],
+    }
+
+    const compacted = compactSticker(sticker)
+    expect(stickerSize(compacted)).toBeLessThan(stickerSize(sticker) / 4)
+    // Still a curve, not a straight line.
+    expect(compacted.layers![0]!.paths[0]!.points.length).toBeGreaterThan(2)
+  })
+
+  it('drops strokes that simplify away to nothing and the legacy paths field', () => {
+    const sticker: any = {
+      ...emptySticker(),
+      paths: [{ points: [[0, 0]], color: '#000', width: 1 }],
+      layers: [{ name: 'L', visible: true, paths: [{ points: [[5, 5]], color: '#000', width: 1 }] }],
+    }
+    const out = compactSticker(sticker)
+    expect(out.layers![0]!.paths).toHaveLength(0)
+    expect(out.paths).toBeUndefined()
+  })
+
+  it('rounds coordinates to one decimal', () => {
+    const sticker = {
+      ...emptySticker(),
+      layers: [{
+        name: 'L', visible: true,
+        paths: [{ points: [[1.23456, 9.87654], [40.11111, 60.99999]] as Array<[number, number]>, color: '#000', width: 1 }],
+      }],
+    }
+    expect(compactSticker(sticker).layers![0]!.paths[0]!.points).toEqual([[1.2, 9.9], [40.1, 61]])
   })
 })

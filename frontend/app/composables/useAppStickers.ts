@@ -28,11 +28,43 @@ export function useAppStickers(basePath: string, streamName: string) {
     stickers.value = [...stickers.value].sort((a: AppSticker, b: AppSticker) => a.z - b.z || a.id - b.id)
   }
 
+  /**
+   * Merge a sticker into the wall.
+   *
+   * Merged rather than replaced, because a *broadcast* carries placement only — the drawing is
+   * far past the 10KB an event may hold, so the server omits it (see AppStickerResource). A
+   * plain replace would blank the drawing of every sticker the moment anybody dragged one.
+   *
+   * An arriving sticker we've never seen has no drawing at all, so its content is fetched once.
+   */
   function upsert(sticker: AppSticker) {
     const idx = stickers.value.findIndex((s: AppSticker) => s.id === sticker.id)
-    if (idx === -1) stickers.value = [...stickers.value, sticker]
-    else stickers.value.splice(idx, 1, sticker)
+
+    if (idx === -1) {
+      stickers.value = [...stickers.value, sticker]
+      if (sticker.content === undefined) void hydrate(sticker.id)
+    }
+    else {
+      stickers.value.splice(idx, 1, { ...stickers.value[idx], ...sticker })
+    }
     sort()
+  }
+
+  /**
+   * Fetch one sticker's drawing.
+   *
+   * Only for a sticker that arrived over the socket without one. Everything already on the wall
+   * came from the HTTP listing, which carries drawings.
+   */
+  async function hydrate(id: number) {
+    try {
+      const res = await api<{ data: AppSticker }>(`${basePath}/stickers/${id}`)
+      const idx = stickers.value.findIndex((s: AppSticker) => s.id === id)
+      if (idx !== -1) stickers.value.splice(idx, 1, { ...stickers.value[idx], ...res.data })
+    }
+    catch {
+      // Deleted between the broadcast and the fetch. The removal event will clear it.
+    }
   }
 
   async function load() {

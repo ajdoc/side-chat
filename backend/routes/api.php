@@ -500,6 +500,8 @@ Route::middleware('auth:api')->group(function () {
     // rest of the desk apps; see the controller.
     Route::get('channels/{channel}/stickers', [AppStickerController::class, 'index']);
     Route::post('channels/{channel}/stickers', [AppStickerController::class, 'store']);
+    // The drawing, fetched after a broadcast that carried placement only.
+    Route::get('channels/{channel}/stickers/{sticker}', [AppStickerController::class, 'show']);
     Route::patch('channels/{channel}/stickers/{sticker}', [AppStickerController::class, 'update']);
     Route::delete('channels/{channel}/stickers/{sticker}', [AppStickerController::class, 'destroy']);
 

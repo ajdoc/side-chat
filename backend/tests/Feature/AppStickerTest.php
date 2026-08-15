@@ -94,3 +94,49 @@ it('keeps each channel’s wall to itself', function () {
     $this->patchJson("/api/channels/{$channel2->id}/stickers/{$s['id']}", ['x' => 0])->assertNotFound();
     $this->getJson("/api/channels/{$channel2->id}/stickers")->assertOk()->assertJsonCount(0, 'data');
 });
+
+it('keeps the drawing out of the broadcast, and serves it over HTTP', function () {
+    [$owner, , $channel] = ownerWithChannel();
+    Passport::actingAs($owner);
+
+    $drawing = ['shape' => 'star', 'layers' => [[
+        'name' => 'Ink', 'visible' => true,
+        'paths' => [['points' => [[0, 0], [50, 50]], 'color' => '#000', 'width' => 3]],
+    ]]];
+
+    $s = $this->postJson("/api/channels/{$channel->id}/stickers", ['content' => $drawing])
+        ->assertCreated()->json('data');
+
+    // The HTTP response carries the drawing — that's how a wall loads.
+    expect($s)->toHaveKey('content');
+
+    // The broadcast must not: a sticker's strokes are unbounded and comfortably past the 10KB
+    // a Pusher/Reverb event may carry, which is a hard limit on Laravel Cloud.
+    $payload = App\Http\Resources\AppStickerResource::reference(
+        App\Models\AppSticker::find($s['id'])
+    )->resolve();
+
+    expect($payload)->not->toHaveKey('content')
+        ->and($payload)->toHaveKeys(['id', 'x', 'y', 'z', 'w', 'h', 'rotation'])
+        ->and(strlen((string) json_encode($payload)))->toBeLessThan(10_000);
+
+    // And the drawing is fetchable on its own, which is what the client does after a broadcast.
+    $this->getJson("/api/channels/{$channel->id}/stickers/{$s['id']}")
+        ->assertOk()
+        ->assertJsonPath('data.content.shape', 'star');
+});
+
+it('refuses a drawing too big to belong on a wall', function () {
+    [$owner, , $channel] = ownerWithChannel();
+    Passport::actingAs($owner);
+
+    // A client guard is not a gate — a hand-written request must be refused too.
+    $huge = ['shape' => 'square', 'layers' => [[
+        'name' => 'L', 'visible' => true,
+        'paths' => [['points' => array_fill(0, 20000, [12.3, 45.6]), 'color' => '#000', 'width' => 3]],
+    ]]];
+
+    $this->postJson("/api/channels/{$channel->id}/stickers", ['content' => $huge])
+        ->assertStatus(422)
+        ->assertJsonValidationErrors('content');
+});

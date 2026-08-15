@@ -20,6 +20,23 @@ use Illuminate\Http\Response;
  */
 class AppStickerController extends Controller
 {
+    /**
+     * How big a stored drawing may be, in bytes of JSON.
+     *
+     * The editor simplifies and shows a meter, but a client is not a gate: without this a
+     * hand-written request could put an unbounded blob on a wall that everybody then loads
+     * forever. Mirrors MAX_STICKER_BYTES in lib/stickers.ts, with slack for encoding.
+     */
+    private const MAX_CONTENT_BYTES = 32_000;
+
+    /** One sticker, drawing included — what a client fetches after a placement-only broadcast. */
+    public function show(TrackerRequest $request, Channel $channel, AppSticker $sticker): AppStickerResource
+    {
+        abort_unless($sticker->channel_id === $channel->id, 404);
+
+        return new AppStickerResource($sticker->load('user'));
+    }
+
     public function index(TrackerRequest $request, Channel $channel): AnonymousResourceCollection
     {
         return AppStickerResource::collection(
@@ -34,7 +51,7 @@ class AppStickerController extends Controller
             // The drawing. Free-form, like a widget's state — its shape belongs to the editor
             // and the renderer, not to the API. Size-capped so the wall can't become a file
             // host; the cap is generous next to what a small drawing actually weighs.
-            'content' => ['required', 'array'],
+            'content' => ['required', 'array', $this->sizeLimit()],
             'x' => ['sometimes', 'integer'],
             'y' => ['sometimes', 'integer'],
             'w' => ['sometimes', 'integer', 'min:24', 'max:1200'],
@@ -63,7 +80,7 @@ class AppStickerController extends Controller
 
         $data = $request->validate([
             'name' => ['nullable', 'string', 'max:80'],
-            'content' => ['sometimes', 'array'],
+            'content' => ['sometimes', 'array', $this->sizeLimit()],
             'x' => ['sometimes', 'integer'],
             'y' => ['sometimes', 'integer'],
             'z' => ['sometimes', 'integer'],
@@ -91,6 +108,21 @@ class AppStickerController extends Controller
     }
 
     /**
+     * Refuse a drawing too big to belong on a wall.
+     *
+     * Measured on the encoded JSON rather than on a point count, because that's the thing that
+     * actually costs — the row, every wall load, and every client holding it.
+     */
+    private function sizeLimit(): \Closure
+    {
+        return function (string $attribute, mixed $value, \Closure $fail): void {
+            if (strlen((string) json_encode($value)) > self::MAX_CONTENT_BYTES) {
+                $fail('That sticker is too detailed to save — try undoing a few strokes.');
+            }
+        };
+    }
+
+    /**
      * Your own sticker, or staff.
      *
      * Stricter than the rest of the Side Desk apps, which let any member edit anything — and
@@ -113,7 +145,8 @@ class AppStickerController extends Controller
             'channel.'.$channel->id,
             'sticker',
             $action,
-            (new AppStickerResource($sticker))->resolve(),
+            // Placement only — the drawing is too big for an event. See the resource.
+            AppStickerResource::reference($sticker)->resolve(),
         ))->toOthers();
     }
 }
