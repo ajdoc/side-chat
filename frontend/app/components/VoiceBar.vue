@@ -19,7 +19,7 @@ const { user } = useAuth()
 const { server, findChannel } = useServer()
 const { conversations } = useConversations()
 const {
-  channelId, status, peers, selfMuted, selfDeafened, isSharing, isCameraOn, isAudioSharing, inCall,
+  channelId, status, screenTransport, setScreenTransport, peers, selfMuted, selfDeafened, isSharing, isCameraOn, isAudioSharing, inCall,
   pushToTalk, pttHeld, micOpen,
   toggleMute, toggleDeafen, toggleCamera, disconnect, holdTalk, releaseTalk,
 } = useVoice()
@@ -96,6 +96,31 @@ const link = computed(() => {
         <NuxtLink v-if="link" :to="link" class="block truncate text-xs text-muted-foreground hover:underline">
           {{ label }} · {{ peers.length + 1 }}
         </NuxtLink>
+      </div>
+      <!--
+        The route a *share* takes, and a switch for it — shown only while sharing, because
+        that is the only time it means anything (voices are always direct) and the only time
+        anyone has a reason to think about it.
+
+        A button rather than a setting buried in a panel: you discover a share is struggling by
+        watching it stutter, which is exactly the moment you want the other route, and a live
+        share moves without so much as a flicker.
+      -->
+      <button
+        v-if="isSharing"
+        type="button"
+        class="shrink-0 rounded border px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide transition-colors"
+        :class="screenTransport === 'sfu'
+          ? 'border-primary/40 bg-primary/10 text-primary'
+          : 'text-muted-foreground hover:bg-muted'"
+        :title="screenTransport === 'sfu'
+          ? 'Your screen goes through a media server: one copy, passed on to everyone. Click to send it directly instead.'
+          : 'Your screen goes straight to each person, one copy each. Click to route it through a media server — worth trying if it is stuttering.'"
+        @click="setScreenTransport(screenTransport === 'sfu' ? 'mesh' : 'sfu')"
+      >
+        {{ screenTransport === 'sfu' ? 'Share: server' : 'Share: direct' }}
+      </button>
+      <div class="contents">
       </div>
       <ScreenShare v-if="isSharing" class="h-4 w-4 shrink-0 text-primary" title="You're sharing your screen" />
       <!-- The same reason the camera button is down here: a share you can't see from the page

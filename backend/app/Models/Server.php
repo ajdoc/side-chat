@@ -45,7 +45,13 @@ class Server extends Model implements MessageContainer
      */
     public const DISCUSSION_CREATION = ['everyone', 'staff'];
 
-    protected $fillable = ['name', 'owner_id', 'invite_code', 'discussion_creation'];
+    protected $fillable = ['name', 'owner_id', 'invite_code', 'discussion_creation', 'sfu_enabled'];
+
+    /** @return array<string, string> */
+    protected function casts(): array
+    {
+        return ['sfu_enabled' => 'boolean'];
+    }
 
     public function owner(): BelongsTo
     {

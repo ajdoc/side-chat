@@ -50,6 +50,7 @@ class Channel extends Model
         'leave_effect',
         'desk_apps',
         'board_layers',
+        'sfu_enabled',
         'encrypted',
         'encryption_epoch',
         'encryption_toggled_by',
@@ -65,6 +66,8 @@ class Channel extends Model
             'desk_apps' => 'array',
             'board_layers' => 'array',
             'is_private' => 'boolean',
+            // Nullable on purpose — see sfuEnabled(). Null is "ask the server", not false.
+            'sfu_enabled' => 'boolean',
             'encrypted' => 'boolean',
             'encryption_toggled_at' => 'datetime',
         ];
@@ -487,6 +490,26 @@ class Channel extends Model
     public function allowsCalls(): bool
     {
         return $this->isVoice() || $this->isSpace() || $this->isDirect();
+    }
+
+    /**
+     * Whether calls here may be carried by an SFU, as a policy question rather than a
+     * capability one — this says nothing about whether one is configured (see SfuManager).
+     *
+     * Three-valued underneath and boolean out here: the channel's own setting wins when it
+     * has one, otherwise the server's. Null on the channel is "no opinion", which is why the
+     * column is nullable and why this isn't a plain `??` against `false`.
+     *
+     * A DM has no server to inherit from, so it answers for itself and defaults to allowed —
+     * consistent with a fresh server, whose column defaults to true.
+     */
+    public function sfuEnabled(): bool
+    {
+        if ($this->sfu_enabled !== null) {
+            return (bool) $this->sfu_enabled;
+        }
+
+        return (bool) ($this->server?->sfu_enabled ?? true);
     }
 
     /** Effects attached to particular people in this channel's call. */

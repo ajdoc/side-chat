@@ -587,6 +587,7 @@ const nameDraft = ref('')
 // Who may start a discussion in this server's channels. Open by default — a discussion is a
 // conversation somebody wanted to have — with the switch here for the servers that outgrow that.
 const discussionPolicyDraft = ref<'everyone' | 'staff'>('everyone')
+const sfuDraft = ref(true)
 const working = ref(false)
 const actionError = ref('')
 
@@ -616,6 +617,7 @@ function askRenameServer(s: Server) {
   targetServer.value = s
   nameDraft.value = s.name
   discussionPolicyDraft.value = s.discussion_creation ?? 'everyone'
+  sfuDraft.value = s.sfu_enabled ?? true
   actionError.value = ''
   showRenameServer.value = true
 }
@@ -701,6 +703,7 @@ const onRenameServer = () => confirm(showRenameServer, async () => {
   if (!name || !targetServer.value) return
   const updated = await renameServer(targetServer.value.id, name, {
     discussion_creation: discussionPolicyDraft.value,
+    sfu_enabled: sfuDraft.value,
   })
   // renameServer patches the list; the open server is a separate ref.
   patchServer(updated.id, updated)
@@ -1692,6 +1695,18 @@ onBeforeUnmount(() => { userStream.unsubscribe(); stopPresence() })
             <span class="block text-xs text-muted-foreground">
               A discussion is a separate conversation inside a channel, with its own messages,
               threads and Side Desk.
+            </span>
+          </label>
+          <label class="flex items-start gap-2">
+            <input v-model="sfuDraft" type="checkbox" class="mt-1">
+            <span class="space-y-1">
+              <span class="block text-sm font-medium">Route busy calls through a media server</span>
+              <span class="block text-xs text-muted-foreground">
+                In a small call everyone sends straight to everyone else. That gets expensive as
+                a call fills up — a shared screen is uploaded once per person watching — so
+                larger calls can go through a media server instead, which takes one copy and
+                passes it on. Turn this off to always connect people directly.
+              </span>
             </span>
           </label>
           <p v-if="actionError" class="text-sm text-destructive">{{ actionError }}</p>

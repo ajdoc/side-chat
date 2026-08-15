@@ -20,15 +20,17 @@ use App\Http\Requests\Voice\VoiceChannelRequest;
 use App\Http\Resources\VoiceParticipantResource;
 use App\Models\Channel;
 use App\Models\Server;
+use App\Services\Sfu\VoiceTransportResolver;
 use App\Services\VoiceService;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Response;
 
 /**
  * The bookkeeping around a call — not the call itself. Audio and screen data never touch
- * this server: they go peer-to-peer, negotiated over the `voice.{id}` presence channel.
- * What's here is who's in the room, what they say they're doing, and the ICE servers the
- * browser needs to find its way to the other end.
+ * *this* server: they go peer-to-peer, negotiated over the `voice.{id}` presence channel, or
+ * else through an SFU that is somebody else's box entirely. What's here is who's in the room,
+ * what they say they're doing, which of those two shapes the call takes, and the ICE servers
+ * the browser needs to find its way to the other end.
  */
 class VoiceController extends Controller
 {
@@ -54,12 +56,27 @@ class VoiceController extends Controller
      * Take a seat, and get back everything needed to open the peer connections: who else is
      * in there, and where to find the STUN/TURN servers.
      */
-    public function join(JoinVoiceChannelRequest $request, Channel $channel, JoinVoiceChannelAction $action): JsonResponse
-    {
+    public function join(
+        JoinVoiceChannelRequest $request,
+        Channel $channel,
+        JoinVoiceChannelAction $action,
+        VoiceTransportResolver $transports,
+    ): JsonResponse {
         $action->handle($channel, $request->user());
 
+        $participants = $this->voice->participants($channel);
+
+        // How this call should be carried. Resolved *after* the join, so the occupancy the
+        // decision is made on includes everyone actually in the room — the joiner among them,
+        // which is why the resolver isn't told to add one itself.
+        $transport = $transports->resolve($channel, $request->user(), max(0, $participants->count() - 1));
+
         return response()->json([
-            'data' => VoiceParticipantResource::collection($this->voice->participants($channel))->resolve(),
+            'data' => VoiceParticipantResource::collection($participants)->resolve(),
+            'transport' => $transport['transport'],
+            'sfu' => $transport['sfu'],
+            // Always sent, whichever transport was chosen: a mesh call needs them, and so does
+            // the client's fallback out of an SFU that fails after this response was written.
             'ice_servers' => $this->voice->iceServers(),
             'max_participants' => (int) config('webrtc.max_participants'),
             // What the room plays when somebody arrives or leaves. Handed over on join so

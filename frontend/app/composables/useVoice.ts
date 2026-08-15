@@ -2,6 +2,24 @@ import type { MicChain, NoiseSuppression } from '~/lib/micProcessing'
 import type { Facing } from '~/lib/spaceMapEngine'
 import type { CleanedCapture } from '~/lib/shareEcho'
 import type { SpatialPlacement, SpatialVoice } from '~/lib/spatialAudio'
+import type {
+  SfuCredentials,
+  TrackKind,
+  TransportContext,
+  TransportEvents,
+  TransportKind,
+  VoiceTransport,
+} from '~/lib/voice/VoiceTransport'
+import type { MeshSignaling, SignalPayload } from '~/lib/voice/MeshTransport'
+import { createMeshTransport } from '~/lib/voice/MeshTransport'
+import { createLiveKitTransport } from '~/lib/voice/LiveKitTransport'
+import {
+  base64ToGunzip,
+  gzipToBase64,
+  mungeOpus,
+  preferEfficientVideo,
+  preferOpus,
+} from '~/lib/voice/sdp'
 import type { IceServer, Peer, PeerConnectionState, VoiceEffectPair, VoiceEffects, VoiceParticipant } from '~/types'
 import {
   buildMicChain,
@@ -72,74 +90,22 @@ const SPEAKING_HOLD_MS = 250
 /** Comfortably inside the backend's staleness window, so a live tab is never reaped. */
 const HEARTBEAT_MS = 25_000
 
-/**
- * Video is the genuinely expensive thing in a mesh, so both kinds stay leashed.
+/*
+ * Encoding budgets — how many bits a screen, a camera, a microphone and a shared soundtrack
+ * may each spend — now live with the transport that has to honour them, in
+ * ~/lib/voice/MeshTransport. They belong there because they are not one set of numbers: a mesh
+ * sends the same picture once per person and has to divide a budget between them, while an SFU
+ * takes one copy and fans it out. The arithmetic is a property of how the media travels.
  *
- * Remember the shape of the cost: every stream you send goes up your upload pipe once per
- * *other person in the call*. A camera at 600kbps in a call of six is 3Mbps leaving your
- * laptop for the camera alone — which is why the camera is capped an order of magnitude
- * below the screen, and why a webcam is asked for at 360p rather than whatever it offers.
+ * What stays here is the half that isn't about bytes at all: what the *content* is, and which
+ * axis to give up first when it can't all fit — see the detail/motion sampler below.
  */
-const SCREEN_MAX_BITRATE = 2_500_000
-const CAMERA_MAX_BITRATE = 600_000
-
-/**
- * What a share is allowed to cost *in total*, rather than per peer.
- *
- * SCREEN_MAX_BITRATE above is a per-encoding cap, and in a mesh that's only half the story:
- * the same picture is encoded and uploaded once per other person, so the flat 2.5Mbps that
- * is comfortable in a call of two is ~17Mbps of upstream in a call of eight — well past what
- * a domestic connection will carry, on a machine that is very often also running the game
- * being shared. That's the stutter people report on movie nights and not on pair-programming:
- * motion content is the only thing that actually spends its whole budget.
- *
- * So the per-peer cap becomes budget ÷ peers, clamped: never above SCREEN_MAX_BITRATE (two
- * people shouldn't get a worse picture than they do today), never below the floor (past a
- * point a smaller number stops buying smoothness and just looks broken — better to let the
- * encoder degrade on the axis the content mode chose).
- */
-const SCREEN_UPLOAD_BUDGET = 6_000_000
-const SCREEN_MIN_BITRATE = 500_000
-
-/**
- * Congestion backoff, applied on top of the budget above.
- *
- * The budget is arithmetic about the *mesh*; it knows nothing about the pipe. `getStats()`
- * does: libwebrtc reports `qualityLimitationReason` on the outbound video, which is its own
- * answer to "am I being held back, and by what". When any peer says `bandwidth` or `cpu` we
- * scale every screen encoding down a step; when nobody has complained for a while we give it
- * back slowly. Down fast and up slow, because the cost of the two mistakes isn't symmetric —
- * over-sending judders the picture for everyone, under-sending just looks softer.
- */
-const SCREEN_STATS_INTERVAL_MS = 3000
-const SCREEN_BACKOFF_STEP = 0.75
-const SCREEN_RECOVER_STEP = 1.1
-const SCREEN_MIN_SCALE = 0.35
-/** Consecutive clean polls before the scale is allowed to climb again (~4 × 3s). */
-const SCREEN_RECOVER_AFTER_POLLS = 4
-
-/**
- * Voice is mono speech, and it goes up your upload pipe once per *other person in the call* —
- * so a few dozen kbps per peer is both plenty and the thing worth being stingy about. Capped on
- * the mic *sender's* encoding (applyMicParams) so it's the microphone that's held down and not
- * the shared-audio stream, and captured mono at source (channelCount: 1). DTX (see mungeOpus)
- * then makes the silences between words nearly free on top.
- */
-const MIC_MAX_BITRATE = 32_000
-
-/**
- * The shared tab/system audio is the opposite case to the mic and gets the opposite budget: it
- * is usually music or a video's soundtrack, it is continuous (so DTX saves nothing), and it is
- * the one thing in a call people notice being compressed. 128kbps stereo is transparent enough
- * for that and still an order of magnitude under the screen picture it arrives beside.
- */
-const SHARED_AUDIO_MAX_BITRATE = 128_000
 
 /**
  * How the microphone is captured and cleaned up lives in ~/lib/micProcessing: the capture
  * constraints (mono, and the browser's own echo/noise/gain cleanup) and the extra chain the
  * "Aggressive" level adds on top of them. `channelCount: 1` there is the mono capture this
- * file's encoding budget is built around — see MIC_MAX_BITRATE.
+ * file's encoding budget is built around — see the mic cap in MeshTransport.
  */
 
 /**
@@ -207,8 +173,22 @@ function screenModeSettings(mode: 'detail' | 'motion'): {
     : { hint: 'detail', degradation: 'maintain-resolution', maxFramerate: SCREEN_DETAIL_FRAMERATE }
 }
 
+/**
+ * What the *call* keeps about a peer, now that the transport keeps the rest.
+ *
+ * The split is deliberate and it's the whole point of the transport interface: peer
+ * connections, transceivers, senders and the negotiation state machine live in
+ * ~/lib/voice/MeshTransport (or don't exist at all, behind an SFU). What's left here is
+ * everything that would be identical either way — the elements a voice comes out of, the
+ * analyser that decides who's speaking, where they're stood in the room, and how loud you
+ * like them. None of that changes when the transport does.
+ *
+ * Streams are assembled here by hand rather than taken from `event.streams[0]`, because the
+ * video slots are negotiated empty and a track pushed into one later can arrive orphaned.
+ * Owning the streams sidesteps that, and the transport hands us bare tracks precisely so it
+ * doesn't have to care.
+ */
 interface PeerHandle {
-  pc: RTCPeerConnection
   /**
    * Their audio, playing outside Vue's control.
    *
@@ -218,42 +198,25 @@ interface PeerHandle {
    * element is also what per-peer volume and per-peer mute actually *are* — see setVolume.
    */
   audio: HTMLAudioElement
-  /**
-   * The sender carrying *your* microphone to this peer. Held onto so switching input devices
-   * is a `replaceTrack` into a slot already there — no renegotiation, and it lets us tell the
-   * mic sender apart from the screen-audio one, which is the other audio sender on the pc.
-   */
-  micSender: RTCRtpSender | null
   /** Their microphone. Kept alone, because it's the only thing the <audio> should sink. */
   audioStream: MediaStream
   /**
    * The audio *of* what they're sharing — a video playing in the tab, say — kept on its own
-   * element and its own transceiver, deliberately apart from the microphone. Mixing the two
-   * would let a screen mute silence a voice, run the shared audio through the mic's echo
-   * cancellation, and set the speaking ring flickering to a YouTube clip. One <audio> each
-   * keeps per-peer volume and mute honest for both.
+   * element, deliberately apart from the microphone. Mixing the two would let a screen mute
+   * silence a voice, run the shared audio through the mic's echo cancellation, and set the
+   * speaking ring flickering to a YouTube clip. One <audio> each keeps per-peer volume and
+   * mute honest for both.
    */
   screenAudio: HTMLAudioElement
   screenAudioStream: MediaStream
-  screenAudioTransceiver: RTCRtpTransceiver | null
-  /** Their face, and the thing they're presenting. Separate — see the two slots below. */
+  /**
+   * Their face, and the thing they're presenting — separate streams, because someone on
+   * camera who starts presenting has to appear in two places at once: their face on their
+   * tile, their screen on the stage. Which arriving track is which is the transport's
+   * problem; it tells us with the `kind` on trackReceived.
+   */
   cameraStream: MediaStream
   screenStream: MediaStream
-  /**
-   * The two pre-negotiated video slots: one for a camera, one for a screen.
-   *
-   * *Two*, not one, and that's the point. Someone on camera who starts presenting has to
-   * appear in two places at once — their face on their tile, their screen on the stage —
-   * and a single video slot forces a choice between them. Keeping the transceivers around
-   * is also how `ontrack` knows which is which: a track carries no label saying "this is a
-   * webcam", but it does arrive on the transceiver it was negotiated into.
-   *
-   * Null until known. The impolite peer creates both up front; the polite peer starts with
-   * null and adopts them in ontrack as the impolite peer's m-lines arrive (camera first,
-   * then screen). See createPeer for why only one side creates them.
-   */
-  cameraTransceiver: RTCRtpTransceiver | null
-  screenTransceiver: RTCRtpTransceiver | null
   analyser: AnalyserNode | null
   /**
    * Their voice, positioned in the room — or null when spatial audio is off, unsupported, or
@@ -271,34 +234,6 @@ interface PeerHandle {
    */
   refTaps: { voice: GainNode, screen: GainNode } | null
   speakingUntil: number
-  // --- perfect negotiation bookkeeping (see negotiate/onSignal) ---
-  polite: boolean
-  makingOffer: boolean
-  ignoreOffer: boolean
-  settingRemoteAnswer: boolean
-  /**
-   * Has the first offer/answer for this pair completed yet?
-   *
-   * Used to break the *initial* glare: both ends create the same transceivers the instant
-   * they see each other, so if both also fire the first offer they collide, and the polite
-   * peer's rollback strands its video transceivers as sendonly (every remote video black).
-   * So the polite peer holds its first offer and answers the impolite peer's instead; once
-   * that's done either side may offer freely (a camera toggle, say).
-   */
-  negotiated: boolean
-  /**
-   * The input pipe for remote control (see useRemoteControl), or null before it opens.
-   *
-   * A data channel rather than a whisper, and that's the whole reason it exists: a pointer being
-   * dragged across a shared screen is 60 events a second, which is fine peer-to-peer and is a
-   * flood through Reverb. The *handshake* — asking, approving, revoking — still goes over
-   * whispers, because it's rare, it has to work before any control exists, and it must not
-   * depend on a data channel having come up.
-   *
-   * Created `negotiated` with a fixed id on both ends, so it needs no renegotiation of its own
-   * and sidesteps the polite/impolite dance the video transceivers have to do — see createPeer.
-   */
-  control: RTCDataChannel | null
 }
 
 /** One input event from a controller. Terse keys: this goes out ~60×/second while dragging. */
@@ -322,13 +257,6 @@ export interface ControlSignal {
   kind: 'request' | 'approve' | 'deny' | 'end'
 }
 
-interface SignalPayload {
-  to: number
-  from: number
-  description?: RTCSessionDescriptionInit
-  candidate?: RTCIceCandidateInit
-}
-
 interface StatePayload {
   id: number
   muted: boolean
@@ -336,6 +264,15 @@ interface StatePayload {
   screen_sharing: boolean
   camera_on: boolean
   audio_sharing: boolean
+  /**
+   * How this person's screen is travelling — and the only way anyone else could know.
+   *
+   * A share moved onto the SFU is published into a room the viewers are not in, so without
+   * this they would watch it vanish from the mesh and never think to look anywhere else.
+   * Optional so a client that hasn't been updated is read as sharing directly, which is what
+   * it is doing.
+   */
+  screen_transport?: TransportKind
 }
 
 interface JoinResponse {
@@ -343,6 +280,17 @@ interface JoinResponse {
   ice_servers: IceServer[]
   max_participants: number
   effects: VoiceEffects
+  /**
+   * How the server thinks this call should be carried — see the backend's
+   * VoiceTransportResolver, which weighs the admin's policy, the size of the call, and which
+   * SFU providers are actually configured.
+   *
+   * Optional because a client can outlive a backend that doesn't send it yet: absent means
+   * 'mesh', which is what every call was before any of this existed.
+   */
+  transport?: TransportKind
+  /** Present only when `transport` is 'sfu'. Where to connect, and proof we may. */
+  sfu?: SfuCredentials | null
 }
 
 /** Nothing attached to anybody — the shape of a room that has never been decorated. */
@@ -409,6 +357,51 @@ let screenTrack: MediaStreamTrack | null = null
 let screenAudioTrack: MediaStreamTrack | null = null
 let cameraTrack: MediaStreamTrack | null = null
 let iceServers: IceServer[] = []
+/**
+ * The SFU the server offered for this call, if it offered one.
+ *
+ * Module scope alongside `iceServers` for the same reason: it's a property of the call, and
+ * `useVoice()` is instantiated per component. Null whenever the call is a mesh — including
+ * when the server proposed an SFU and connecting to it failed.
+ */
+let sfuCredentials: SfuCredentials | null = null
+
+/**
+ * The thing actually carrying this call — a mesh, or an SFU.
+ *
+ * Module scope like `presence` and for the same reason: it belongs to the call, and
+ * `useVoice()` is instantiated per component. Null between calls.
+ */
+let activeTransport: VoiceTransport | null = null
+
+/**
+ * The SFU, when a screen share is using one.
+ *
+ * A *second* transport rather than a replacement, which is the shape of the whole feature:
+ * voices and cameras never leave the mesh, and this carries the one stream big enough to be
+ * worth a server. Null until a share asks for it, and null again the moment one stops needing
+ * it — see openScreenSfu.
+ */
+let sfuTransport: VoiceTransport | null = null
+
+/**
+ * Signalling for the mesh, bridged onto the presence channel.
+ *
+ * The transport is handed this rather than reaching for Echo itself, so that the thing which
+ * knows about offers and answers doesn't also have to know how this app moves messages. The
+ * handler is held here because the transport subscribes the moment it connects, which is
+ * before `presence` exists — whispers simply start arriving once it does.
+ */
+let signalHandler: ((payload: SignalPayload) => void) | null = null
+
+const meshSignaling: MeshSignaling = {
+  send: (body) => { presence?.whisper('signal', body) },
+  subscribe: (handler) => {
+    signalHandler = handler
+
+    return () => { signalHandler = null }
+  },
+}
 let presence: any = null
 let audioCtx: AudioContext | null = null
 let localAnalyser: AnalyserNode | null = null
@@ -548,16 +541,6 @@ let resolvedScreenMode: 'detail' | 'motion' = 'detail'
 /** How many samples in a row have disagreed with what's applied. See sampleScreen. */
 let sampleDissent = 0
 
-// --- screen congestion control (see SCREEN_UPLOAD_BUDGET) ---
-// The multiplier the mesh budget is scaled by, and how many polls in a row have come back
-// clean. Module scope for the same reason the sampler is: one screen, many useVoice()s.
-// Per *peer*, because in a mesh each peer connection encodes and sends its own copy: a
-// bandwidth limit hit on the way to one person says nothing about the others, and throttling
-// everyone for it is the "one weak receiver drags the call down" behaviour we're fixing.
-// A cpu limit is the exception — one machine, one CPU — and is applied across the board.
-const screenScale = new Map<number, number>()
-const screenCleanPolls = new Map<number, number>()
-let screenStatsTimer: ReturnType<typeof setInterval> | undefined
 
 /**
  * Where the call's audio elements live: a container hung off <body>, outside the Vue tree.
@@ -579,164 +562,6 @@ function audioRoot(): HTMLElement {
   }
 
   return root
-}
-
-/**
- * gzip a string to base64, and back.
- *
- * The SDP is the one signalling field big enough to matter: an offer can run to ~17KB
- * once every codec and — with TURN — every relay candidate is spelled out, and Reverb
- * closes the socket with a 1009 on any whisper past its message-size limit (which the
- * mesh experiences as peers that flap in and out or never connect). SDP is highly
- * repetitive text, so gzip takes that ~17KB down to a couple of KB, comfortably under
- * the cap and independent of how many codecs or candidates the browser decided to list.
- */
-async function gzipToBase64(text: string): Promise<string> {
-  const stream = new Blob([text]).stream().pipeThrough(new CompressionStream('gzip'))
-  const bytes = new Uint8Array(await new Response(stream).arrayBuffer())
-
-  // Chunked so a large SDP can't overflow the argument list of String.fromCharCode.
-  let binary = ''
-  for (let i = 0; i < bytes.length; i += 0x8000) {
-    binary += String.fromCharCode(...bytes.subarray(i, i + 0x8000))
-  }
-  return btoa(binary)
-}
-
-async function base64ToGunzip(b64: string): Promise<string> {
-  const binary = atob(b64)
-  const bytes = new Uint8Array(binary.length)
-  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i)
-
-  const stream = new Blob([bytes]).stream().pipeThrough(new DecompressionStream('gzip'))
-  return new Response(stream).text()
-}
-
-/**
- * Turn Opus DTX and in-band FEC on: while a line is silent the encoder sends only the occasional comfort-noise
- * update instead of a full stream, so quiet costs almost nothing — and in a call most mics are
- * quiet most of the time.
- *
- * FEC is the other half, and it's what a lossy connection actually hears. Opus can carry a
- * coarse copy of the previous frame inside the current one, so a single dropped packet — the
- * common case on wifi, and the one that makes a word arrive as a click — is reconstructed
- * instead of concealed. It costs a few percent of bitrate and only when the encoder judges the
- * loss rate worth it, which is exactly the trade we want on both speech and shared music.
- *
- * Applied to every description we *send* (see signal), which is enough on its own: an Opus
- * encoder configures itself from the *remote* fmtp — its peer's declared receive preferences —
- * so both ends running this switch DTX on for both directions, without touching our own local
- * description or the perfect-negotiation state machine. A half-deployed pair simply gets the
- * saving in one direction rather than wedging.
- *
- * These two *only*, deliberately. In BUNDLE both audio m-lines — your microphone and the shared
- * tab/system audio — share one Opus payload type and so one fmtp line; forcing mono or a low
- * bitrate here would also crush shared music. Those two belong to the mic alone, so they live
- * on the mic *sender* (applyMicParams caps its bitrate; channelCount: 1 captures it mono) and
- * leave the shared-audio stream at full quality. These two are the nudges that suit both: DTX
- * does nothing to continuous music (there's no silence to trim) and saves on everything else,
- * and FEC helps anything that has to survive a dropped packet.
- */
-function mungeOpus(sdp: string): string {
-  const pt = sdp.match(/a=rtpmap:(\d+) opus\/48000/i)?.[1]
-  if (!pt) return sdp
-
-  const want = ['usedtx=1', 'useinbandfec=1']
-  const fmtp = new RegExp(`a=fmtp:${pt} ([^\\r\\n]*)`)
-
-  if (fmtp.test(sdp)) {
-    // Merge into the existing fmtp: overwrite any key we care about, keep the rest untouched.
-    return sdp.replace(fmtp, (_line, existing: string) => {
-      const parts = existing.split(';').map(s => s.trim()).filter(Boolean)
-      for (const entry of want) {
-        const key = entry.split('=')[0]!
-        const at = parts.findIndex(p => p.startsWith(`${key}=`))
-        if (at === -1) parts.push(entry)
-        else parts[at] = entry
-      }
-      return `a=fmtp:${pt} ${parts.join(';')}`
-    })
-  }
-
-  // No fmtp line yet — add one right after Opus's rtpmap.
-  return sdp.replace(
-    new RegExp(`(a=rtpmap:${pt} opus/48000[^\\r\\n]*\\r?\\n)`, 'i'),
-    `$1a=fmtp:${pt} ${want.join(';')}\r\n`,
-  )
-}
-
-/**
- * Prefer VP9, then VP8, for a video transceiver.
- *
- * This is a *reorder* of the full codec list, not the payload-type pinning that once broke
- * BUNDLE demux (see the note in createPeer) — every codec stays offered, so distinct payload
- * types and the fallback path are both intact. VP9 buys noticeably sharper screen text at the
- * same bitrate than VP8.
- *
- * AV1 is deliberately left where it is and never raised. In a mesh a share is encoded once per
- * peer on the sharer's machine, and realtime AV1 at these sizes is a CPU trap — the exact cost
- * this file is built to avoid. Best-effort: browsers without the capability API keep their
- * default order.
- */
-function preferEfficientVideo(transceiver: RTCRtpTransceiver) {
-  if (typeof RTCRtpReceiver === 'undefined' || !RTCRtpReceiver.getCapabilities) return
-  if (!('setCodecPreferences' in transceiver)) return
-
-  const caps = RTCRtpReceiver.getCapabilities('video')
-  if (!caps) return
-
-  const rank = (mimeType: string) => {
-    switch (mimeType.toLowerCase()) {
-      case 'video/vp9': return 0
-      case 'video/vp8': return 1
-      case 'video/av1': return 4 // available, but never preferred for a realtime mesh encode
-      default: return 2 // H.264, and the rtx/red/ulpfec machinery that must stay present
-    }
-  }
-
-  // Stable sort so codecs of equal rank keep the browser's own ordering (profiles, rtx pairs).
-  const ordered = caps.codecs
-    .map((codec, index) => ({ codec, index }))
-    .sort((a, b) => rank(a.codec.mimeType) - rank(b.codec.mimeType) || a.index - b.index)
-    .map(entry => entry.codec)
-
-  try {
-    transceiver.setCodecPreferences(ordered)
-  } catch {
-    // An engine that rejects the list keeps its default order rather than losing video.
-  }
-}
-
-/**
- * Put Opus at the head of an audio transceiver's codec list.
- *
- * It is already first almost everywhere, and that "almost" is the point: a browser that has
- * negotiated down to G.722 or PCMU gives you 8kHz telephone audio with no DTX, no FEC and no
- * stereo, and none of the tuning in this file applies to it. A reorder rather than a filter,
- * for the same reason as {@link preferEfficientVideo}: every codec stays offered, so a peer
- * that genuinely can't do Opus still connects.
- */
-function preferOpus(transceiver: RTCRtpTransceiver) {
-  if (typeof RTCRtpReceiver === 'undefined' || !RTCRtpReceiver.getCapabilities) return
-  if (!('setCodecPreferences' in transceiver)) return
-
-  const caps = RTCRtpReceiver.getCapabilities('audio')
-  if (!caps) return
-
-  const rank = (mimeType: string) => (mimeType.toLowerCase() === 'audio/opus' ? 0 : 1)
-
-  // Stable sort so everything below Opus keeps the browser's own ordering, including the
-  // red/telephone-event entries that must stay present.
-  const ordered = caps.codecs
-    .map((codec, index) => ({ codec, index }))
-    .sort((a, b) => rank(a.codec.mimeType) - rank(b.codec.mimeType) || a.index - b.index)
-    .map(entry => entry.codec)
-
-  try {
-    transceiver.setCodecPreferences(ordered)
-  } catch {
-    // An engine that rejects the list keeps its default order rather than losing audio.
-  }
 }
 
 const sleep = (ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms))
@@ -787,26 +612,6 @@ async function getMicStream(deviceId: string | null, level: NoiseSuppression): P
   }
 
   return navigator.mediaDevices.getUserMedia({ audio, video: false })
-}
-
-/** Cap the mic sender's bitrate — speech is cheap and this upload is paid once per peer. */
-async function applyMicParams(sender: RTCRtpSender) {
-  const params = sender.getParameters()
-  params.encodings = params.encodings?.length ? params.encodings : [{}]
-  params.encodings[0]!.maxBitrate = MIC_MAX_BITRATE
-  await sender.setParameters(params).catch(() => {})
-}
-
-/**
- * Give the shared tab/system audio the headroom the mic is denied. Its Opus stream shares a
- * payload type with the microphone's (BUNDLE, one fmtp — see mungeOpus), so quality here can
- * only be asked for per-*sender*, which is exactly what this is.
- */
-async function applySharedAudioParams(sender: RTCRtpSender) {
-  const params = sender.getParameters()
-  params.encodings = params.encodings?.length ? params.encodings : [{}]
-  params.encodings[0]!.maxBitrate = SHARED_AUDIO_MAX_BITRATE
-  await sender.setParameters(params).catch(() => {})
 }
 
 export function useVoice() {
@@ -930,6 +735,21 @@ export function useVoice() {
   )
   /** True in a Side Space, where positions come from where everyone is stood. */
   const roomPlacesPeople = useState<boolean>('voice:roomPlacesPeople', () => false)
+
+  /**
+   * How a *screen share* travels — 'mesh' (a copy to each viewer) or 'sfu' (one copy, fanned
+   * out by a server). Voices and cameras are always peer-to-peer and aren't described by this.
+   *
+   * A live setting rather than a fixed decision: the sharer can move a running share either way
+   * from the call bar, which is the point — you find out a share is struggling by watching it,
+   * not by counting people beforehand.
+   *
+   * Deliberately *not* remembered between calls. Every join gets a fresh suggestion from the
+   * server, which knows how busy this call is and what the admin allows; a stored preference
+   * would only sit there contradicting it. Always names what is actually running, so a
+   * fallback corrects it rather than leaving it lying.
+   */
+  const screenTransport = useState<TransportKind>('voice:screenTransport', () => 'mesh')
 
   /** How hard your microphone is cleaned up on the way out — see ~/lib/micProcessing. */
   const noiseSuppression = useState<NoiseSuppression>(
@@ -1523,25 +1343,6 @@ export function useVoice() {
     }
   }
 
-  // --- signalling ---
-
-  async function signal(to: number, payload: Omit<SignalPayload, 'to' | 'from'>) {
-    if (!presence || !user.value) return
-
-    // The SDP rides compressed (see gzipToBase64) as `sdpz`; everything else — the tiny
-    // ICE candidates and the routing ids — passes through untouched.
-    const body: Record<string, unknown> = { to, from: user.value.id }
-    if (payload.description) {
-      body.description = {
-        type: payload.description.type,
-        sdpz: await gzipToBase64(mungeOpus(payload.description.sdp ?? '')),
-      }
-    }
-    if (payload.candidate) body.candidate = payload.candidate
-
-    presence.whisper('signal', body)
-  }
-
   // --- remote control transport (the protocol itself lives in useRemoteControl) ---
 
   /**
@@ -1553,15 +1354,7 @@ export function useVoice() {
    * controller used to be. The next `move` is along in ~16ms anyway.
    */
   function sendControlInput(to: number, input: ControlInput) {
-    const channel = handles.get(to)?.control
-    if (channel?.readyState !== 'open') return
-    if (channel.bufferedAmount > 64 * 1024) return
-
-    try {
-      channel.send(JSON.stringify(input))
-    } catch {
-      // Channel closed under us; the session's own teardown will notice.
-    }
+    activeTransport?.sendControl(to, input)
   }
 
   /** Ask for / grant / refuse / end control. Whispered — see the listener in connect(). */
@@ -1581,7 +1374,7 @@ export function useVoice() {
 
   /** Whether a peer's input pipe is actually up — "Request control" shouldn't offer otherwise. */
   function controlChannelReady(id: number) {
-    return handles.get(id)?.control?.readyState === 'open'
+    return activeTransport?.controlReady(id) ?? false
   }
 
   /** Tell the people in the call what my mic, camera and screen are doing, right now. */
@@ -1594,6 +1387,7 @@ export function useVoice() {
       muted: !micOpen.value,
       deafened: selfDeafened.value,
       screen_sharing: isSharing.value,
+      screen_transport: screenTransport.value,
       camera_on: isCameraOn.value,
       audio_sharing: isAudioSharing.value,
     } satisfies StatePayload)
@@ -1619,102 +1413,19 @@ export function useVoice() {
     }
   }
 
-  // --- peer connections ---
+  // --- peers ---
 
   /**
-   * The encoder settings a shared screen is sent with: capped bitrate, and the framerate and
-   * degradation the current content mode asks for.
+   * Start hearing somebody, and build the local machinery that plays them.
    *
-   * Applied when a share starts, and again whenever a screen sender is *adopted* mid-share (see
-   * {@link adoptedVideo}) — a peer who joined while we were already sharing has to get the same
-   * treatment as everyone who was there when it started, or they receive an uncapped stream.
+   * Two halves that used to be one function. The transport is told to open a connection (in a
+   * mesh that dials them; behind an SFU it subscribes), and everything here is the *other*
+   * half — the elements, streams, analyser and roster entry that a track will need somewhere
+   * to land when it arrives. Nothing below knows or cares which transport is running.
    */
-  /**
-   * What one peer's copy of the screen may cost right now.
-   *
-   * The mesh budget split across everyone we're sending to, then scaled by whatever the
-   * congestion poll has learned, then clamped. Recomputed rather than stored because both
-   * inputs move underneath it: people join and leave, and the poll adjusts the scale.
-   */
-  function screenSendBitrate(peerId?: number) {
-    // Peers we're out of earshot of in a Side Space have no screen track on them either, so
-    // they aren't spending any of the budget and shouldn't shrink anyone else's share of it.
-    const receivers = Math.max(1, [...handles.values()].filter(h => h.screenTransceiver?.sender.track).length)
-    const share = SCREEN_UPLOAD_BUDGET / receivers
-    const scale = peerId === undefined ? 1 : (screenScale.get(peerId) ?? 1)
-
-    return Math.round(Math.min(SCREEN_MAX_BITRATE, Math.max(SCREEN_MIN_BITRATE, share * scale)))
-  }
-
-  function applyScreenParams(sender: RTCRtpSender, peerId?: number) {
-    const { degradation, maxFramerate } = screenModeSettings(resolvedScreenMode)
-    const params = sender.getParameters()
-
-    params.encodings = params.encodings?.length ? params.encodings : [{}]
-    params.encodings[0]!.maxBitrate = screenSendBitrate(peerId)
-    params.encodings[0]!.maxFramerate = maxFramerate
-    params.degradationPreference = degradation
-
-    return sender.setParameters(params).catch(() => {})
-  }
-
-  /**
-   * Re-cap every live screen sender.
-   *
-   * The per-peer budget is a function of how many peers there are, so the arrival or
-   * departure of one person changes what *everyone else* is allowed to send. Without this
-   * the eighth person to join a share gets the tight cap while the seven already receiving
-   * keep the roomy one — which is precisely the over-send the budget exists to prevent.
-   */
-  function refreshScreenBitrate() {
-    if (!screenTrack) return
-    return Promise.all([...handles.entries()].map(([id, handle]) => {
-      const sender = handle.screenTransceiver?.sender
-      return sender?.track ? applyScreenParams(sender, id) : undefined
-    }))
-  }
-
-  /**
-   * A video slot we've just learned about, filled with whatever we're already sending.
-   *
-   * The polite peer creates no video transceivers and adopts the impolite peer's as their tracks
-   * arrive (see createPeer). That adoption is also the *first moment* it has anywhere to put its
-   * own camera or screen — and if it was already sharing when the pair was made, nobody put
-   * anything there. The share simply never reached them: the newcomer sat looking at a person who
-   * the roster said was sharing a screen, with no picture, until the sharer stopped and started
-   * again. Which is exactly the bug this is here to close, and the same one the screen-audio slot
-   * above already handled for sound.
-   *
-   * The offer this needs is raised by `onnegotiationneeded`, which the direction change marks and
-   * which is free to fire by now — the first exchange is what delivered this track.
-   */
-  function adoptedVideo(transceiver: RTCRtpTransceiver, track: MediaStreamTrack | null, screen: boolean) {
-    if (!track) return
-
-    if (transceiver.direction !== 'sendrecv') transceiver.direction = 'sendrecv'
-
-    void transceiver.sender.replaceTrack(track).then(async () => {
-      if (screen) {
-        // This new receiver takes a share of the upload budget, which means everyone already
-        // receiving now has a smaller one. refreshScreenBitrate covers this sender too, so
-        // there's no separate applyScreenParams call to make here.
-        await refreshScreenBitrate()
-
-        return
-      }
-
-      // A camera is only ever bitrate-capped, so there's no helper worth having for one line.
-      const params = transceiver.sender.getParameters()
-      params.encodings = params.encodings?.length ? params.encodings : [{}]
-      params.encodings[0]!.maxBitrate = CAMERA_MAX_BITRATE
-      await transceiver.sender.setParameters(params).catch(() => {})
-    })
-  }
-
   function createPeer(id: number, name: string, avatar: string | null) {
-    if (handles.has(id) || !localStream || !user.value) return
+    if (handles.has(id) || !user.value) return
 
-    const pc = new RTCPeerConnection({ iceServers })
     const audioStream = new MediaStream()
     const screenAudioStream = new MediaStream()
     const cameraStream = new MediaStream()
@@ -1732,77 +1443,17 @@ export function useVoice() {
     screenAudio.srcObject = screenAudioStream
     audioRoot().appendChild(screenAudio)
 
-    /**
-     * Perfect negotiation (the WebRTC spec's own pattern).
-     *
-     * Both ends of a new pair learn about each other at the same instant — I see you in
-     * `here`, you see me in `joining` — so both will try to make the offer, and the
-     * collision would leave the connection wedged. Rather than inventing a rule about who
-     * gets to call whom (which then has to be re-derived every time a screen share forces
-     * a renegotiation), one side is designated *polite*: on a collision it rolls back its
-     * own offer and takes the other's. Comparing user ids is enough to agree on that
-     * without exchanging a word, and it always yields opposite answers on the two sides.
-     */
     const handle: PeerHandle = {
-      pc,
       audio,
-      micSender: null,
       audioStream,
       screenAudio,
       screenAudioStream,
       cameraStream,
       screenStream,
-      polite: user.value.id < id,
-      makingOffer: false,
-      ignoreOffer: false,
-      settingRemoteAnswer: false,
-      negotiated: false,
       analyser: null,
       spatial: null,
       refTaps: null,
       speakingUntil: 0,
-      // The impolite peer fills these in just below; the polite peer adopts them in ontrack.
-      screenAudioTransceiver: null,
-      cameraTransceiver: null,
-      screenTransceiver: null,
-      control: null,
-    }
-
-    /**
-     * The remote-control input pipe.
-     *
-     * `negotiated: true` with a fixed id is doing real work here. An ordinary data channel is
-     * negotiated in-band: one side creates it, which fires `onnegotiationneeded`, and the other
-     * side learns about it via `ondatachannel`. That would add an offer to the exact moment
-     * both ends are already racing to set up video — the glare the comment below spends thirty
-     * lines avoiding. Created out-of-band on both ends instead, it simply binds to the SCTP
-     * m-line whenever it appears and never triggers an offer of its own.
-     *
-     * Made for every peer, not just when someone asks for control: bringing a channel up costs
-     * nothing while idle, and building it on demand would put a renegotiation between "approve"
-     * and the first pointer move.
-     */
-    try {
-      handle.control = pc.createDataChannel('control', { negotiated: true, id: 0, ordered: true })
-      handle.control.onmessage = event => {
-        try {
-          controlInputHandler?.(id, JSON.parse(event.data as string) as ControlInput)
-        } catch {
-          // A malformed frame is not worth tearing the session down over.
-        }
-      }
-    } catch {
-      // Data channels unavailable — remote control simply won't be offered for this peer.
-    }
-
-    for (const track of localStream.getAudioTracks()) {
-      handle.micSender = pc.addTrack(track, localStream)
-      void applyMicParams(handle.micSender)
-
-      // Before the first offer, so the whole session negotiates Opus rather than falling back
-      // to a narrowband codec none of this file's audio tuning reaches.
-      const mic = pc.getTransceivers().find(t => t.sender === handle.micSender)
-      if (mic) preferOpus(mic)
     }
 
     // If a speaker was chosen, route this peer's two audio elements to it as they're born —
@@ -1811,175 +1462,6 @@ export function useVoice() {
     if (speakerId.value) {
       void applySinkId(audio, speakerId.value)
       void applySinkId(screenAudio, speakerId.value)
-    }
-
-    /**
-     * Two video slots, one for a camera and one for a screen — but created by *one* side
-     * only, and this is the crux of the whole thing.
-     *
-     * The tidy-looking idea is for both ends to create the same two transceivers, so the
-     * m-lines line up by construction. It does not survive contact with reality: both ends
-     * see each other at the same instant, both fire an offer, and that collision (even with
-     * perfect negotiation resolving it) leaves the rolled-back side's video transceivers
-     * stranded — duplicated, stuck `sendonly`, never receiving. That was the bug behind
-     * every black remote video: `#0 audio, #1 video sendonly, #2 video sendonly` (mine,
-     * orphaned) plus `#3 video recvonly, #4 video recvonly` (adopted) — four video m-lines
-     * where there should be two.
-     *
-     * So only the *impolite* peer lays out the video slots. The polite peer creates none and
-     * adopts the impolite peer's when they arrive — see ontrack, which assigns
-     * camera/screen in arrival order (the impolite peer creates them camera-then-screen, and
-     * m-lines arrive in that order). One creator means there is nothing to duplicate, whatever
-     * the timing. We keep the slots pre-negotiated rather than added on the click so that
-     * turning a camera on is a cheap replaceTrack, not an offer storm across every peer.
-     *
-     * No codec pinning: forcing both video m-lines to one shared VP8 payload type made them
-     * indistinguishable on the shared BUNDLE transport, so the receiver dropped every packet.
-     * Letting Chrome number them gives distinct payload types; gzip (see signal) keeps the
-     * larger SDP well under the wire limit.
-     */
-    if (!handle.polite) {
-      // A third slot beside the two video ones, for the shared audio. Created first so the
-      // m-lines are [mic, screen-audio, camera, screen] on both ends; the polite peer adopts
-      // them in that order (see ontrack).
-      handle.screenAudioTransceiver = pc.addTransceiver('audio', { direction: 'sendrecv' })
-      preferOpus(handle.screenAudioTransceiver)
-      handle.cameraTransceiver = pc.addTransceiver('video', { direction: 'sendrecv' })
-      handle.screenTransceiver = pc.addTransceiver('video', { direction: 'sendrecv' })
-
-      // Steer both video slots to VP9 before the first offer, so the whole session negotiates
-      // the more efficient codec. Only the impolite peer creates the slots (see below), so
-      // setting the preference here sets it for the pair.
-      preferEfficientVideo(handle.cameraTransceiver)
-      preferEfficientVideo(handle.screenTransceiver)
-
-      // Whatever we're already sending goes into the slots as they're made, so somebody who
-      // joins mid-share sees the share in the very first offer. Through the same path the polite
-      // peer takes on adoption, so both sides of a mid-share join get the encoder caps too.
-      if (screenAudioTrack) void handle.screenAudioTransceiver.sender.replaceTrack(screenAudioTrack)
-      adoptedVideo(handle.cameraTransceiver, cameraTrack, false)
-      adoptedVideo(handle.screenTransceiver, screenTrack, true)
-    }
-
-    pc.onnegotiationneeded = async () => {
-      // Break the initial glare: until the first offer/answer is done, only the impolite
-      // peer offers. Both ends added the same transceivers a moment ago, so if both offered
-      // now they'd collide and the polite peer's rollback would strand its video
-      // transceivers as sendonly — the exact "remote video is black" bug. The polite peer
-      // instead waits and answers; afterwards `negotiated` is set and either side may offer.
-      if (handle.polite && !handle.negotiated) return
-
-      try {
-        handle.makingOffer = true
-        await pc.setLocalDescription()
-        await signal(id, { description: pc.localDescription!.toJSON() })
-      } catch {
-        // A failed offer isn't fatal: ICE restart below picks the connection back up.
-      } finally {
-        handle.makingOffer = false
-      }
-    }
-
-    pc.onicecandidate = ({ candidate }) => {
-      if (candidate) void signal(id, { candidate: candidate.toJSON() })
-    }
-
-    pc.onconnectionstatechange = () => {
-      const state: PeerConnectionState =
-        pc.connectionState === 'connected'
-          ? 'connected'
-          : pc.connectionState === 'failed'
-            ? 'failed'
-            : 'connecting'
-
-      patchPeer(id, { connection: state })
-
-      // A network that moved under us (wifi → cellular, VPN up) fails the connection
-      // without either side going anywhere. Re-gathering candidates usually recovers it.
-      if (pc.connectionState === 'failed') pc.restartIce()
-    }
-
-    /**
-     * Sort each incoming track into the stream it belongs to, by the slot it arrived in.
-     *
-     * Three things are going on here.
-     *
-     * First: we assemble the streams by hand rather than trusting `event.streams[0]`. The
-     * stream a track claims to belong to comes from an `msid` in the SDP, and the video
-     * slots were negotiated *empty* — so there is no msid to speak of, and a track pushed
-     * into one later can arrive orphaned. Adding tracks to streams we own sidesteps that.
-     *
-     * Second: a MediaStreamTrack carries nothing that says "webcam" rather than "screen".
-     * What it does carry is the transceiver it came in on — so telling a face from a screen
-     * is an identity comparison against the two slots, never a guess.
-     *
-     * Third, adoption: the polite peer created no video slots (see createPeer), so for it
-     * the two are still null here. It learns them now, in arrival order — the impolite peer
-     * creates them camera-then-screen and the m-lines arrive in that order, so the first
-     * video track is the camera and the second is the screen. The impolite peer already has
-     * both set, so this adoption is a no-op for it and the identity comparison stands.
-     */
-    pc.ontrack = ({ track, transceiver }) => {
-      if (track.kind === 'audio') {
-        // Mic, or the shared tab/system audio? The impolite peer created a dedicated slot
-        // and knows it by identity. The polite peer adopts it: its own microphone slot has a
-        // local send-track (the mic it added), whereas the screen-audio slot it merely
-        // received into does not — so the empty one is the screen's.
-        const isScreenAudio = handle.screenAudioTransceiver
-          ? transceiver === handle.screenAudioTransceiver
-          : !transceiver.sender.track
-
-        if (isScreenAudio) {
-          if (!handle.screenAudioTransceiver) {
-            handle.screenAudioTransceiver = transceiver
-
-            // We may already be sharing when this slot finally becomes known to us — the
-            // polite peer only learns it here, and somebody who joins mid-share has to be
-            // sent the sound too, not just be able to receive it. The renegotiation that
-            // needs is raised by onnegotiationneeded, which is free to fire by now.
-            if (screenAudioTrack) {
-              if (transceiver.direction !== 'sendrecv') transceiver.direction = 'sendrecv'
-              void transceiver.sender.replaceTrack(screenAudioTrack)
-            }
-          }
-
-          handle.screenAudioStream.addTrack(track)
-          handle.screenAudio.play().catch(() => {})
-          applyAudio(id)
-          return
-        }
-
-        audioStream.addTrack(track)
-
-        audio.play().catch(() => {
-          // Autoplay policy. Joining a call is a user gesture, so this shouldn't fire —
-          // and if it somehow does, the next click anywhere in the page will unblock it.
-        })
-        listenForSpeech(handle)
-        // Their audio exists now, which is the earliest moment a positioned voice can be
-        // built from it — see ensureSpatial.
-        ensureSpatial(id)
-        applyAudio(id)
-
-        return
-      }
-
-      if (!handle.cameraTransceiver) {
-        handle.cameraTransceiver = transceiver
-        adoptedVideo(transceiver, cameraTrack, false)
-      } else if (transceiver !== handle.cameraTransceiver && !handle.screenTransceiver) {
-        handle.screenTransceiver = transceiver
-        adoptedVideo(transceiver, screenTrack, true)
-      }
-
-      const camera = transceiver === handle.cameraTransceiver
-      const target = camera ? cameraStream : screenStream
-      target.addTrack(track)
-
-      // Vue must not proxy a MediaStream: the DOM rejects the proxy on `srcObject`.
-      patchPeer(id, camera
-        ? { camera: markRaw(target) }
-        : { screen: markRaw(target) })
     }
 
     const pref = loadPrefs()[id]
@@ -2019,6 +1501,10 @@ export function useVoice() {
         cameraOn: state.camera_on,
         audioSharing: state.audio_sharing,
       })
+
+      // They were already sharing through the media server before we had a peer for them —
+      // the Side Space case, where people are dialled as you walk up to them.
+      if (state.screen_sharing && state.screen_transport === 'sfu') void openScreenSfu()
     }
 
     // Push the starting volume onto the element. Easy to think unnecessary — the peer object
@@ -2036,21 +1522,22 @@ export function useVoice() {
     // when there's nothing to do.
     restackUnplaced()
     ensureSpatial(id)
+
+    // And open the pipe. Last, so nothing can arrive before there's anywhere to put it.
+    activeTransport?.setSubscribed(id, true)
   }
 
+  /** Stop hearing somebody: close the pipe, then dismantle what was playing them. */
   function destroyPeer(id: number) {
     const handle = handles.get(id)
     if (!handle) return
 
-    handle.pc.onnegotiationneeded = null
-    handle.pc.onicecandidate = null
-    handle.pc.ontrack = null
-    handle.pc.onconnectionstatechange = null
-    // Detach before closing: a control channel still holding its handler would keep feeding
-    // input events into a session whose peer has just gone. `pc.close()` takes the channel
-    // with it, so there's nothing further to close here.
-    if (handle.control) handle.control.onmessage = null
-    handle.pc.close()
+    // Claimed before anything else, because this re-enters: dropping the peer makes the
+    // transport emit `peerLeft`, which lands right back here. Deleting first means the second
+    // pass returns at the guard above instead of tearing the same person down twice.
+    handles.delete(id)
+
+    activeTransport?.setSubscribed(id, false)
 
     handle.audio.srcObject = null
     handle.audio.remove()
@@ -2059,18 +1546,7 @@ export function useVoice() {
     handle.analyser?.disconnect()
     handle.spatial?.destroy()
 
-    handles.delete(id)
     peers.value = peers.value.filter(p => p.id !== id)
-
-    // Their congestion history goes with them: someone who drops and rejoins on a different
-    // network shouldn't inherit the throttle their last connection earned.
-    screenScale.delete(id)
-    screenCleanPolls.delete(id)
-
-    // One fewer copy of the screen to send: the survivors' share of the upload budget just
-    // grew, so hand it back to them rather than leaving the call permanently throttled to
-    // its busiest moment.
-    void refreshScreenBitrate()
 
     // One fewer voice to share the arc between. Skipped during teardown, where every peer is
     // going and re-spreading the survivors is work nobody will hear.
@@ -2078,115 +1554,287 @@ export function useVoice() {
   }
 
   /**
-   * Force a fresh offer to one peer, after the tracks a sender carries have changed.
+   * Sort a track the transport handed us into the stream it belongs in.
    *
-   * The video slots are negotiated *empty* (see createPeer), and the promise on the two
-   * screen/camera functions — "replaceTrack, no renegotiation" — turns out to be only half
-   * true. Swapping one live track for another needs no renegotiation, yes. But going from
-   * *no* track to a live one is different: the far end built its m-line expecting nothing,
-   * so the SSRC and msid the new track carries have to be announced, or its depacketizer
-   * quietly drops packets it was never told to decode. On screen that's a video tile that
-   * stays black while the audio is perfectly fine — which is exactly the bug this fixes.
-   *
-   * Only from a stable state. An offer already in flight will carry the new track when it
-   * lands, and a collision (both ends offering at once) is untangled by perfect negotiation
-   * in onSignal — the same makingOffer bookkeeping onnegotiationneeded uses.
+   * The `kind` is the transport's answer to a question a MediaStreamTrack cannot answer for
+   * itself — a track carries nothing that says "webcam" rather than "screen". A mesh works it
+   * out from the transceiver it arrived on, an SFU from the publication's source; either way
+   * this end is told rather than guessing.
    */
-  async function renegotiate(id: number) {
+  function receiveTrack(id: number, kind: TrackKind, track: MediaStreamTrack) {
     const handle = handles.get(id)
-    if (!handle || handle.pc.signalingState !== 'stable') return
-
-    try {
-      handle.makingOffer = true
-      await handle.pc.setLocalDescription()
-      await signal(id, { description: handle.pc.localDescription!.toJSON() })
-    } catch {
-      // Best effort: a dropped renegotiation is recovered by the next one, or by the ICE
-      // restart in onconnectionstatechange.
-    } finally {
-      handle.makingOffer = false
-    }
-  }
-
-  /** Renegotiate with everyone at once — after a camera or screen goes on or off. */
-  function renegotiateAll() {
-    return Promise.all([...handles.keys()].map(id => renegotiate(id)))
-  }
-
-  /** The other half of perfect negotiation: what to do with what they sent. */
-  async function onSignal(payload: SignalPayload) {
-    // Whispers reach every subscriber — Reverb has no way to address one. Everyone else's
-    // handshake is simply not our business.
-    if (payload.to !== user.value?.id) return
-
-    let handle = handles.get(payload.from)
-
-    /*
-     * Somebody is dialling us and we have no connection to them.
-     *
-     * In an ordinary call this can't happen — everyone is dialled the moment they appear on
-     * the presence channel — so dropping it was right. In a Side Space it happens constantly
-     * and dropping it is fatal: peers are dialled off *positions*, positions arrive as
-     * whispers, and whoever is standing still hasn't whispered recently enough for a newcomer
-     * to know they exist. The newcomer announces itself, we dial it, and its answer to our
-     * offer used to land here and be thrown away — so neither of us ever heard the other.
-     *
-     * Being offered to *is* evidence we're in range: the far end computed the same distance we
-     * would have. So we accept and let the next frame settle the gain.
-     */
-    if (!handle && proximityMode) {
-      const member = roomMembers.get(payload.from)
-      if (member) {
-        createPeer(member.id, member.name, member.avatar)
-        handle = handles.get(payload.from)
-      }
-    }
-
     if (!handle) return
 
-    const { pc } = handle
+    if (kind === 'screenAudio') {
+      replaceTrackIn(handle.screenAudioStream, track, handle.screenAudio)
+      handle.screenAudio.play().catch(() => {})
+      applyAudio(id)
+      return
+    }
+
+    if (kind === 'mic') {
+      replaceTrackIn(handle.audioStream, track, handle.audio)
+      handle.audio.play().catch(() => {
+        // Autoplay policy. Joining a call is a user gesture, so this shouldn't fire — and if
+        // it somehow does, the next click anywhere in the page will unblock it.
+      })
+      listenForSpeech(handle)
+      // Their audio exists now, which is the earliest moment a positioned voice can be built
+      // from it — see ensureSpatial.
+      ensureSpatial(id)
+      applyAudio(id)
+      return
+    }
+
+    const target = kind === 'camera' ? handle.cameraStream : handle.screenStream
+    replaceTrackIn(target, track)
+
+    // Vue must not proxy a MediaStream: the DOM rejects the proxy on `srcObject`.
+    patchPeer(id, kind === 'camera'
+      ? { camera: markRaw(target) }
+      : { screen: markRaw(target) })
+  }
+
+  /** The context every transport is opened with — the same facts, whichever one it is. */
+  function transportContext(): TransportContext {
+    return {
+      channelId: channelId.value ?? 0,
+      selfId: user.value?.id ?? 0,
+      iceServers,
+      sfu: sfuCredentials,
+      proximity: proximityMode,
+    }
+  }
+
+  /**
+   * Open the call.
+   *
+   * The mesh is not optional and never was: it carries every voice and every camera for the
+   * whole life of the call. What the server proposed only decides where the *screen* starts,
+   * and that is a switch the sharer can throw at any point (see {@link setScreenTransport}).
+   */
+  async function openTransport(proposed: TransportKind) {
+    activeTransport = createMeshTransport({
+      signaling: meshSignaling,
+      // In a Side Space, being offered to is evidence we're in range: the far end computed the
+      // same distance we would have. Elsewhere nobody should be dialling us unannounced.
+      accepts: peerId => proximityMode && roomMembers.has(peerId),
+    })
+
+    await activeTransport.connect(transportContext(), transportEvents())
+
+    // Only a suggestion, and only about the screen. Honoured when the server offered
+    // credentials to honour it with; the SFU itself isn't dialled until a share needs it.
+    screenTransport.value = proposed === 'sfu' && sfuCredentials ? 'sfu' : 'mesh'
+
+    await republish()
+  }
+
+  /**
+   * Bring up the SFU, for the screen and nothing else.
+   *
+   * Connected lazily — on the first share that wants it rather than on joining — because most
+   * calls never share a screen at all, and a room nobody publishes into is a connection, a
+   * participant and a minute of somebody's quota spent on nothing.
+   *
+   * Its event set is deliberately not the mesh's. It reports *only* arriving screen media: the
+   * mesh owns who is in this call, and letting a second transport create or destroy peers would
+   * mean somebody's voice being torn down because they stopped sharing.
+   */
+  async function openScreenSfu(): Promise<VoiceTransport | null> {
+    if (sfuTransport) return sfuTransport
+    if (!sfuCredentials) return null
+
+    const sfu = createLiveKitTransport()
 
     try {
-      if (payload.description) {
-        // The SDP arrives gzip'd as `sdpz` (see signal); older/uncompressed `sdp` is still
-        // accepted so a half-deployed pair doesn't wedge.
-        const wire = payload.description as RTCSessionDescriptionInit & { sdpz?: string }
-        const description: RTCSessionDescriptionInit = wire.sdpz
-          ? { type: wire.type, sdp: await base64ToGunzip(wire.sdpz) }
-          : wire
-
-        const readyForOffer = !handle.makingOffer
-          && (pc.signalingState === 'stable' || handle.settingRemoteAnswer)
-        const collision = description.type === 'offer' && !readyForOffer
-
-        // Both of us offered at once. The impolite peer simply pretends it didn't hear —
-        // its own offer is already in flight and will be the one that lands.
-        handle.ignoreOffer = !handle.polite && collision
-        if (handle.ignoreOffer) return
-
-        handle.settingRemoteAnswer = description.type === 'answer'
-        // The polite peer, mid-collision, rolls its own offer back here implicitly.
-        await pc.setRemoteDescription(description)
-        handle.settingRemoteAnswer = false
-        // The first exchange is done, so the initial-glare guard in onnegotiationneeded can
-        // stand down: from here the polite peer is free to offer too (to add its camera).
-        handle.negotiated = true
-
-        if (description.type === 'offer') {
-          await pc.setLocalDescription()
-          await signal(payload.from, { description: pc.localDescription!.toJSON() })
-        }
-      } else if (payload.candidate) {
-        try {
-          await pc.addIceCandidate(payload.candidate)
-        } catch (err) {
-          // Candidates for an offer we deliberately ignored are noise, not failure.
-          if (!handle.ignoreOffer) throw err
-        }
-      }
+      await sfu.connect({
+        ...transportContext(),
+        // Never proximity-gated, even in a Side Space. Distance decides who you can *hear*;
+        // a screen on the stage is for the room. Leaving this on would mean subscribing to
+        // nobody, since the walking logic only ever drives the mesh.
+        proximity: false,
+      }, {
+        // Not our business: the mesh already knows the roster, and it is authoritative.
+        peerJoined: () => {},
+        peerLeft: () => {},
+        // A voice would never arrive here — we publish only the screen — but routing one into
+        // the call by accident would double somebody up, so only the screen is let through.
+        trackReceived: (peerId, kind, track) => {
+          if (kind === 'screen' || kind === 'screenAudio') receiveTrack(peerId, kind, track)
+        },
+        trackEnded: () => {},
+        // The mesh is the authority on whether you can reach someone; it is carrying their
+        // voice, which is the part you would actually notice losing.
+        peerStateChanged: () => {},
+        controlReceived: () => {},
+        failed: () => { void fallBackToMesh() },
+      })
     } catch {
-      // Signalling is best-effort; a wedged connection is recovered by the ICE restart in
-      // onconnectionstatechange rather than by unwinding this.
+      // Couldn't get in. The share simply goes out over the mesh, as it always did.
+      return null
+    }
+
+    sfuTransport = sfu
+
+    return sfu
+  }
+
+  /**
+   * Let go of the SFU once nothing needs it.
+   *
+   * A room connection is billed by the minute whether or not anything is flowing through it,
+   * and a call that shared a screen once would otherwise hold one open until everybody hung
+   * up. Kept while *anyone* is still sharing through it — including us.
+   */
+  async function maybeCloseScreenSfu() {
+    if (!sfuTransport) return
+    if (screenTrack && screenTransport.value === 'sfu') return
+
+    for (const state of lastStates.values()) {
+      if (state.screen_sharing && state.screen_transport === 'sfu') return
+    }
+
+    const going = sfuTransport
+    sfuTransport = null
+    await going.close().catch(() => {})
+  }
+
+  /** Whichever transport the screen should be travelling on right now. */
+  function screenCarrier(): VoiceTransport | null {
+    return screenTransport.value === 'sfu' ? sfuTransport : activeTransport
+  }
+
+  /**
+   * Move a screen share between direct and server-relayed, live.
+   *
+   * The capture is never touched, which is the whole point: the picture the sharer is looking
+   * at doesn't flicker, no permission is re-asked, and what changes is only the route. The old
+   * route is retracted *after* the new one is publishing, so there is no moment where the
+   * screen is going nowhere.
+   */
+  async function setScreenTransport(kind: TransportKind) {
+    if (kind === screenTransport.value) return
+
+    screenTransport.value = kind
+
+    if (!screenTrack) return // nothing live to move; the choice applies to the next share
+
+    const previous = kind === 'sfu' ? activeTransport : sfuTransport
+
+    if (kind === 'sfu' && !await openScreenSfu()) {
+      // No SFU to move to — say so rather than silently leaving it where it was.
+      screenTransport.value = 'mesh'
+      notice.value = 'Couldn\u2019t reach the media server, so the share stayed direct.'
+      return
+    }
+
+    const carrier = screenCarrier()
+    if (!carrier) return
+
+    await carrier.publish('screen', screenTrack)
+    if (screenAudioTrack) await carrier.publish('screenAudio', screenAudioTrack)
+
+    await previous?.publish('screen', null)
+    await previous?.publish('screenAudio', null)
+
+    // The encoder settings are per-transport, so the new carrier has to be told what the
+    // sampler last decided — otherwise a film moved onto the SFU goes back to slideshow rates.
+    const { degradation, maxFramerate } = screenModeSettings(resolvedScreenMode)
+    await carrier.setScreenEncoding({ degradationPreference: degradation, maxFramerate })
+
+    await publishState()
+  }
+
+  /**
+   * Hand the transports everything we're already sending.
+   *
+   * Voice and camera always go to the mesh. The screen goes wherever it's currently routed —
+   * which on a fresh join is nowhere yet, because nothing is being shared.
+   */
+  async function republish() {
+    const mic = localStream?.getAudioTracks()[0] ?? null
+    if (mic) await activeTransport?.publish('mic', mic)
+    if (cameraTrack) await activeTransport?.publish('camera', cameraTrack)
+
+    if (screenTrack) {
+      const carrier = screenTransport.value === 'sfu' ? await openScreenSfu() : activeTransport
+      await carrier?.publish('screen', screenTrack)
+      if (screenAudioTrack) await carrier?.publish('screenAudio', screenAudioTrack)
+    }
+  }
+
+  /**
+   * Give up on the SFU and put the screen back on the mesh.
+   *
+   * Only the screen was ever on it, so this is a much smaller event than it used to be: the
+   * voices never moved, nobody is re-dialled, and the call itself doesn't notice.
+   */
+  async function fallBackToMesh() {
+    const failed = sfuTransport
+    sfuTransport = null
+
+    await failed?.close().catch(() => {})
+
+    if (screenTransport.value !== 'sfu') return
+
+    screenTransport.value = 'mesh'
+
+    if (screenTrack) {
+      notice.value = 'The media server dropped out — your share is going direct instead.'
+      await activeTransport?.publish('screen', screenTrack)
+      if (screenAudioTrack) await activeTransport?.publish('screenAudio', screenAudioTrack)
+    }
+  }
+
+  /**
+   * Put a track into a stream, displacing whatever was in that slot.
+   *
+   * A slot holds one track, and a second arrival means the first is finished — a share moved
+   * between transports is the case that made this necessary, since the mesh copy ends and the
+   * SFU copy begins and for a moment the stream would hold both. Left to accumulate, the
+   * element goes on rendering the dead one and the switch looks like a freeze.
+   *
+   * An <audio> element is re-pointed at the stream afterwards, because mutating a stream a
+   * media element is already sinking doesn't reliably make it pick the new track up.
+   */
+  function replaceTrackIn(stream: MediaStream, track: MediaStreamTrack, element?: HTMLMediaElement) {
+    for (const existing of stream.getTracks()) {
+      if (existing !== track) stream.removeTrack(existing)
+    }
+
+    stream.addTrack(track)
+
+    if (element) element.srcObject = stream
+  }
+
+  /** The transport's inboxes, wired once per call. */
+  function transportEvents(): TransportEvents {
+    return {
+      // Fired for somebody who dialled *us* — the Side Space case, where being offered to is
+      // itself evidence we're in range. Everyone we dialled already has a handle by now.
+      peerJoined: (id) => {
+        if (handles.has(id)) return
+
+        const member = roomMembers.get(id) ?? knownMembers().find(m => m.id === id)
+        if (member) createPeer(member.id, member.name, member.avatar)
+      },
+      peerLeft: id => destroyPeer(id),
+      trackReceived: receiveTrack,
+      trackEnded: () => {
+        // Nothing to undo: the stream keeps the ended track, and the element goes quiet on its
+        // own. What the UI reacts to is the peer's whispered state, not the track's lifetime.
+      },
+      // The UI knows three states, not four: a transport that is reconnecting is, as far as
+      // anyone looking at the tile is concerned, connecting.
+      peerStateChanged: (id, state) => patchPeer(id, {
+        connection: state === 'reconnecting' ? 'connecting' : state,
+      }),
+      controlReceived: (id, payload) => controlInputHandler?.(id, payload as ControlInput),
+      failed: () => {
+        // The mesh has no single thing to lose — a peer failing is that peer's problem, and
+        // there is nowhere to fall back *to* from the transport that is itself the fallback.
+      },
     }
   }
 
@@ -2336,6 +1984,12 @@ export function useVoice() {
     }
 
     iceServers = joined.ice_servers
+
+    // What the server decided (see the backend's VoiceTransportResolver), and what it handed
+    // over to act on it. A proposal, not an instruction: if the SFU won't come up we carry the
+    // call on the mesh instead, which is why ice_servers arrives whichever it named.
+    sfuCredentials = joined.sfu ?? null
+    await openTransport(joined.transport ?? 'mesh')
     voiceEffects.value = {
       default: joined.effects?.default ?? { join: null, leave: null },
       people: joined.effects?.people ?? [],
@@ -2417,7 +2071,7 @@ export function useVoice() {
         destroyPeer(member.id)
         if (!proximityMode) fireEffect('leave', member.id, nameOf(member.id, name))
       })
-      .listenForWhisper('signal', onSignal)
+      .listenForWhisper('signal', (payload: SignalPayload) => signalHandler?.(payload))
       .listenForWhisper('state', (state: StatePayload) => {
         // Remembered whether or not we have a peer to apply it to. In a Side Space we often
         // don't yet: both ends whisper the moment they come into range, and whichever whisper
@@ -2432,6 +2086,13 @@ export function useVoice() {
           cameraOn: state.camera_on,
           audioSharing: state.audio_sharing,
         })
+
+        // Somebody is sharing through the media server, so we have to be in the room to see
+        // it. This is the whole receiving half of the feature: a viewer has no other reason
+        // to open an SFU connection, and without it a share that moved there simply
+        // disappears from the call.
+        if (state.screen_sharing && state.screen_transport === 'sfu') void openScreenSfu()
+        else void maybeCloseScreenSfu()
       })
       // The remote-control handshake. Whispered rather than sent down the data channel because
       // it has to work *before* control exists, and because a request that quietly failed to
@@ -2486,6 +2147,14 @@ export function useVoice() {
     }
 
     for (const id of [...handles.keys()]) destroyPeer(id)
+
+    // Closes the connections, the congestion poll and the signalling subscription in one go.
+    // Left running, a mesh's stats timer would outlive the call it was measuring.
+    void activeTransport?.close()
+    void sfuTransport?.close()
+    activeTransport = null
+    sfuTransport = null
+    sfuCredentials = null
 
     micChain?.destroy()
     micChain = null
@@ -2930,7 +2599,7 @@ export function useVoice() {
     // (and on push-to-talk, open the line without the key).
     for (const s of [capture, stream]) s.getAudioTracks().forEach(t => { t.enabled = micOpen.value })
 
-    await Promise.all([...handles.values()].map(h => h.micSender?.replaceTrack(track)))
+    await activeTransport?.publish('mic', track)
 
     const oldCapture = rawStream
     const oldStream = localStream
@@ -3175,39 +2844,24 @@ export function useVoice() {
       screenAudioTrack = await withoutCallEcho(screenAudioTrack)
     }
 
-    // Slot the picture into each peer's screen transceiver, and the sound into the audio one,
-    // then tell them the slots are live — see renegotiate() for why the second half isn't
-    // optional. The direction bump matters for the polite peer, whose adopted slots came up
-    // recvonly: without flipping to sendrecv it can receive a screen but never send one.
-    await Promise.all([...handles.values()].map(async (handle) => {
-      const video = handle.screenTransceiver
-      if (video) {
-        if (video.direction !== 'sendrecv') video.direction = 'sendrecv'
-        await video.sender.replaceTrack(screenTrack)
+    // Hand both halves to the transport. What that costs — the per-peer bitrate arithmetic a
+    // mesh needs, or the single simulcast publish an SFU wants — is its business now, and it
+    // is the one part of screen sharing that genuinely differs between the two.
+    // Where a share travels is the sharer's standing choice, so the SFU is dialled here — on
+    // the share that wants it — rather than held open across calls that never share anything.
+    const carrier = screenTransport.value === 'sfu' ? await openScreenSfu() : activeTransport
 
-        // Capped bitrate, the mode's framerate, and the axis to shed under pressure. Detail
-        // content is encoded at a low framerate (see SCREEN_DETAIL_FRAMERATE) while motion keeps
-        // the full rate; the capture stays at 30 either way, so an 'auto' flip is instant — it's
-        // the *encode* rate being trimmed, not the source. See applyScreenParams.
-        await applyScreenParams(video.sender)
-      }
+    if (!carrier) {
+      // The server wouldn't have us. Direct is what screen sharing always was, so it is a
+      // perfectly good answer rather than a failure worth stopping for.
+      screenTransport.value = 'mesh'
+    }
 
-      const sound = handle.screenAudioTransceiver
-      if (sound && screenAudioTrack) {
-        if (sound.direction !== 'sendrecv') sound.direction = 'sendrecv'
-        await sound.sender.replaceTrack(screenAudioTrack)
-        await applySharedAudioParams(sound.sender)
-      }
-    }))
-    // The loop above filled the senders one at a time, so each applyScreenParams saw a
-    // different number of receivers and the first peers were capped as though they were the
-    // only one. One pass now that every slot is filled settles them all on the same figure.
-    await refreshScreenBitrate()
-    await renegotiateAll()
+    await (carrier ?? activeTransport)?.publish('screen', screenTrack)
+    if (screenAudioTrack) await (carrier ?? activeTransport)?.publish('screenAudio', screenAudioTrack)
 
     screenStream.value = markRaw(display)
     startScreenSampler() // a no-op unless the mode is 'auto'
-    startScreenStats()
     await publishState()
   }
 
@@ -3215,15 +2869,9 @@ export function useVoice() {
     if (!isSharing.value) return
 
     stopScreenSampler()
-    stopScreenStats()
 
-    await Promise.all(
-      [...handles.values()].map(async (handle) => {
-        await handle.screenTransceiver?.sender.replaceTrack(null)
-        await handle.screenAudioTransceiver?.sender.replaceTrack(null)
-      }),
-    )
-    await renegotiateAll()
+    await screenCarrier()?.publish('screen', null)
+    await screenCarrier()?.publish('screenAudio', null)
 
     screenTrack?.stop()
     screenTrack = null
@@ -3239,6 +2887,10 @@ export function useVoice() {
     // Tell the desktop shell the capture is over, so it forgets which display it was aiming
     // remote-control input at and lifts anything still held. No-op everywhere else.
     ;(window as any).sideChatDesktop?.screenShare?.stopped?.()
+
+    // After the track is cleared, not before: this asks whether anything still needs the room,
+    // and a screenTrack still sitting there would answer yes and keep it open for good.
+    await maybeCloseScreenSfu()
 
     await publishState()
   }
@@ -3304,19 +2956,7 @@ export function useVoice() {
     // takes, so it carries the same echo and gets the same treatment.
     screenAudioTrack = await withoutCallEcho(track)
 
-    // The direction bump matters for the polite peer, whose slot was adopted recvonly: without
-    // it they can hear a share but never send one. See createPeer.
-    await Promise.all([...handles.values()].map(async (handle) => {
-      const sound = handle.screenAudioTransceiver
-      if (!sound) return
-
-      if (sound.direction !== 'sendrecv') sound.direction = 'sendrecv'
-      await sound.sender.replaceTrack(screenAudioTrack)
-      await applySharedAudioParams(sound.sender)
-    }))
-    // Not optional: the slot was negotiated empty, and a far end that wasn't told a track
-    // arrived drops its packets. See renegotiate().
-    await renegotiateAll()
+    await activeTransport?.publish('screenAudio', screenAudioTrack)
 
     // A stream of its own rather than the capture, which still holds the stopped video track.
     audioShareStream.value = markRaw(new MediaStream([screenAudioTrack]))
@@ -3326,10 +2966,7 @@ export function useVoice() {
   async function stopAudioShare() {
     if (!isAudioSharing.value) return
 
-    await Promise.all(
-      [...handles.values()].map(handle => handle.screenAudioTransceiver?.sender.replaceTrack(null)),
-    )
-    await renegotiateAll()
+    await activeTransport?.publish('screenAudio', null)
 
     // Stopped, not merely un-sent — this is what drops the "sharing" indicator.
     screenAudioTrack?.stop()
@@ -3388,95 +3025,7 @@ export function useVoice() {
     const { hint, degradation, maxFramerate } = screenModeSettings(resolved)
     screenTrack.contentHint = hint
 
-    await Promise.all([...handles.values()].map(async (handle) => {
-      const sender = handle.screenTransceiver?.sender
-      if (!sender) return
-      const params = sender.getParameters()
-      if (!params.encodings?.length) return
-      params.degradationPreference = degradation
-      // Slides drop to a low framerate; a video that starts playing gets the full rate back.
-      params.encodings[0]!.maxFramerate = maxFramerate
-      await sender.setParameters(params).catch(() => {})
-    }))
-  }
-
-  /**
-   * Ask every peer connection how the screen encode is actually going, and adjust.
-   *
-   * `qualityLimitationReason` on the outbound video is libwebrtc's own verdict: 'bandwidth'
-   * means the pipe couldn't carry what we asked for, 'cpu' that the machine couldn't encode
-   * it — the two ways a movie night turns to slideshow.
-   *
-   * A 'bandwidth' verdict is scoped to the peer it was reported on, because each connection
-   * carries its own encoding to its own destination: the person on hotel wifi gets a smaller
-   * picture and nobody else notices. 'cpu' is the opposite — there is one processor doing all
-   * the encoding — so it backs every peer off at once.
-   *
-   * Recovery needs several consecutive clean polls, so a share doesn't oscillate between the
-   * bitrate that just failed and the one below it.
-   */
-  async function pollScreenCongestion() {
-    if (!screenTrack) return
-
-    const limited = new Map<number, 'bandwidth' | 'cpu'>()
-
-    await Promise.all([...handles.entries()].map(async ([id, handle]) => {
-      const sender = handle.screenTransceiver?.sender
-      if (!sender?.track) return
-
-      const stats = await sender.getStats().catch(() => null)
-      stats?.forEach((report: any) => {
-        if (report.type !== 'outbound-rtp' || report.kind !== 'video') return
-        const reason = report.qualityLimitationReason
-        if (reason === 'bandwidth' || reason === 'cpu') limited.set(id, reason)
-      })
-    }))
-
-    // One machine, one encoder budget: a cpu limit anywhere is a cpu limit everywhere.
-    const cpuBound = [...limited.values()].includes('cpu')
-    let changed = false
-
-    for (const id of handles.keys()) {
-      const scale = screenScale.get(id) ?? 1
-      let next = scale
-
-      if (cpuBound || limited.has(id)) {
-        screenCleanPolls.set(id, 0)
-        next = Math.max(SCREEN_MIN_SCALE, scale * SCREEN_BACKOFF_STEP)
-      } else if (scale < 1) {
-        const clean = (screenCleanPolls.get(id) ?? 0) + 1
-        if (clean >= SCREEN_RECOVER_AFTER_POLLS) {
-          screenCleanPolls.set(id, 0)
-          next = Math.min(1, scale * SCREEN_RECOVER_STEP)
-        } else {
-          screenCleanPolls.set(id, clean)
-        }
-      }
-
-      if (next !== scale) {
-        screenScale.set(id, next)
-        changed = true
-      }
-    }
-
-    // setParameters on every sender every few seconds, for nothing, is not free.
-    if (changed) await refreshScreenBitrate()
-  }
-
-  function startScreenStats() {
-    stopScreenStats()
-    // A share always opens at full budget: the last one's congestion tells us nothing about
-    // this one, which may be a different network, a different room, or a different day.
-    screenScale.clear()
-    screenCleanPolls.clear()
-    screenStatsTimer = setInterval(() => { void pollScreenCongestion() }, SCREEN_STATS_INTERVAL_MS)
-  }
-
-  function stopScreenStats() {
-    clearInterval(screenStatsTimer)
-    screenStatsTimer = undefined
-    screenScale.clear()
-    screenCleanPolls.clear()
+    await screenCarrier()?.setScreenEncoding({ degradationPreference: degradation, maxFramerate })
   }
 
   /**
@@ -3626,20 +3175,7 @@ export function useVoice() {
     cameraTrack.contentHint = 'motion'
     cameraTrack.onended = () => { void stopCamera() }
 
-    await Promise.all([...handles.values()].map(async (handle) => {
-      const transceiver = handle.cameraTransceiver
-      if (!transceiver) return
-
-      if (transceiver.direction !== 'sendrecv') transceiver.direction = 'sendrecv'
-      const sender = transceiver.sender
-      await sender.replaceTrack(cameraTrack)
-
-      const params = sender.getParameters()
-      params.encodings = params.encodings?.length ? params.encodings : [{}]
-      params.encodings[0]!.maxBitrate = CAMERA_MAX_BITRATE
-      await sender.setParameters(params).catch(() => {})
-    }))
-    await renegotiateAll()
+    await activeTransport?.publish('camera', cameraTrack)
 
     cameraStream.value = markRaw(capture)
     void countCameras()
@@ -3673,12 +3209,8 @@ export function useVoice() {
     track.contentHint = 'motion'
     track.onended = () => { void stopCamera() }
 
-    await Promise.all([...handles.values()].map(async (handle) => {
-      const sender = handle.cameraTransceiver?.sender
-      // Same slot, same direction, same encodings — only the source changes, which is why
-      // this needs none of the renegotiation dance startCamera does.
-      if (sender) await sender.replaceTrack(track).catch(() => {})
-    }))
+    // Same slot, same encodings — only the source changes, so nobody sees a flicker.
+    await activeTransport?.publish('camera', track)
 
     const previous = cameraTrack
     cameraTrack = track
@@ -3694,9 +3226,8 @@ export function useVoice() {
     if (!isCameraOn.value) return
 
     await Promise.all(
-      [...handles.values()].map(handle => handle.cameraTransceiver?.sender.replaceTrack(null)),
+      [activeTransport?.publish('camera', null)],
     )
-    await renegotiateAll()
 
     // Stopping the track is what turns the little green light off. Leaving it running and
     // merely un-sent is the thing people (rightly) do not forgive.
@@ -3804,6 +3335,8 @@ export function useVoice() {
     status,
     error,
     notice,
+    screenTransport,
+    setScreenTransport,
     peers,
     selfMuted,
     selfDeafened,

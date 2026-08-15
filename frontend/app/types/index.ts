@@ -221,6 +221,11 @@ export interface Server {
   invite_url: string
   /** Who may add a discussion to a channel here — 'everyone' (the default) or 'staff'. */
   discussion_creation?: 'everyone' | 'staff'
+  /**
+   * Whether calls here may be carried by an SFU rather than peer-to-peer. Says nothing about
+   * whether one is configured — the server decides that per call (see VoiceTransportResolver).
+   */
+  sfu_enabled?: boolean
   pending_requests_count?: number
   channels?: Channel[]
   created_at: string
