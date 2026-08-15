@@ -514,6 +514,7 @@ Route::middleware('auth:api')->group(function () {
     Route::patch('channels/{channel}/app-tags/{tag}', [AppTagController::class, 'update']);
     Route::delete('channels/{channel}/app-tags/{tag}', [AppTagController::class, 'destroy']);
     // Putting one on something, and taking it off.
+    Route::get('channels/{channel}/apps/{type}/{id}/tags', [AppTagController::class, 'forItem']);
     Route::put('channels/{channel}/apps/{type}/{id}/tags/{tag}', [AppTagController::class, 'attach']);
     Route::delete('channels/{channel}/apps/{type}/{id}/tags/{tag}', [AppTagController::class, 'detach']);
 

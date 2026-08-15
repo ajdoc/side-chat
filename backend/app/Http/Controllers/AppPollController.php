@@ -29,7 +29,7 @@ class AppPollController extends Controller
     public function index(TrackerRequest $request, Channel $channel): AnonymousResourceCollection
     {
         $polls = $channel->polls()
-            ->with(['creator', 'options', 'votes', 'reactions'])
+            ->with(['creator', 'options', 'votes', 'reactions', 'tags'])
             ->withCount('comments')
             // Open before closed. `closed_at` is null while open, and null sorts last ascending
             // in Postgres — so this is the raw ordering rather than a column name.

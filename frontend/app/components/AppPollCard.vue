@@ -72,8 +72,11 @@ const tally = computed(() => {
       >{{ r.emoji }} {{ r.count }}</span>
     </div>
 
-    <div class="mt-3 border-t pt-2 text-[11px] text-muted-foreground">
-      {{ poll.options?.length ?? 0 }} options
+    <div class="mt-3 flex flex-wrap items-center gap-2 border-t pt-2 text-[11px] text-muted-foreground">
+      <span>{{ poll.options?.length ?? 0 }} options</span>
+      <!-- Tags on the card as well as in the detail, so the wall can be scanned by them —
+           the same reason a tracker task row carries its own. -->
+      <TrackerTagChips v-if="poll.tags?.length" :tags="poll.tags" class="ml-auto" />
     </div>
   </button>
 </template>

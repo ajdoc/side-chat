@@ -18,14 +18,19 @@ const props = defineProps<{
 const emit = defineEmits<{
   vote: [number[]]
   patch: [{ question?: string, description?: string | null, closed?: boolean }]
-  react: [string]
   remove: []
 }>()
 
 const { user } = useAuth()
 
-/** The emoji offered under the question. A short fixed row, not a full picker. */
-const QUICK_REACTIONS = ['👍', '❤️', '🔥', '💡', '👀']
+/*
+ * Reactions and tags aren't drawn here.
+ *
+ * They used to be — a bespoke row of five emoji in a card of their own. AppItemDiscussion now
+ * carries reactions, tags and the thread together, so keeping this would have put two rows of
+ * the same control on one screen. A poll's chips live with its comments, exactly as they do on
+ * a task, a sticker and a calendar entry.
+ */
 
 const mine = computed(() => new Set(props.poll.my_option_ids ?? []))
 
@@ -124,26 +129,6 @@ function when(iso: string) {
           <dt class="text-muted-foreground">Created:</dt>
           <dd>{{ when(poll.created_at) }}</dd>
         </dl>
-      </section>
-
-      <!-- Reactions: a fixed row of five, always all shown, so the counts sit in stable
-           positions instead of the row reflowing every time somebody picks a new one. -->
-      <section class="flex flex-wrap items-center gap-2 rounded-xl border p-3">
-        <button
-          v-for="emoji in QUICK_REACTIONS"
-          :key="emoji"
-          type="button"
-          class="flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-sm transition-colors"
-          :class="(poll.reactions ?? []).find(r => r.emoji === emoji)?.reacted
-            ? 'border-primary bg-primary/15'
-            : 'hover:bg-muted'"
-          @click="emit('react', emoji)"
-        >
-          {{ emoji }}
-          <span v-if="(poll.reactions ?? []).find(r => r.emoji === emoji)?.count" class="text-xs text-muted-foreground">
-            {{ (poll.reactions ?? []).find(r => r.emoji === emoji)!.count }}
-          </span>
-        </button>
       </section>
 
       <section class="space-y-3 rounded-xl border p-4">

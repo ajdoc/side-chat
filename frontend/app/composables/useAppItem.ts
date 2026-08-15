@@ -25,6 +25,8 @@ export function useAppItem(
   const tags = ref<AppTag[]>([])
   /** The chip row: one entry per emoji, with a count and whether you're in it. */
   const reactions = ref<AppReactionSummary[]>([])
+  /** The tags this item wears. Not on the host app's model, so it's fetched here. */
+  const itemTags = ref<AppTag[]>([])
   const loading = ref(false)
 
   function socketHeaders() {
@@ -36,19 +38,22 @@ export function useAppItem(
     if (id == null) {
       comments.value = []
       reactions.value = []
+      itemTags.value = []
       return
     }
     loading.value = true
     try {
-      const [thread, chips] = await Promise.all([
+      const [thread, chips, worn] = await Promise.all([
         api<{ data: AppComment[] }>(`${basePath}/apps/${subject}/${id}/comments`),
         api<{ reactions: AppReactionSummary[] }>(`${basePath}/apps/${subject}/${id}/reactions`),
+        api<{ data: AppTag[] }>(`${basePath}/apps/${subject}/${id}/tags`),
       ])
       // The response for an item you've since navigated away from must not land on the one
       // you're now looking at.
       if (itemId.value === id) {
         comments.value = thread.data
         reactions.value = chips.reactions
+        itemTags.value = worn.data
       }
     }
     finally {
@@ -117,12 +122,14 @@ export function useAppItem(
       { method: 'PUT', headers: socketHeaders() },
     )
     if (!tags.value.some(t => t.id === created.data.id)) tags.value = [...tags.value, created.data]
+    if (!itemTags.value.some(t => t.id === created.data.id)) itemTags.value = [...itemTags.value, created.data]
     return res.data
   }
 
   async function detachTag(tagId: number) {
     const id = itemId.value
     if (id == null) return
+    itemTags.value = itemTags.value.filter(t => t.id !== tagId)
     await api(`${basePath}/apps/${subject}/${id}/tags/${tagId}`, {
       method: 'DELETE', headers: socketHeaders(),
     })
@@ -131,7 +138,7 @@ export function useAppItem(
   watch(itemId, () => void load(), { immediate: true })
 
   return {
-    comments, tags, reactions, loading,
+    comments, tags, itemTags, reactions, loading,
     load, loadTags, addComment, removeComment, attachTag, detachTag, react,
   }
 }

@@ -16,7 +16,7 @@ const props = defineProps<{
   canEdit: boolean
 }>()
 
-const { polls, loaded, open, loadOne, add, patch, vote, remove, react } = useAppPolls(
+const { polls, loaded, open, loadOne, add, patch, vote, remove } = useAppPolls(
   props.basePath, props.streamName,
 )
 
@@ -115,7 +115,6 @@ async function onRemove() {
       :can-edit="canEdit"
       @vote="vote(current!.id, $event)"
       @patch="patch(current!.id, $event)"
-      @react="react(current!.id, $event)"
       @remove="onRemove"
     >
       <!-- The same thread component the Calendar uses. Nothing about it knows what a poll is —
@@ -126,7 +125,6 @@ async function onRemove() {
           subject="app_poll"
           :item-id="current!.id"
           :can-edit="canEdit"
-          :show-tags="false"
         />
       </template>
     </AppPollDetail>

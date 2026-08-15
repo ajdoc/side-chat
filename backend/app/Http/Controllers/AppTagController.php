@@ -113,6 +113,22 @@ class AppTagController extends Controller
     }
 
     /**
+     * The tags currently on one item.
+     *
+     * Needed because nothing else can answer it: an app's own resource doesn't carry tags (a
+     * calendar event knows nothing about them), so a panel opening on an item had no way to
+     * learn what it already wore and drew an empty row. Its own endpoint rather than folding
+     * them into every app's resource, for exactly the reason those tables are polymorphic.
+     */
+    public function forItem(TrackerRequest $request, Channel $channel, string $type, int $id): AnonymousResourceCollection
+    {
+        $subject = AppSubjects::resolve($channel, $type, $id);
+        abort_if($subject === null, 404);
+
+        return AppTagResource::collection($subject->tags()->get());
+    }
+
+    /**
      * Put a tag on something, or take it off.
      *
      * Attaching is idempotent — `syncWithoutDetaching` against the unique index, so a

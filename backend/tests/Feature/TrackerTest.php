@@ -369,3 +369,29 @@ it('scopes a note to its own channel', function () {
     $this->getJson("/api/channels/{$channel->id}/apps/space_note/{$note->id}/comments")
         ->assertNotFound();
 });
+
+it('reads back the tags an item already wears', function () {
+    [$owner, , $channel] = ownerWithChannel();
+    Passport::actingAs($owner);
+
+    $event = $channel->calendarEvents()->create(['title' => 'Standup', 'starts_at' => now()]);
+    $bug = $this->postJson("/api/channels/{$channel->id}/app-tags", ['label' => 'Bug'])->json('data.id');
+    $ux = $this->postJson("/api/channels/{$channel->id}/app-tags", ['label' => 'UX'])->json('data.id');
+
+    $this->putJson("/api/channels/{$channel->id}/apps/calendar_event/{$event->id}/tags/{$bug}")->assertOk();
+    $this->putJson("/api/channels/{$channel->id}/apps/calendar_event/{$event->id}/tags/{$ux}")->assertOk();
+
+    // Nothing else can answer this: an app's own resource carries no tags, so without it a
+    // panel opened on a tagged item drew an empty row and the tags looked lost.
+    $this->getJson("/api/channels/{$channel->id}/apps/calendar_event/{$event->id}/tags")
+        ->assertOk()
+        ->assertJsonCount(2, 'data');
+
+    $this->deleteJson("/api/channels/{$channel->id}/apps/calendar_event/{$event->id}/tags/{$bug}")
+        ->assertNoContent();
+
+    $this->getJson("/api/channels/{$channel->id}/apps/calendar_event/{$event->id}/tags")
+        ->assertOk()
+        ->assertJsonCount(1, 'data')
+        ->assertJsonPath('data.0.label', 'UX');
+});
