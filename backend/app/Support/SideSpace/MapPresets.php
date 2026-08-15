@@ -59,6 +59,9 @@ final class MapPresets
             'nyc-street' => self::nycStreet(),
             'nyc-skyline' => self::nycSkyline(),
             'nyc-island' => self::nycIsland(),
+            // The first preset built to be walked *into* rather than opened — see its docblock.
+            'movie-theatre' => self::movieTheatre(),
+            'met-museum' => self::metMuseum(),
             // The gyms: an arena crossed with an office, one per badge. See gym().
             'gym-cinnabar' => self::gymCinnabar(),
             'gym-celadon' => self::gymCeladon(),
@@ -86,7 +89,7 @@ final class MapPresets
      */
     public const GROUPS = [
         'Rooms' => ['office', 'lounge', 'park', 'campfire', 'blank'],
-        'Themed' => ['throne-room', 'green-hall', 'sleep-temple', 'espurr-den', 'new-york', 'gather-town', 'nyc-street', 'nyc-skyline', 'nyc-island'],
+        'Themed' => ['throne-room', 'green-hall', 'sleep-temple', 'espurr-den', 'new-york', 'gather-town', 'nyc-street', 'nyc-skyline', 'nyc-island', 'movie-theatre', 'met-museum'],
         'Gyms' => ['gym-cinnabar', 'gym-celadon', 'gym-vermilion', 'gym-azalea', 'gym-olivine', 'gym-blackthorn'],
     ];
 
@@ -1245,6 +1248,231 @@ final class MapPresets
     }
 
     /** Four walls and nothing in them, for somebody who'd rather draw their own. 24×16. */
+    /**
+     * A cinema: raked seating, a lit screen, and the exit at the back. 43x24.
+     *
+     * ## Drawn, not tiled
+     *
+     * This is a {@see Backdrops} map. The room is one piece of isometric pixel art and the tile
+     * grid underneath it is **collision only** — never painted. That is the only way a room at
+     * this fidelity fits into a system built for sixteen-pixel rectangles, and it changes nothing
+     * else: proximity audio, pathing, doors, zones and the games all read the same grid they
+     * always did, because none of them ever asked what a tile looked like.
+     *
+     * ## Where the grid came from
+     *
+     * Derived from the artwork rather than authored beside it, which is what keeps the two in
+     * step. The image is 1376x768 and a tile is 32px, so it is exactly 43x24 with no resampling.
+     * Every tile was classified by what the picture actually contains: transparent outside the
+     * theatre's diamond becomes void, the dark perimeter becomes wall, and the floor is what is
+     * left. Two corrections were needed on top of that, and both are the kind a colour test
+     * cannot make:
+     *
+     *   - **Nothing above the stage line is floor.** The red curtains beside the screen read as
+     *     floor on colour alone, and walking up into them would put people inside the back wall.
+     *   - **Only tiles the floor can reach are floor.** Shadows enclosed inside the seating read
+     *     as solid and would otherwise have become pillars scattered across the auditorium.
+     *
+     * The seats themselves are walkable. They are painted into the artwork rather than being
+     * furniture, and an axis-aligned grid over isometric seating cannot trace their rows without
+     * being visibly wrong somewhere — so the whole house floor is open, which is also how you get
+     * a room where thirty people can spread out and watch something.
+     *
+     * ## The screen
+     *
+     * A `screens` surface over the painted one, sheared to match. The artwork is isometric, so
+     * what is drawn is a parallelogram at the usual 2:1 slope: eight tiles across, four down, and
+     * the right edge four tiles higher than the left. A share drawn square onto that sits
+     * visibly crooked, which is what `skew` exists to fix.
+     */
+    private static function movieTheatre(): array
+    {
+        return [
+            'label' => 'Movie Theatre',
+            'description' => 'An isometric auditorium: raked seating, and a screen that plays whatever the room shares',
+            'name' => 'Movie Theatre',
+            'width' => 43,
+            'height' => 24,
+            // Collision only — the artwork is what anybody sees. See the note above.
+            'tiles' => [
+                '                     #                     ',
+                '                   #####                   ',
+                '                 #########                 ',
+                '               #############               ',
+                '             #################             ',
+                '           #####################           ',
+                '         #########################         ',
+                '       #############################       ',
+                '     #####..####.....#################     ',
+                '     #####..##...........##############    ',
+                '     ######................#.##########    ',
+                '     #######...................########    ',
+                '     #######.......................####    ',
+                '     #######..........................#    ',
+                '     #####.......................##...#    ',
+                '     ###.......................#######     ',
+                '       ##................##...######       ',
+                '         ##.............##########         ',
+                '           ##..........#########           ',
+                '             #............####             ',
+                '               #..........##               ',
+                '                 #.......#                 ',
+                '                   #...#                   ',
+                '                     #                     ',
+            ],
+            'backdrops' => [
+                ['key' => 'movie-theatre', 'x' => 0, 'y' => 0, 'w' => 43, 'h' => 24],
+            ],
+            /*
+             * The screen, over the one in the picture and sheared onto it.
+             *
+             * Whatever anybody in the room shares plays here, and standing in the house offers to
+             * watch it fullscreen. The televisions a room would otherwise need are not here:
+             * there is nothing to press E on, because the screen is the room.
+             */
+            'screens' => [
+                ['id' => 'the-screen', 'name' => 'The screen', 'x' => 11, 'y' => 7, 'w' => 8, 'h' => 4, 'skew' => -4],
+            ],
+            /*
+             * The house, as a stage.
+             *
+             * A cinema is the one room where the *audience* wants to hear each other quietly and
+             * whoever is presenting wants to be heard by everybody — which is exactly what a
+             * stage zone does. Drawn over the front of the house rather than the whole of it, so
+             * the back rows can talk among themselves without carrying.
+             */
+            'zones' => [
+                ['id' => 'down-front', 'name' => 'Down the front', 'kind' => 'stage', 'x' => 10, 'y' => 8, 'w' => 12, 'h' => 4],
+            ],
+            /*
+             * The seats — invisible, because they are already drawn.
+             *
+             * A backdrop map has no furniture on it: the room *is* the picture, and standing a
+             * sixteen-pixel chair sprite on top of a painted one would look exactly as bad as it
+             * sounds. But a cinema whose seats you cannot sit in is a room with a floor plan
+             * instead of seats, so this is the missing half — the `seat` kind occupies a tile,
+             * can be sat on, and draws nothing at all. See Decorations.
+             *
+             * Their positions are read off the artwork rather than laid out by hand: the seat
+             * backs are a distinct red, so every tile that is mostly seat-red *within the seating
+             * block* becomes one. The block bound is doing real work — the carpet at the front of
+             * the house is the same colour and is not somewhere to sit — and so is the pass that
+             * drops tiles with fewer than two neighbours, which removes flecks of curtain that
+             * happened to match.
+             *
+             * They are not a grid, and shouldn't be. The rows run diagonally because the room is
+             * drawn in perspective, and these follow them.
+             */
+            'objects' => self::objects([
+                ['seat', 20, 9], ['seat', 21, 9], ['seat', 22, 9], ['seat', 23, 9],
+                ['seat', 19, 10], ['seat', 20, 10], ['seat', 21, 10], ['seat', 22, 10], ['seat', 23, 10], ['seat', 24, 10], ['seat', 25, 10], ['seat', 26, 10],
+                ['seat', 17, 11], ['seat', 18, 11], ['seat', 19, 11], ['seat', 20, 11], ['seat', 21, 11], ['seat', 22, 11], ['seat', 24, 11], ['seat', 25, 11], ['seat', 26, 11], ['seat', 27, 11], ['seat', 28, 11], ['seat', 29, 11],
+                ['seat', 12, 12], ['seat', 15, 12], ['seat', 16, 12], ['seat', 17, 12], ['seat', 18, 12], ['seat', 19, 12], ['seat', 20, 12], ['seat', 21, 12], ['seat', 22, 12], ['seat', 23, 12], ['seat', 24, 12], ['seat', 25, 12], ['seat', 26, 12], ['seat', 27, 12], ['seat', 28, 12], ['seat', 29, 12], ['seat', 32, 12], ['seat', 33, 12], ['seat', 34, 12],
+                ['seat', 12, 13], ['seat', 13, 13], ['seat', 14, 13], ['seat', 15, 13], ['seat', 16, 13], ['seat', 17, 13], ['seat', 18, 13], ['seat', 19, 13], ['seat', 20, 13], ['seat', 21, 13], ['seat', 22, 13], ['seat', 23, 13], ['seat', 24, 13], ['seat', 26, 13], ['seat', 27, 13], ['seat', 29, 13], ['seat', 33, 13], ['seat', 34, 13], ['seat', 35, 13], ['seat', 36, 13],
+                ['seat', 11, 14], ['seat', 12, 14], ['seat', 13, 14], ['seat', 14, 14], ['seat', 16, 14], ['seat', 17, 14], ['seat', 18, 14], ['seat', 19, 14], ['seat', 20, 14], ['seat', 21, 14], ['seat', 22, 14], ['seat', 23, 14], ['seat', 24, 14], ['seat', 25, 14], ['seat', 27, 14], ['seat', 35, 14], ['seat', 36, 14],
+                ['seat', 11, 15], ['seat', 22, 15], ['seat', 23, 15], ['seat', 25, 15],
+                ['seat', 11, 16], ['seat', 14, 16], ['seat', 23, 16],
+            ]),
+            // The back of the house, by the steps — where you come in.
+            'spawn' => ['x' => 21, 'y' => 20],
+        ];
+    }
+
+    /**
+     * A museum, drawn as a cutaway. 44x24.
+     *
+     * A {@see Backdrops} map like the cinema, and derived the same way — but the picture is a
+     * genuinely harder shape and the result is honestly rougher, which is worth stating plainly.
+     *
+     * ## Why its collision is approximate
+     *
+     * Every other backdrop here shows *one floor*. This one is a cutaway: domes, glass roofs and
+     * upper galleries are drawn above the halls, and the halls above the plaza. A tile grid has
+     * one plane, so no arrangement of characters is faithful to a picture showing three storeys
+     * at once — a wall on the second floor and the floor beneath it are the same square.
+     *
+     * Colour cannot separate them either: the whole building is pale stone, and the per-tile
+     * brightness of its floors, walls and roofs all sit inside a band of about sixty levels.
+     *
+     * So the grid says something simpler and true: **the lower two-thirds is one open floor.**
+     * Everything above the roofline is solid, the building's edge is walled so nobody walks off
+     * it, and what is left is one connected hall of 474 tiles you can wander. You *can* walk
+     * where an interior wall is drawn. That is a deliberate trade — a museum you can cross beats
+     * a museum subdivided by walls that only half exist — and anyone wanting the galleries
+     * separated can paint them in with the tile tool, which is exactly what it is for.
+     *
+     * ## The frames
+     *
+     * A handful along the gallery wall, as starting points rather than a finished hang. They are
+     * empty: what goes in a frame is uploaded per server, by staff, through its own endpoint —
+     * see the exhibits migration. Drag them onto the paintings you want and hang your own.
+     */
+    private static function metMuseum(): array
+    {
+        return [
+            'label' => 'Museum',
+            'description' => 'A cutaway museum whose paintings open full size — hang your own in the frames',
+            'name' => 'Museum',
+            'width' => 44,
+            'height' => 24,
+            'tiles' => [
+                '                          #                 ',
+                '                  #  ## ####                ',
+                '          ##     ###########  ###           ',
+                '          ####  #####################       ',
+                '         ############################       ',
+                '         #############################      ',
+                '         #############################      ',
+                '       ################################     ',
+                '     ##................................#    ',
+                '   ##...................................#   ',
+                ' ##......................................## ',
+                ' #.......................................#  ',
+                ' #.......................................#  ',
+                ' #.......................................#  ',
+                ' #.......................................#  ',
+                ' ##.......................................# ',
+                '   ##....................................#  ',
+                '     ##.................................#   ',
+                '       ##.###............................#  ',
+                '         #   ##...........................# ',
+                '               ##..........###.............#',
+                '                 ##......##   ##...........#',
+                '                   ##..##       ####.......#',
+                '                     ##             ########',
+            ],
+            'backdrops' => [
+                ['key' => 'met-museum', 'x' => 0, 'y' => 0, 'w' => 44, 'h' => 24],
+            ],
+            /*
+             * Frames along the top of the walkable floor, where the wall of paintings is drawn.
+             *
+             * Starting points, deliberately few. Placing forty by guesswork would mean forty
+             * rectangles somebody has to drag off the wrong paintings before they can use any of
+             * them, which is more work than drawing eight in the right places.
+             */
+            'exhibits' => [
+                ['id' => 'a1', 'name' => 'Artwork 1', 'x' => 6, 'y' => 8, 'w' => 2, 'h' => 1],
+                ['id' => 'a2', 'name' => 'Artwork 2', 'x' => 9, 'y' => 8, 'w' => 2, 'h' => 1],
+                ['id' => 'a3', 'name' => 'Artwork 3', 'x' => 12, 'y' => 8, 'w' => 2, 'h' => 1],
+                ['id' => 'a4', 'name' => 'Artwork 4', 'x' => 15, 'y' => 8, 'w' => 2, 'h' => 1],
+                ['id' => 'a5', 'name' => 'Artwork 5', 'x' => 24, 'y' => 8, 'w' => 2, 'h' => 1],
+                ['id' => 'a6', 'name' => 'Artwork 6', 'x' => 27, 'y' => 8, 'w' => 2, 'h' => 1],
+                ['id' => 'a7', 'name' => 'Artwork 7', 'x' => 30, 'y' => 8, 'w' => 2, 'h' => 1],
+                ['id' => 'a8', 'name' => 'Artwork 8', 'x' => 33, 'y' => 8, 'w' => 2, 'h' => 1],
+            ],
+            // The great hall, as a stage: a guide addressing a tour is heard across the museum,
+            // and the rooms off it talk among themselves.
+            'zones' => [
+                ['id' => 'great-hall', 'name' => 'The great hall', 'kind' => 'stage', 'x' => 18, 'y' => 12, 'w' => 8, 'h' => 4],
+            ],
+            // Drawn room: nothing standing on it. See the cinema's note.
+            'objects' => [],
+            // The plaza, at the front.
+            'spawn' => ['x' => 22, 'y' => 22],
+        ];
+    }
+
     private static function blank(): array
     {
         return [

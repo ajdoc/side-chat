@@ -116,6 +116,22 @@ export const STAGE_SPEAKERS = 3
 export const MIN_MAP = 8
 export const MAX_MAP = 256
 
+/**
+ * How many screen surfaces one map may hold — mirrored from `SideSpaceMap::MAX_SCREENS`.
+ *
+ * Small, and for cost rather than taste: every surface is a `drawImage` of a live video frame,
+ * every frame, and that is the most expensive thing this renderer ever paints.
+ */
+export const MAX_SCREENS = 4
+
+/**
+ * How many frames one map may hang — mirrored from `SideSpaceMap::MAX_EXHIBITS`.
+ *
+ * Generous, because a gallery is the point: a museum that ran out of frames a third of the way
+ * round would be a worse room than one with none.
+ */
+export const MAX_EXHIBITS = 120
+
 export type Facing = 'up' | 'down' | 'left' | 'right'
 
 export interface SpaceZone {
@@ -142,16 +158,37 @@ export interface SpaceZone {
 /**
  * Where a doorway leads.
  *
- * Two shapes, because "somewhere else" turned out to mean two genuinely different things and
- * collapsing them would have made one of the two awkward. A `point` is fast travel across an
- * island you already have loaded — nothing fetches, you are simply moved. A `room` is another
- * Side Space, which means a navigation and a fresh map.
+ * Three shapes, because "somewhere else" turned out to mean three genuinely different things
+ * and collapsing them would have made each of them awkward. They differ by *how much is torn
+ * down* on the way through, which is the only distinction that matters at the doorway:
+ *
+ *  - `point` — fast travel across a map you already have loaded. Nothing fetches, nothing is
+ *    torn down; you are simply moved.
+ *  - `map` — one of this channel's other maps: an interior. The grid under your feet is
+ *    replaced, and *nothing else is* — same channel, same call, same presence channel, same
+ *    people on the other end of it. This is the doorway kind, and the reason interiors exist
+ *    rather than being separate channels.
+ *  - `room` — another Side Space entirely. A journey: the call is torn down and rebuilt at the
+ *    far end, which is a second or two of silence and is why it is not what a door does.
  */
 export type PortalTarget =
   | { kind: 'point', x: number, y: number }
+  /** `map` is the sibling's slug — maps are pointed at by name, so the link survives a copy. */
+  | { kind: 'map', map: string, x?: number | null, y?: number | null }
   | { kind: 'room', channel_id: number, x?: number | null, y?: number | null }
 
-/** A rectangle you walk into that puts you somewhere else. */
+/**
+ * How a doorway is taken — mirrored from `SideSpaceMap::ACTIVATIONS`.
+ *
+ * A property of the *doorway*, not a global setting, because the right answer genuinely differs
+ * per door. A wormhole between two halves of one island wants `walk`: it is scenery you run
+ * through, and stopping to press a key at every one would make crossing the map a chore. A door
+ * out of the room wants `press` — it is a decision, and one careless step should not end the
+ * conversation you were having.
+ */
+export type PortalActivation = 'walk' | 'press'
+
+/** A wormhole: a rectangle that puts you somewhere else when you walk in, or when you press E. */
 export interface SpacePortal {
   id: string
   name: string
@@ -159,12 +196,138 @@ export interface SpacePortal {
   y: number
   w: number
   h: number
+  /** Absent reads as `walk` — what every doorway built before this existed did. */
+  activation?: PortalActivation | null
   to: PortalTarget
+}
+
+/**
+ * A rectangle that shows whatever the room is currently watching.
+ *
+ * Geometry only — nothing about the *source* is stored, because the source is the call and every
+ * browser already has it. This says where to paint; each client answers "paint what?" from the
+ * screen share it is receiving.
+ */
+export interface SpaceScreen {
+  id: string
+  name: string
+  x: number
+  y: number
+  w: number
+  h: number
+  /**
+   * How far the screen's right edge is raised above its left, in tiles. Negative lifts it.
+   *
+   * Exists because the best-looking rooms are *drawn* rather than tiled, and drawn rooms are
+   * almost always isometric — so the cinema screen painted into the artwork is a parallelogram,
+   * not a rectangle. A video drawn square onto it sits visibly crooked, floating over the wall at
+   * one end and short of the screen at the other.
+   *
+   * A shear rather than a full quad because a shear is what isometric art actually is: the 2:1
+   * slope that makes a wall look vertical. `w` tiles across and `-w / 2` here is exactly that,
+   * and is what the Movie Theatre uses.
+   *
+   * Absent is zero, which is a plain rectangle — right for a flat map and for a screen painted
+   * face-on.
+   */
+  skew?: number | null
+}
+
+/**
+ * A frame you can walk up to and open — a painting, a statue, a case.
+ *
+ * Geometry only. What is *in* the frame is a file somebody uploaded and the card beside it, which
+ * arrives separately as {@link ExhibitPiece} — a member may move a frame but only staff may fill
+ * one, and the two halves are stored apart for exactly that reason.
+ */
+export interface SpaceExhibit {
+  id: string
+  name: string
+  x: number
+  y: number
+  w: number
+  h: number
+}
+
+/** What is hanging in a frame: the picture and the wall label. Keyed to a {@link SpaceExhibit}. */
+export interface ExhibitPiece {
+  exhibit_id: string
+  title: string
+  artist?: string | null
+  caption?: string | null
+  /** Signed and expiring — see SideSpaceExhibit::url. Fetched when opened, never with the map. */
+  url: string
+}
+
+/** How this doorway is taken, with the default applied. */
+export function activationOf(portal: SpacePortal): PortalActivation {
+  return portal.activation === 'press' ? 'press' : 'walk'
+}
+
+/**
+ * The doorway on this map that leads into a given interior, if there is one.
+ *
+ * What "come back out of the door you went in by" is built on. Resolved at the moment of travel
+ * rather than stored as a coordinate, and that is the whole point: a return that baked in *where
+ * the door was* goes stale the first time somebody moves it, and nothing about moving a doorway
+ * suggests you should also have to go into the other room and fix its way home.
+ *
+ * First match wins, and a map with two doors into the same room is a real thing to build — a
+ * cinema with two entrances to one screen. Coming back out of the first is arbitrary between
+ * them, but it is at least *stable*, and stable beats clever here: a return that tried to guess
+ * which of the two you had used would be wrong in exactly the cases you would notice.
+ */
+export function doorwayInto(map: SpaceMap, slug: string): SpacePortal | null {
+  for (const p of map.portals ?? []) {
+    if (p.to.kind === 'map' && p.to.map === slug) return p
+  }
+
+  return null
+}
+
+/** Somewhere to stand inside a rectangle on this map, furniture included. Null if it is all solid. */
+export function standableIn(
+  map: SpaceMap,
+  rect: { x: number, y: number, w: number, h: number },
+): { x: number, y: number } | null {
+  for (let y = rect.y; y < rect.y + rect.h; y++) {
+    for (let x = rect.x; x < rect.x + rect.w; x++) {
+      if (isWalkable(map, x, y)) return { x, y }
+    }
+  }
+
+  return null
+}
+
+/**
+ * The map a Side Space opens to — mirrored from the server's `SideSpaceMap::MAIN`.
+ *
+ * Every other map on a channel is an interior you can only reach through a door. This is the
+ * one that always exists, the one an absent `?map=` means, and the one you are put back in if
+ * the room you were standing in stops being there.
+ */
+export const MAIN_MAP = 'main'
+
+/** One of a Side Space's rooms, as it appears in a list of them: enough to name and open. */
+export interface SpaceMapRef {
+  slug: string
+  name: string
 }
 
 export interface SpaceMap {
   id: number
   channel_id: number
+  /**
+   * Which of the channel's rooms this is. `main` is the way in.
+   *
+   * A Side Space holds several maps — an overworld and the interiors behind its doors — and
+   * they share one channel, one call and one presence channel. So this is what distinguishes
+   * two people who are in the same *call* but not in the same *place*: see the position
+   * whispers, which carry it, and are filtered by it.
+   */
+  slug: string
+  /** The building's other rooms, names only. Present on a freshly read map. */
+  siblings?: SpaceMapRef[]
   name: string
   width: number
   height: number
@@ -194,14 +357,39 @@ export interface SpaceMap {
   projection?: Projection
   zones: SpaceZone[]
   /**
-   * Doorways: rectangles that put you somewhere else when you walk into them.
+   * Wormholes: rectangles you stand in and press E to be moved by.
    *
-   * Not furniture, and not a zone. Furniture is something you press E on, and a doorway you had
-   * to press would be a button lying on the floor; a zone changes who can hear you and changes
-   * nothing about where you are. This is the third thing — a place whose only property is that
-   * standing in it moves you.
+   * Not furniture, and not a zone. A zone changes who can hear you and changes nothing about
+   * where you are. Furniture is something you press E on *in front of you*, and that is the
+   * closer relative — the difference left is that a doorway is a region you are inside rather
+   * than an object you face, which is why it wins the key over anything you happen to be facing
+   * while stood in one.
+   *
+   * This did fire on being walked into, and the comment here used to argue that a doorway you
+   * had to press was "a button lying on the floor". What that missed is the asymmetry of the
+   * mistake: failing to notice a door costs you a keypress, and taking one you didn't mean to
+   * costs you the conversation you were having. See the stage's `checkPortal`.
    */
   portals?: SpacePortal[]
+  /**
+   * Surfaces that show whatever the room is watching — a cinema screen, a monitor wall.
+   *
+   * Not furniture, and the difference is what they belong to: a television is an object standing
+   * in the room and this is part of the room itself. On a backdrop map the cinema screen is
+   * *painted into the picture*, at a position no catalogue item could be expected to line up
+   * with, so a screen names an area rather than a thing occupying one.
+   */
+  screens?: SpaceScreen[]
+  /**
+   * Frames you can walk up to and open.
+   *
+   * A drawn room paints its own art, and at a few dozen pixels a painting reads as a gallery
+   * without being anything you can *look at*. A frame is where the real picture is, and the real
+   * picture is somebody's upload rather than anything in the artwork.
+   */
+  exhibits?: SpaceExhibit[]
+  /** What is hanging in each frame. Absent frames are empty ones. */
+  exhibit_pieces?: ExhibitPiece[]
   /** The furniture standing on the ground. Kinds and positions only — see spaceDecor. */
   objects: SpaceObject[]
   spawn: { x: number, y: number }
@@ -315,11 +503,65 @@ export function zoneAt(map: SpaceMap, x: number, y: number): SpaceZone | null {
 }
 
 /**
- * The doorway a position is standing in, or null.
+ * The frame a position is standing in front of, or null.
+ *
+ * Generous about what counts as in front, like {@link screenNear} and for the same reason: a
+ * painting hangs on a wall you cannot walk into, so requiring you to be *inside* the frame would
+ * mean the offer never appeared. One tile of slack all round, which is close enough to read as
+ * "standing at this painting" and tight enough that a corridor of them doesn't all fire at once.
+ */
+export function exhibitNear(map: SpaceMap, x: number, y: number): SpaceExhibit | null {
+  const tx = Math.round(x)
+  const ty = Math.round(y)
+
+  for (const e of map.exhibits ?? []) {
+    if (tx >= e.x - 1 && tx < e.x + e.w + 1 && ty >= e.y - 1 && ty < e.y + e.h + 1) return e
+  }
+
+  return null
+}
+
+/** What's hanging in a given frame, if anything has been. */
+export function pieceIn(map: SpaceMap, exhibitId: string): ExhibitPiece | null {
+  return (map.exhibit_pieces ?? []).find(p => p.exhibit_id === exhibitId) ?? null
+}
+
+/**
+ * The screen surface a position is standing in front of, or null.
+ *
+ * Used for the "watch this fullscreen" prompt, so it is generous about what counts as in front:
+ * the rectangle itself plus a couple of tiles below it. A cinema screen hangs on a wall you
+ * cannot walk into, so requiring you to be *inside* it would mean the prompt never appeared.
+ */
+export function screenNear(map: SpaceMap, x: number, y: number): SpaceScreen | null {
+  const tx = Math.round(x)
+  const ty = Math.round(y)
+
+  for (const s of map.screens ?? []) {
+    if (tx >= s.x - 1 && tx < s.x + s.w + 1 && ty >= s.y && ty < s.y + s.h + SCREEN_REACH) return s
+  }
+
+  return null
+}
+
+/**
+ * How far in front of a screen the "watch this" prompt reaches, in tiles.
+ *
+ * Deep rather than tight, because a cinema is a room you watch from the *back* of. The prompt is
+ * an offer and costs nothing to ignore, so the failure worth avoiding is somebody sitting down to
+ * watch and finding no way to make it bigger.
+ */
+const SCREEN_REACH = 4
+
+/**
+ * The wormhole a position is standing in, or null.
  *
  * Rounded like every other question about where somebody is: a person's position is a float
- * because they slide between tiles, and a doorway you only triggered by landing on exactly
- * `12.0, 5.0` would be one you could walk straight through at any other speed.
+ * because they slide between tiles, and a doorway you only registered by landing on exactly
+ * `12.0, 5.0` would be one you could walk straight across without it ever offering.
+ *
+ * Standing in one no longer *takes* you through it — this answers "what would E do here", not
+ * "where are you going". See the stage's `checkPortal` for why that changed.
  *
  * First match wins. Two overlapping doorways is not something the editor can draw, and if one
  * ever appeared the answer should at least be the same for everybody.
@@ -613,7 +855,21 @@ function viewport(map: SpaceMap, cam: Camera) {
  *
  * `t` is seconds since the room opened, and is what makes water move.
  */
-export function drawMap(ctx: CanvasRenderingContext2D, map: SpaceMap, cam: Camera, theme: MapTheme, t = 0): void {
+export function drawMap(
+  ctx: CanvasRenderingContext2D,
+  map: SpaceMap,
+  cam: Camera,
+  theme: MapTheme,
+  t = 0,
+  /**
+   * The room's live picture, if anything is being shared — painted onto the map's screens.
+   *
+   * Passed in rather than reached for, because this module is framework-agnostic and knows
+   * nothing about calls. The stage keeps one hidden `<video>` fed by whichever share is on, and
+   * the editor passes nothing, so a screen shows its name there instead of a stale frame.
+   */
+  screen?: HTMLVideoElement | null,
+): void {
   const { x0, x1, y0, y1 } = viewport(map, cam)
 
   /*
@@ -676,7 +932,105 @@ export function drawMap(ctx: CanvasRenderingContext2D, map: SpaceMap, cam: Camer
   // Times Square still has to appear. What artwork suppresses is the scenery that is really tile
   // art standing up: walls and tree canopies, which are already painted into the picture.
   drawScenery(ctx, map, cam, t, placements)
+  // Before the zones and before every sprite: a screen is part of the room's surface, and people
+  // standing in front of one have to be drawn in front of it.
+  drawScreens(ctx, map, cam, theme, screen)
+  drawExhibits(ctx, map, cam, theme, TILE * cam.zoom)
   drawZones(ctx, map, cam, theme)
+}
+
+/**
+ * The screens, showing the live frame if there is one and a dark panel if there isn't.
+ *
+ * ## Drawing a video into a canvas
+ *
+ * `drawImage` takes an `HTMLVideoElement` and paints its *current frame*, which is the whole
+ * trick: the element never has to be in the document or visible, it only has to be playing. So
+ * the room paints the share at whatever rate it is already painting itself, and there is no
+ * second video pipeline, no extra decode, and nothing to keep in sync — the frame on the cinema
+ * screen is the frame the element is on.
+ *
+ * Fitted rather than stretched. A share is whatever shape somebody's monitor is and a screen is
+ * whatever shape the map's author drew, so filling the rectangle would distort every share that
+ * wasn't cut to it. Letterboxed inside the rectangle instead, over black, which is what a cinema
+ * does with the wrong aspect anyway.
+ *
+ * ## Why a rectangle and not the projected quad
+ *
+ * Under `iso` a map tile is a diamond, and a screen drawn as one would be a parallelogram — which
+ * is *correct* for something lying on the floor and wrong for something standing up. A screen is
+ * vertical: it faces the viewer. So it is drawn axis-aligned in the box its corners span, which
+ * is the same thing `drawTallTile` does for a wall and for the same reason.
+ */
+function drawScreens(
+  ctx: CanvasRenderingContext2D,
+  map: SpaceMap,
+  cam: Camera,
+  theme: MapTheme,
+  video?: HTMLVideoElement | null,
+): void {
+  const screens = map.screens ?? []
+  if (!screens.length) return
+
+  // A video with no dimensions yet has nothing to paint — it is still negotiating, and asking
+  // `drawImage` for a frame it hasn't got throws on some engines rather than drawing nothing.
+  const live = video && video.readyState >= 2 && video.videoWidth > 0 ? video : null
+
+  for (const s of screens) {
+    const a = toScreen(cam, s.x - 0.5, s.y - 0.5)
+    const b = toScreen(cam, s.x + s.w - 0.5, s.y + s.h - 0.5)
+
+    const left = Math.min(a.x, b.x)
+    const top = Math.min(a.y, b.y)
+    const width = Math.abs(b.x - a.x)
+    const height = Math.abs(b.y - a.y)
+
+    if (width < 2 || height < 2) continue
+
+    /*
+     * The shear that lays the picture onto isometric artwork — see SpaceScreen.skew.
+     *
+     * Measured by projecting the same tile twice rather than multiplying by a tile size, so it
+     * follows the camera's zoom and would follow the projection too if a sheared screen were ever
+     * placed on an iso map.
+     */
+    const rise = s.skew
+      ? toScreen(cam, s.x, s.y + s.skew).y - toScreen(cam, s.x, s.y).y
+      : 0
+
+    ctx.save()
+    ctx.translate(left, top)
+    // A vertical shear about the left edge: every pixel across shifts down by `rise / width`.
+    if (rise) ctx.transform(1, rise / width, 0, 1, 0, 0)
+
+    // The screen itself, always: a cinema screen with nothing on it is black, not a hole.
+    ctx.fillStyle = 'rgb(6 6 12)'
+    ctx.fillRect(0, 0, width, height)
+
+    if (live) {
+      // Letterbox: the largest rectangle of the share's own shape that fits.
+      const scale = Math.min(width / live.videoWidth, height / live.videoHeight)
+      const w = live.videoWidth * scale
+      const h = live.videoHeight * scale
+
+      ctx.drawImage(live, (width - w) / 2, (height - h) / 2, w, h)
+    }
+    else {
+      // Nothing playing. Named, so a screen somebody placed is visibly a screen rather than a
+      // black rectangle they will assume is broken.
+      ctx.fillStyle = theme.muted
+      ctx.font = `500 ${Math.max(9, Math.min(height * 0.3, width * 0.09))}px system-ui, sans-serif`
+      ctx.textAlign = 'center'
+      ctx.textBaseline = 'middle'
+      ctx.fillText(s.name, width / 2, height / 2, width - 8)
+    }
+
+    // A faint frame, so the screen reads as mounted rather than as a hole cut in the artwork.
+    ctx.strokeStyle = 'rgb(148 163 184 / 0.35)'
+    ctx.lineWidth = 1.5
+    ctx.strokeRect(0, 0, width, height)
+    ctx.restore()
+  }
 }
 
 /**
@@ -860,21 +1214,39 @@ function drawZones(ctx: CanvasRenderingContext2D, map: SpaceMap, cam: Camera, th
 }
 
 /**
- * Doorways, as a lit panel with their name on it.
+ * Doorways, as wormholes: a dark eye on the floor with light turning around it.
  *
- * Deliberately unlike a zone: a zone's dashed outline says "a boundary that does something to
- * sound", and a doorway is a *thing you step on that moves you*. Confusing the two is the
- * difference between walking into a meeting room and being teleported out of the city, so it gets
- * its own look — a solid tint, a bright edge and a pulse, which is the visual language of "this
- * is active" everywhere else.
+ * ## Why a vortex rather than a marked-out rectangle
+ *
+ * It used to be a tinted panel with a bright edge, which is the same visual language as a zone —
+ * and a zone and a doorway are the two things in this room that must never be confused. One
+ * changes who can hear you; the other picks you up and puts you somewhere else. A rectangle on
+ * the floor is a *boundary*, and every boundary in this map means the first thing.
+ *
+ * A vortex isn't a boundary at all. It is an object with a middle, it is obviously not floor,
+ * and it says "something happens here" without having to be read. The name still sits above it,
+ * because which doorway this is remains a question only words can answer.
+ *
+ * ## How it is drawn
+ *
+ * The portal's footprint is projected first and the vortex is fitted *inside* that quad, which is
+ * what keeps it honest under both projections: flat, the quad is a rectangle and the eye is a
+ * circle; iso, the quad is a diamond and the same maths yields the squashed ellipse you would
+ * expect to be looking at from that angle. Nothing here special-cases the projection — the only
+ * input is where the four corners landed.
+ *
+ * The turning is three arcs at different radii and different speeds, two one way and one the
+ * other. That counter-rotation is most of the effect: rings all turning together read as a
+ * spinning plate, and rings turning against each other read as depth.
  */
 function drawPortals(ctx: CanvasRenderingContext2D, map: SpaceMap, cam: Camera, theme: MapTheme, size: number): void {
   const portals = map.portals ?? []
   if (!portals.length) return
 
-  // A slow breath rather than a flash. It has to read as alive from the corner of your eye while
-  // you are doing something else, and not compete with anything for attention while you aren't.
-  const pulse = 0.5 + 0.5 * Math.sin(performance.now() / 620)
+  const now = performance.now()
+  // A slow breath under the spin. It has to read as alive from the corner of your eye while you
+  // are doing something else, and not compete for attention while you aren't.
+  const pulse = 0.5 + 0.5 * Math.sin(now / 620)
 
   for (const portal of portals) {
     const corners = [
@@ -884,16 +1256,75 @@ function drawPortals(ctx: CanvasRenderingContext2D, map: SpaceMap, cam: Camera, 
       toScreen(cam, portal.x - 0.5, portal.y + portal.h - 0.5),
     ]
 
-    ctx.beginPath()
-    ctx.moveTo(corners[0]!.x, corners[0]!.y)
-    for (const c of corners.slice(1)) ctx.lineTo(c.x, c.y)
-    ctx.closePath()
+    // The middle of the footprint, and the two half-axes of the ellipse that fits it. Measured
+    // from the projected corners rather than computed from w/h, so the iso diamond comes out as
+    // a squashed ellipse for free.
+    const cx = (corners[0]!.x + corners[2]!.x) / 2
+    const cy = (corners[0]!.y + corners[2]!.y) / 2
+    const rx = Math.max(6, Math.abs(corners[1]!.x - corners[3]!.x) / 2)
+    const ry = Math.max(4, Math.abs(corners[2]!.y - corners[0]!.y) / 2)
 
-    ctx.fillStyle = `rgb(56 189 248 / ${0.18 + pulse * 0.14})`
+    ctx.save()
+    ctx.translate(cx, cy)
+    // Everything below is drawn as a circle of radius 1 and squashed into place here, which is
+    // the only way arcs stay arcs: stroking an ellipse directly means every radius needs its own
+    // trigonometry, and the line width would stretch with it.
+    ctx.scale(rx, ry)
+
+    /*
+     * The eye. Dark in the middle going to bright at the rim — the opposite of a light on the
+     * floor, and the reason it reads as a hole rather than as a glowing tile.
+     */
+    const eye = ctx.createRadialGradient(0, 0, 0, 0, 0, 1)
+    eye.addColorStop(0, 'rgb(9 9 34 / 0.92)')
+    eye.addColorStop(0.55, `rgb(76 29 149 / ${0.55 + pulse * 0.15})`)
+    eye.addColorStop(0.85, `rgb(56 189 248 / ${0.34 + pulse * 0.18})`)
+    eye.addColorStop(1, 'rgb(56 189 248 / 0)')
+
+    ctx.beginPath()
+    ctx.arc(0, 0, 1, 0, Math.PI * 2)
+    ctx.fillStyle = eye
     ctx.fill()
-    ctx.strokeStyle = `rgb(125 211 252 / ${0.55 + pulse * 0.35})`
-    ctx.lineWidth = 2
+
+    /*
+     * Three turning arcs. Radius, speed, direction, and how much of the circle each one covers.
+     *
+     * The middle one runs backwards, which is what makes the thing look like it has depth rather
+     * than like a spinning plate. Line widths are divided by the scale so a ring on a wide portal
+     * isn't drawn fatter than one on a narrow portal — `scale` multiplies stroke width too.
+     */
+    const rings: Array<[r: number, speed: number, arc: number, alpha: number]> = [
+      [0.88, 1 / 900, 1.5, 0.85],
+      [0.62, -1 / 640, 1.1, 0.7],
+      [0.36, 1 / 420, 0.8, 0.55],
+    ]
+
+    for (const [r, speed, arc, alpha] of rings) {
+      const from = now * speed
+      const scale = Math.max(rx, ry)
+
+      ctx.beginPath()
+      ctx.arc(0, 0, r, from, from + arc)
+      ctx.strokeStyle = `rgb(165 243 252 / ${alpha * (0.6 + pulse * 0.4)})`
+      ctx.lineWidth = 2.2 / scale
+      ctx.lineCap = 'round'
+      ctx.stroke()
+
+      // The same arc opposite, so each ring reads as a ring rather than as a comet.
+      ctx.beginPath()
+      ctx.arc(0, 0, r, from + Math.PI, from + Math.PI + arc * 0.6)
+      ctx.strokeStyle = `rgb(196 181 253 / ${alpha * 0.5 * (0.6 + pulse * 0.4)})`
+      ctx.stroke()
+    }
+
+    // The rim, which is what gives the hole an edge to stand at.
+    ctx.beginPath()
+    ctx.arc(0, 0, 1, 0, Math.PI * 2)
+    ctx.strokeStyle = `rgb(125 211 252 / ${0.4 + pulse * 0.35})`
+    ctx.lineWidth = 1.6 / Math.max(rx, ry)
     ctx.stroke()
+
+    ctx.restore()
 
     const middle = toScreen(cam, portal.x + (portal.w - 1) / 2, portal.y - 0.5)
 
@@ -902,6 +1333,75 @@ function drawPortals(ctx: CanvasRenderingContext2D, map: SpaceMap, cam: Camera, 
     ctx.textAlign = 'center'
     ctx.textBaseline = 'top'
     ctx.fillText(portal.name, middle.x, middle.y + 4, portal.w * size - 6)
+  }
+}
+
+/**
+ * The frames — as a hint that there is something here, never as the artwork itself.
+ *
+ * Deliberately almost invisible. On a drawn map the painting is *already there*, in far better
+ * detail than anything drawn over it, so painting the uploaded image onto the wall would cover
+ * hand-drawn art with a stretched photograph. What the room needs is only the affordance: a
+ * corner mark saying this one opens.
+ *
+ * An empty frame is drawn differently — dashed and named — because an empty frame is a job
+ * somebody has not finished, and it should look like one to whoever is standing in the gallery
+ * deciding what to hang next.
+ */
+function drawExhibits(
+  ctx: CanvasRenderingContext2D,
+  map: SpaceMap,
+  cam: Camera,
+  theme: MapTheme,
+  size: number,
+): void {
+  const frames = map.exhibits ?? []
+  if (!frames.length) return
+
+  for (const f of frames) {
+    const a = toScreen(cam, f.x - 0.5, f.y - 0.5)
+    const b = toScreen(cam, f.x + f.w - 0.5, f.y + f.h - 0.5)
+
+    const left = Math.min(a.x, b.x)
+    const top = Math.min(a.y, b.y)
+    const width = Math.abs(b.x - a.x)
+    const height = Math.abs(b.y - a.y)
+
+    if (width < 2 || height < 2) continue
+
+    const hung = (map.exhibit_pieces ?? []).some(p => p.exhibit_id === f.id)
+
+    if (!hung) {
+      // Waiting for a picture. Said out loud, because nobody but the person curating can tell an
+      // empty frame from a painting the map simply hasn't got a rectangle over.
+      ctx.save()
+      ctx.setLineDash([4, 3])
+      ctx.strokeStyle = 'rgb(148 163 184 / 0.5)'
+      ctx.lineWidth = 1.5
+      ctx.strokeRect(left, top, width, height)
+      ctx.setLineDash([])
+      ctx.fillStyle = theme.muted
+      ctx.font = `500 ${Math.max(8, Math.min(height * 0.3, width * 0.16))}px system-ui, sans-serif`
+      ctx.textAlign = 'center'
+      ctx.textBaseline = 'middle'
+      ctx.fillText(f.name, left + width / 2, top + height / 2, width - 4)
+      ctx.restore()
+
+      continue
+    }
+
+    // Hung: a small mark in the corner and nothing across the art itself.
+    const mark = Math.max(3, Math.min(size * 0.18, 9))
+
+    ctx.save()
+    ctx.fillStyle = 'rgb(250 204 21 / 0.85)'
+    ctx.beginPath()
+    ctx.moveTo(left + width - mark, top)
+    ctx.lineTo(left + width, top)
+    ctx.lineTo(left + width, top + mark)
+    ctx.closePath()
+    ctx.fill()
+    ctx.restore()
   }
 }
 

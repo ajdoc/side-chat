@@ -31,6 +31,8 @@ class VoiceParticipantResource extends JsonResource
             'x' => $this->x,
             'y' => $this->y,
             'facing' => $this->facing,
+            // Which room of the building they were in. Null reads as the way in.
+            'space_map' => $this->space_map,
             'joined_at' => $this->created_at,
         ];
     }

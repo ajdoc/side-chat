@@ -138,6 +138,19 @@ final class Decorations
             'bench' => self::kind('Bench', w: 2),
             'chair' => self::kind('Office chair', solid: false),
             'stool' => self::kind('Stool', solid: false),
+            /*
+             * A seat with nothing drawn on it — for sitting on furniture that is part of the
+             * picture rather than standing on it.
+             *
+             * A backdrop map is one piece of artwork over a grid of pure collision, so a cinema's
+             * seats are *painted*: there is nothing in this catalogue to place on them, and
+             * placing a chair would stand a sixteen-pixel sprite on top of a drawn one. This is
+             * the missing half — it occupies a tile, it can be sat on, and it draws nothing.
+             *
+             * Not solid, like the chair and the stool it stands in for: you walk onto a seat and
+             * then sit, rather than standing beside it.
+             */
+            'seat' => self::kind('Seat (invisible)', solid: false),
             // Walk-on-able like the other single seats. Two tiles square, so that a person
             // sitting on it doesn't cover the thing they're sitting on — whether you can *sit*
             // on it at all is the browser's business, see the note on `seat` in lib/spaceDecor.ts.

@@ -114,8 +114,61 @@ async function copy() {
   }
 }
 
+/**
+ * The bot action waiting on a yes, if any.
+ *
+ * One ref for all three rather than three, because they are the same shape — pick a bot, ask,
+ * then run — and the wording is the only thing that differs. {@link pendingCopy} holds that.
+ */
+const pending = ref<{ kind: 'token' | 'secret' | 'destroy', bot: Bot } | null>(null)
+
+/** What the question and its button say, per action. */
+const pendingCopy = computed(() => {
+  const p = pending.value
+  if (!p) return null
+
+  const who = p.bot.user.name
+
+  if (p.kind === 'token') {
+    return {
+      title: `Rotate ${who}'s API token?`,
+      description: 'The current token stops working immediately. Anything still using it will start failing until it is updated.',
+      confirm: 'Rotate token',
+      busy: 'Rotating…',
+    }
+  }
+
+  if (p.kind === 'secret') {
+    return {
+      title: `Rotate ${who}'s signing secret?`,
+      description: `Deliveries will fail their signature check until ${who} is updated with the new secret.`,
+      confirm: 'Rotate secret',
+      busy: 'Rotating…',
+    }
+  }
+
+  return {
+    title: `Remove ${who}?`,
+    description: 'Its token stops working and it leaves the server. What it has already posted stays where it is.',
+    confirm: 'Remove bot',
+    busy: 'Removing…',
+  }
+})
+
+/** Run whichever action was confirmed. The dialog closes first — each handler reports its own errors. */
+function runPending() {
+  const p = pending.value
+  if (!p) return
+
+  pending.value = null
+
+  if (p.kind === 'token') return void rotateToken(p.bot)
+  if (p.kind === 'secret') return void rotateSecret(p.bot)
+
+  void destroy(p.bot)
+}
+
 async function rotateToken(bot: Bot) {
-  if (!confirm(`Rotate ${bot.user.name}'s API token? The current one stops working immediately.`)) return
   working.value = bot.id
   try {
     const res = await api<{ data: { token: string } }>(`/api/servers/${props.server.id}/bots/${bot.id}/token`, { method: 'POST' })
@@ -130,7 +183,6 @@ async function rotateToken(bot: Bot) {
 }
 
 async function rotateSecret(bot: Bot) {
-  if (!confirm(`Rotate ${bot.user.name}'s signing secret? Deliveries will fail until the bot is updated.`)) return
   working.value = bot.id
   try {
     const res = await api<{ data: { webhook_secret: string } }>(`/api/servers/${props.server.id}/bots/${bot.id}/webhook-secret`, { method: 'POST' })
@@ -216,7 +268,6 @@ async function setAutomationBot(bot: Bot) {
 }
 
 async function destroy(bot: Bot) {
-  if (!confirm(`Remove ${bot.user.name}? Its token stops working. What it has already posted stays.`)) return
   working.value = bot.id
   try {
     await api(`/api/servers/${props.server.id}/bots/${bot.id}`, { method: 'DELETE' })
@@ -232,6 +283,16 @@ async function destroy(bot: Bot) {
 </script>
 
 <template>
+  <ConfirmDialog
+    :open="!!pending"
+    :title="pendingCopy?.title ?? ''"
+    :description="pendingCopy?.description"
+    :confirm-label="pendingCopy?.confirm"
+    :busy-label="pendingCopy?.busy"
+    @update:open="pending = $event ? pending : null"
+    @confirm="runPending"
+  />
+
   <div class="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4" @click.self="emit('close')">
     <div class="flex max-h-[85vh] w-full max-w-lg flex-col rounded-xl border bg-background p-4 shadow-lg">
       <div class="mb-1 flex items-center justify-between">
@@ -287,7 +348,7 @@ async function destroy(bot: Bot) {
               @keydown.enter="($event.target as HTMLInputElement).blur()"
             >
             <Loader2 v-if="working === bot.id" class="h-3.5 w-3.5 animate-spin text-muted-foreground" />
-            <button class="text-muted-foreground hover:text-destructive" :aria-label="`Remove ${bot.user.name}`" @click="destroy(bot)">
+            <button class="text-muted-foreground hover:text-destructive" :aria-label="`Remove ${bot.user.name}`" @click="pending = { kind: 'destroy', bot }">
               <Trash2 class="h-3.5 w-3.5" />
             </button>
           </div>
@@ -331,10 +392,10 @@ async function destroy(bot: Bot) {
           </label>
 
           <div class="mt-2 flex flex-wrap gap-2">
-            <Button size="sm" variant="ghost" :disabled="working === bot.id" @click="rotateToken(bot)">
+            <Button size="sm" variant="ghost" :disabled="working === bot.id" @click="pending = { kind: 'token', bot }">
               <RefreshCw class="mr-1 h-3.5 w-3.5" /> New token
             </Button>
-            <Button v-if="bot.webhook_url" size="sm" variant="ghost" :disabled="working === bot.id" @click="rotateSecret(bot)">
+            <Button v-if="bot.webhook_url" size="sm" variant="ghost" :disabled="working === bot.id" @click="pending = { kind: 'secret', bot }">
               <RefreshCw class="mr-1 h-3.5 w-3.5" /> New signing secret
             </Button>
           </div>

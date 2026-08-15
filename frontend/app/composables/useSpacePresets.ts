@@ -1,6 +1,6 @@
 import type { BackdropPlacement } from '~/lib/spaceBackdrops'
 import type { SpaceObject } from '~/lib/spaceDecor'
-import type { SpaceZone } from '~/lib/spaceMapEngine'
+import type { SpacePortal, SpaceScreen, SpaceZone } from '~/lib/spaceMapEngine'
 
 /**
  * A room you can build a Side Space as — a complete map, minus the ids a saved one has.
@@ -20,6 +20,10 @@ export interface MapPreset {
   tiles: string[]
   /** The artwork it's drawn with and where, or empty for a room drawn from its tiles. */
   backdrops: BackdropPlacement[]
+  /** Its doorways, if it has any — a preset can be a room with a way out built in. */
+  portals?: SpacePortal[]
+  /** Where whatever the room is watching gets painted — a cinema screen, a monitor wall. */
+  screens?: SpaceScreen[]
   zones: SpaceZone[]
   objects: SpaceObject[]
   spawn: { x: number, y: number }

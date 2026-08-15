@@ -94,11 +94,63 @@ class UpdateSideSpaceMapRequest extends MemberRequest
             'portals.*.y' => ['required', 'integer', 'min:0'],
             'portals.*.w' => ['required', 'integer', 'min:1'],
             'portals.*.h' => ['required', 'integer', 'min:1'],
-            // `point` goes somewhere else on this map; `room` goes to another Side Space.
-            'portals.*.to.kind' => ['required', 'string', 'in:point,room'],
+            /*
+             * Where the doorway goes. Three kinds, in order of how far they take you:
+             *
+             *  - `point` — somewhere else on this same map.
+             *  - `map`   — one of this channel's other maps: an interior. You do not leave the
+             *              channel, the call, or the presence channel; only the geometry under
+             *              your feet changes. This is the doorway kind.
+             *  - `room`  — another Side Space entirely, which is a *journey*: the call is torn
+             *              down and rebuilt at the other end.
+             */
+            // Walked into, or pressed. See SideSpaceMap::ACTIVATIONS — absent means walked into,
+            // which is what every doorway built before this existed did.
+            'portals.*.activation' => ['sometimes', 'nullable', 'string', Rule::in(SideSpaceMap::ACTIVATIONS)],
+            'portals.*.to.kind' => ['required', 'string', 'in:point,room,map'],
             'portals.*.to.x' => ['sometimes', 'nullable', 'integer', 'min:0'],
             'portals.*.to.y' => ['sometimes', 'nullable', 'integer', 'min:0'],
             'portals.*.to.channel_id' => ['required_if:portals.*.to.kind,room', 'nullable', 'integer'],
+            // The sibling's slug, not its id — see the migration for why maps are pointed at by
+            // name. Existence is checked in after(), where the channel is in hand.
+            'portals.*.to.map' => ['required_if:portals.*.to.kind,map', 'nullable', 'string', 'max:40'],
+
+            /*
+             * Surfaces that show whatever the room is watching — a cinema screen, a monitor wall.
+             *
+             * Geometry only. Nothing about the *source* is stored, because the source is the call
+             * and the call already knows: this says where to paint, and every browser answers
+             * "paint what?" from the screen share it is already receiving.
+             *
+             * `sometimes`, like artwork and doorways: a client that has never heard of screens
+             * saves a map without them and that map simply has none.
+             */
+            'screens' => ['sometimes', 'nullable', 'array', 'max:'.SideSpaceMap::MAX_SCREENS],
+            'screens.*.id' => ['required', 'string', 'max:40'],
+            'screens.*.name' => ['required', 'string', 'max:60'],
+            'screens.*.x' => ['required', 'integer', 'min:0'],
+            'screens.*.y' => ['required', 'integer', 'min:0'],
+            'screens.*.w' => ['required', 'integer', 'min:1'],
+            'screens.*.h' => ['required', 'integer', 'min:1'],
+            // How far the right edge is raised above the left, in tiles — the shear that lays a
+            // picture onto isometric artwork. Absent is zero, a plain rectangle. See SpaceScreen.
+            'screens.*.skew' => ['sometimes', 'nullable', 'integer', 'min:-'.SideSpaceMap::MAX_SIZE, 'max:'.SideSpaceMap::MAX_SIZE],
+
+            /*
+             * Frames: rectangles you walk up to and open.
+             *
+             * Geometry only — the picture inside one is a file and a wall label, and lives in its
+             * own table where only staff may put it. See the exhibits migration for why the two
+             * are split, and note what it means here: a member rearranging a gallery moves the
+             * frames and cannot touch, repoint or replace what is in them.
+             */
+            'exhibits' => ['sometimes', 'nullable', 'array', 'max:'.SideSpaceMap::MAX_EXHIBITS],
+            'exhibits.*.id' => ['required', 'string', 'max:40'],
+            'exhibits.*.name' => ['required', 'string', 'max:60'],
+            'exhibits.*.x' => ['required', 'integer', 'min:0'],
+            'exhibits.*.y' => ['required', 'integer', 'min:0'],
+            'exhibits.*.w' => ['required', 'integer', 'min:1'],
+            'exhibits.*.h' => ['required', 'integer', 'min:1'],
 
             'zones' => ['present', 'array', 'max:50'],
             'zones.*.id' => ['required', 'string', 'max:40'],
@@ -144,6 +196,8 @@ class UpdateSideSpaceMapRequest extends MemberRequest
             fn (Validator $validator) => $this->validateZones($validator),
             fn (Validator $validator) => $this->validateSpawn($validator),
             fn (Validator $validator) => $this->validatePortals($validator),
+            fn (Validator $validator) => $this->validateScreens($validator),
+            fn (Validator $validator) => $this->validateExhibits($validator),
         ];
     }
 
@@ -303,6 +357,12 @@ class UpdateSideSpaceMapRequest extends MemberRequest
                 continue;
             }
 
+            if (($to['kind'] ?? null) === 'map') {
+                $this->validateInteriorExit($validator, $i, $portal, (string) ($to['map'] ?? ''), $to);
+
+                continue;
+            }
+
             $target = Channel::find($to['channel_id'] ?? 0);
 
             if (! $target || ! $target->isSpace()) {
@@ -317,6 +377,122 @@ class UpdateSideSpaceMapRequest extends MemberRequest
 
             if (! $here instanceof Channel || $target->server_id !== $here->server_id) {
                 $validator->errors()->add("portals.$i.to", "The doorway \"{$portal['name']}\" leads outside this server.");
+            }
+        }
+    }
+
+    /**
+     * A doorway into one of this channel's own maps: the interior has to exist, and the spot you
+     * come out at has to be somewhere you can stand *on that map*.
+     *
+     * The far side is checked against the map as **stored**, not against this payload — it is a
+     * different grid, saved by a different request. Which means an interior can be rebuilt after
+     * the door into it was hung, and the door left pointing at a tile that has since become a
+     * wall. That is deliberately not this request's problem to prevent: refusing to save an
+     * interior because some other map has a door into it would make the room you are editing
+     * un-editable for reasons off screen. The walk handles it instead, by falling back to the
+     * interior's own spawn — see the controller's door check.
+     *
+     * @param  array<string, mixed>  $portal
+     * @param  array<string, mixed>  $to
+     */
+    private function validateInteriorExit(Validator $validator, int|string $i, array $portal, string $slug, array $to): void
+    {
+        $here = $this->route('channel');
+
+        $target = $here instanceof Channel
+            ? $here->spaceMaps()->where('slug', $slug)->first()
+            : null;
+
+        if (! $target) {
+            $validator->errors()->add("portals.$i.to", "The doorway \"{$portal['name']}\" leads to a room that doesn't exist here.");
+
+            return;
+        }
+
+        // A door into the map you are standing on is a `point`, and saying so as a `map` would
+        // reload the geometry you are already on — a black frame in place of a step sideways.
+        if ($slug === $this->routeMapSlug()) {
+            $validator->errors()->add("portals.$i.to", "The doorway \"{$portal['name']}\" leads back into the room it's in.");
+
+            return;
+        }
+
+        // No exit named means "put me at that map's entrance", which is always somewhere you can
+        // stand — the interior's own save proved it.
+        if (($to['x'] ?? null) === null || ($to['y'] ?? null) === null) {
+            return;
+        }
+
+        if (! $target->isWalkable((int) $to['x'], (int) $to['y'])) {
+            $validator->errors()->add("portals.$i.to", "The doorway \"{$portal['name']}\" comes out somewhere nobody can stand in \"{$target->name}\".");
+        }
+    }
+
+    /** Which of the channel's maps this request is saving. Absent means the way in. */
+    private function routeMapSlug(): string
+    {
+        return (string) $this->query('map', SideSpaceMap::MAIN);
+    }
+
+    /**
+     * A screen has to fit on the map, and no two may share an id.
+     *
+     * Deliberately *not* checked for standability, unlike a zone or a doorway. A screen is
+     * something you look at, and the whole point of hanging one is that it is somewhere you
+     * cannot walk — up a wall, over a stage, across the back of a room. Requiring somewhere to
+     * stand in it would refuse every sensible placement and accept only the nonsense ones.
+     */
+    private function validateScreens(Validator $validator): void
+    {
+        if ($validator->errors()->isNotEmpty()) {
+            return;
+        }
+
+        $width = (int) $this->input('width');
+        $height = (int) $this->input('height');
+        $seen = [];
+
+        foreach ((array) $this->input('screens', []) as $i => $screen) {
+            if (in_array($screen['id'], $seen, true)) {
+                $validator->errors()->add("screens.$i.id", 'Two screens share an id.');
+            }
+            $seen[] = $screen['id'];
+
+            if ($width < $screen['x'] + $screen['w'] || $height < $screen['y'] + $screen['h']) {
+                $validator->errors()->add("screens.$i", "The screen \"{$screen['name']}\" runs off the map.");
+            }
+        }
+    }
+
+    /**
+     * A frame has to fit on the map, and no two may share an id.
+     *
+     * Not checked for standability, for the same reason a screen isn't: a painting hangs on a
+     * wall, and a frame you had to be able to stand *inside* would be one nobody could hang.
+     *
+     * The id check earns its place twice over here. Elsewhere a duplicate id is a confusing map;
+     * for an exhibit it is two frames sharing one picture, because the picture is stored against
+     * the id — so the second frame somebody drew would silently show the first one's painting.
+     */
+    private function validateExhibits(Validator $validator): void
+    {
+        if ($validator->errors()->isNotEmpty()) {
+            return;
+        }
+
+        $width = (int) $this->input('width');
+        $height = (int) $this->input('height');
+        $seen = [];
+
+        foreach ((array) $this->input('exhibits', []) as $i => $exhibit) {
+            if (in_array($exhibit['id'], $seen, true)) {
+                $validator->errors()->add("exhibits.$i.id", 'Two frames share an id, so they would share a picture.');
+            }
+            $seen[] = $exhibit['id'];
+
+            if ($width < $exhibit['x'] + $exhibit['w'] || $height < $exhibit['y'] + $exhibit['h']) {
+                $validator->errors()->add("exhibits.$i", "The frame \"{$exhibit['name']}\" runs off the map.");
             }
         }
     }

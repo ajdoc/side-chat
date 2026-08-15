@@ -1,11 +1,11 @@
 <script setup lang="ts">
 import {
-  DoorOpen, Eraser, LayoutGrid, LayoutTemplate, Loader2, MousePointer2, RotateCcw, RotateCw, Sofa,
-  Megaphone, SquareDashed, Trash2, Undo2, Unlink, X, ZoomIn, ZoomOut,
+  DoorOpen, Eraser, Frame, LayoutGrid, LayoutTemplate, Loader2, MonitorPlay, MousePointer2,
+  RotateCcw, RotateCw, Sofa, Megaphone, SquareDashed, Trash2, Undo2, Unlink, X, ZoomIn, ZoomOut,
 } from 'lucide-vue-next'
 import type { BackdropPlacement } from '~/lib/spaceBackdrops'
 import { BACKDROPS } from '~/lib/spaceBackdrops'
-import type { Camera, MapTheme, Projection, SpaceMap, SpacePortal, SpaceZone } from '~/lib/spaceMapEngine'
+import type { Camera, MapTheme, PortalActivation, Projection, SpaceExhibit, SpaceMap, SpacePortal, SpaceScreen, SpaceZone } from '~/lib/spaceMapEngine'
 import type { DecorFacing, SpaceObject } from '~/lib/spaceDecor'
 import type { MapPreset } from '~/composables/useSpacePresets'
 import {
@@ -20,7 +20,10 @@ import {
   growToFit,
   FLOOR,
   isWalkable,
+  MAIN_MAP,
+  MAX_EXHIBITS,
   MAX_MAP,
+  MAX_SCREENS,
   MIN_MAP,
   repairConnectivity,
   resizeTiles,
@@ -76,13 +79,27 @@ import { Label } from '~/components/ui/label'
 const props = withDefaults(defineProps<{ channelId: number, map: SpaceMap, mode?: 'full' | 'decor' }>(), {
   mode: 'full',
 })
-const emit = defineEmits<{ close: [], saved: [] }>()
+/**
+ * `open` is the editor asking to be pointed at a different map of this same Side Space.
+ *
+ * Emitted rather than done here, because opening a map is not an editing act — it moves the
+ * avatar of whoever pressed it into that room. The stage owns where people are standing, so it
+ * owns this; the editor is simply the place the request is made from.
+ */
+const emit = defineEmits<{ close: [], saved: [], open: [slug: string], 'rooms-changed': [] }>()
 
-const { save, saveObjects } = useSpaceMap(props.channelId)
+/*
+ * Addressed at the room being edited, not at the channel's way in.
+ *
+ * A Side Space holds several maps and every write below is scoped to one of them by slug. This
+ * instance exists only to save through — the map on screen was handed in as a prop — so the one
+ * thing it must get right is *which* room it is writing to.
+ */
+const { save, saveObjects, createMap, deleteMap, hangExhibit, unhangExhibit } = useSpaceMap(props.channelId, props.map.slug)
 
 const isDecorMode = computed(() => props.mode === 'decor')
 
-type Tool = 'select' | 'tile' | 'decor' | 'spawn' | 'zone' | 'stage' | 'place' | 'portal' | 'erase-zone' | 'erase-decor' | 'erase-tile'
+type Tool = 'select' | 'tile' | 'decor' | 'spawn' | 'zone' | 'stage' | 'place' | 'portal' | 'screen' | 'art' | 'erase-zone' | 'erase-decor' | 'erase-tile'
 
 /** The full toolbox. In decorate mode only the furniture tools survive — see {@link TOOLS}. */
 const ALL_TOOLS: { id: Tool, label: string, icon: any, hint: string, decor?: boolean }[] = [
@@ -99,7 +116,12 @@ const ALL_TOOLS: { id: Tool, label: string, icon: any, hint: string, decor?: boo
   { id: 'place', label: 'Place a layout', icon: LayoutGrid, hint: 'Drag anywhere, even off the edge — the map grows to fit and the layout drops in' },
   // Beside the rectangles it is drawn like, not beside the furniture: you drag a doorway out, you
   // don't stand one up.
-  { id: 'portal', label: 'Doorway', icon: DoorOpen, hint: 'Drag out a doorway — walk into it and you come out somewhere else' },
+  { id: 'portal', label: 'Doorway', icon: DoorOpen, hint: 'Drag out a wormhole — stand in it and press E to come out somewhere else' },
+  // Next to the doorway rather than with the furniture, because like a doorway it is an *area*
+  // of the map rather than a thing standing in one — see the migration that added screens.
+  { id: 'screen', label: 'Screen', icon: MonitorPlay, hint: 'Drag out a surface that shows whatever the room is watching' },
+  // Next to the screen: both are things across the room that you look at rather than walk on.
+  { id: 'art', label: 'Artwork', icon: Frame, hint: 'Drag a frame over a painting or statue, then hang a picture in it' },
   // Taking the ground away is its own tool rather than only the last swatch in the Ground row.
   // It was reachable there — "Nothing" paints the void — but a transparent square at the end of
   // twelve coloured ones is not where anybody looks for an eraser, and rubbing a wall out is a
@@ -164,6 +186,26 @@ const backdrops = ref<BackdropPlacement[]>((props.map.backdrops ?? []).map(b => 
 const portals = ref<SpacePortal[]>((props.map.portals ?? []).map(p => ({ ...p, to: { ...p.to } })))
 
 /**
+ * The surfaces that show whatever the room is watching.
+ *
+ * Held here like every other part of the map, and — importantly — listed in {@link draft} below.
+ * A new map field that the editor can change but doesn't send is the exact bug that cost this
+ * file three separate regressions; see the note on `save` in useSpaceMap.
+ */
+const screens = ref<SpaceScreen[]>((props.map.screens ?? []).map(s => ({ ...s })))
+const selectedScreen = ref<string | null>(null)
+
+/**
+ * The frames — rectangles over the artwork a drawn room already paints.
+ *
+ * Geometry only, and part of the draft like everything else here. What *hangs* in one is a file
+ * and a wall label, uploaded through its own endpoint and owned by the server: it is not in this
+ * draft, is not touched by Save, and is read straight off the prop.
+ */
+const exhibits = ref<SpaceExhibit[]>((props.map.exhibits ?? []).map(e => ({ ...e })))
+const selectedExhibit = ref<string | null>(null)
+
+/**
  * The other Side Spaces in this server — the places a doorway can lead to.
  *
  * Taken from the sidebar's own channel list rather than fetched, because it is already loaded and
@@ -183,10 +225,42 @@ const selectedPortal = ref<string | null>(null)
 /**
  * Where a *new* doorway will lead. Chosen before you drag one out, like the room style is.
  *
- * `''` means somewhere on this map, and the exit is then picked by clicking; anything else is a
- * channel id — another Side Space in this server.
+ * A tagged string rather than a bare id, because there are now three kinds of destination and
+ * two of them are identified by different things:
+ *
+ *   - `''`          — somewhere on this map. The exit is picked by clicking, afterwards.
+ *   - `map:<slug>`  — one of this Side Space's own interiors. You stay in the channel and the
+ *                     call; only the grid changes.
+ *   - `room:<id>`   — another Side Space in this server. A journey, and a fresh call.
+ *
+ * Tagged so the two never collide: a channel id and a map slug are different namespaces, and a
+ * picker whose value was sometimes a number and sometimes a name is one bad `Number()` away from
+ * building a doorway into channel `NaN`.
  */
 const portalTo = ref('')
+
+/** The name for the room a "A new room…" doorway is about to make. */
+const newDoorMapName = ref('')
+
+/**
+ * How *new* doorways are taken — walked into, or pressed.
+ *
+ * Chosen before the drag, like the destination is, and stored per doorway so a map can mix the
+ * two. Walking is the default because it is what a wormhole between two parts of one place should
+ * do; pressing is for the doors worth deciding about. Existing doorways are switched in the list
+ * below.
+ */
+const portalActivation = ref<PortalActivation>('walk')
+
+/**
+ * This Side Space's other rooms — the interiors a doorway can lead into.
+ *
+ * Comes with the map (see the resource's `siblings`) rather than being fetched, for the same
+ * reason the list of other Side Spaces is taken from the sidebar: it is already here. The map
+ * being edited is excluded — a doorway into the room it is cut into is a doorway to nowhere,
+ * and the server refuses one anyway.
+ */
+const interiors = computed(() => (props.map.siblings ?? []).filter(m => m.slug !== props.map.slug))
 
 /**
  * Somewhere to step back to.
@@ -210,11 +284,23 @@ interface Snapshot {
   objects: SpaceObject[]
   backdrops: BackdropPlacement[]
   portals: SpacePortal[]
+  screens: SpaceScreen[]
+  exhibits: SpaceExhibit[]
   spawn: { x: number, y: number }
 }
 
 const history = ref<Snapshot[]>([])
 const HISTORY_DEPTH = 20
+
+/**
+ * Has this map been edited since it was opened or last saved?
+ *
+ * Read off the undo stack rather than tracked separately, because the stack is already the
+ * record of "something changed here" — every edit pushes to it, and a successful save clears it.
+ * Used to warn before walking into another map of this Side Space, which is the one action in
+ * the editor that throws the draft away without an undo.
+ */
+const touched = computed(() => history.value.length > 0)
 
 /** Remember the room as it is now, under the name of the thing about to change it. */
 function remember(label: string) {
@@ -229,6 +315,8 @@ function remember(label: string) {
       objects: objects.value.map(o => ({ ...o })),
       backdrops: backdrops.value.map(b => ({ ...b })),
       portals: portals.value.map(p => ({ ...p, to: { ...p.to } })),
+      screens: screens.value.map(s => ({ ...s })),
+      exhibits: exhibits.value.map(e => ({ ...e })),
       spawn: { ...spawn.value },
     },
   ]
@@ -247,6 +335,8 @@ function undo() {
   objects.value = last.objects
   backdrops.value = last.backdrops
   portals.value = last.portals
+  screens.value = last.screens
+  exhibits.value = last.exhibits
   spawn.value = last.spawn
 
   selectedId.value = null
@@ -363,6 +453,8 @@ let zoneDrag: { x0: number, y0: number, x1: number, y1: number, kind: SpaceZone[
  */
 let placeDrag: { x0: number, y0: number, x1: number, y1: number } | null = null
 let portalDrag: { x0: number, y0: number, x1: number, y1: number } | null = null
+let screenDrag: { x0: number, y0: number, x1: number, y1: number } | null = null
+let artDrag: { x0: number, y0: number, x1: number, y1: number } | null = null
 
 /** The doorway waiting for somebody to click where it comes out, if any. */
 const awaitingExit = ref<string | null>(null)
@@ -409,6 +501,11 @@ let openedAt = performance.now()
 const draft = computed<SpaceMap>(() => ({
   id: props.map.id,
   channel_id: props.map.channel_id,
+  // Carried so the draft really is a whole map — which is what makes the renderer and the type
+  // agree. Stripped again on the way out: which room is being written to is said by the URL,
+  // never by the body. See useSpaceMap's SERVER_OWNED.
+  slug: props.map.slug,
+  siblings: props.map.siblings,
   name: name.value,
   width: width.value,
   height: height.value,
@@ -419,6 +516,11 @@ const draft = computed<SpaceMap>(() => ({
   projection: projection.value,
   backdrops: backdrops.value,
   portals: portals.value,
+  screens: screens.value,
+  exhibits: exhibits.value,
+  // Read back unchanged: the pictures are the server's, and a whole-map save must neither carry
+  // them nor be read as clearing them. See SERVER_OWNED in useSpaceMap.
+  exhibit_pieces: props.map.exhibit_pieces,
 }))
 
 /*
@@ -899,6 +1001,20 @@ function onPointerDown(e: PointerEvent) {
     return
   }
 
+  if (tool.value === 'screen') {
+    const t = toTile(camera, px, py)
+    screenDrag = { x0: t.x, y0: t.y, x1: t.x, y1: t.y }
+
+    return
+  }
+
+  if (tool.value === 'art') {
+    const t = toTile(camera, px, py)
+    artDrag = { x0: t.x, y0: t.y, x1: t.x, y1: t.y }
+
+    return
+  }
+
   if (tool.value === 'place') {
     const t = toTile(camera, px, py)
     placeDrag = { x0: t.x, y0: t.y, x1: t.x, y1: t.y }
@@ -939,6 +1055,22 @@ function onPointerMove(e: PointerEvent) {
     return
   }
 
+  if (artDrag) {
+    const t = toTile(camera, px, py)
+    artDrag.x1 = t.x
+    artDrag.y1 = t.y
+
+    return
+  }
+
+  if (screenDrag) {
+    const t = toTile(camera, px, py)
+    screenDrag.x1 = t.x
+    screenDrag.y1 = t.y
+
+    return
+  }
+
   if (portalDrag) {
     const t = toTile(camera, px, py)
     portalDrag.x1 = t.x
@@ -970,6 +1102,34 @@ function onPointerUp(e: PointerEvent) {
   // every zoom would paint a wall on its way out.
   if (pinch) {
     if (touches.size < 2) pinch = null
+
+    return
+  }
+
+  if (artDrag) {
+    const drag = artDrag
+    artDrag = null
+
+    addExhibit({
+      x: Math.max(0, Math.min(drag.x0, drag.x1)),
+      y: Math.max(0, Math.min(drag.y0, drag.y1)),
+      w: Math.min(width.value, Math.max(drag.x0, drag.x1) + 1) - Math.max(0, Math.min(drag.x0, drag.x1)),
+      h: Math.min(height.value, Math.max(drag.y0, drag.y1) + 1) - Math.max(0, Math.min(drag.y0, drag.y1)),
+    })
+
+    return
+  }
+
+  if (screenDrag) {
+    const drag = screenDrag
+    screenDrag = null
+
+    addScreen({
+      x: Math.max(0, Math.min(drag.x0, drag.x1)),
+      y: Math.max(0, Math.min(drag.y0, drag.y1)),
+      w: Math.min(width.value, Math.max(drag.x0, drag.x1) + 1) - Math.max(0, Math.min(drag.x0, drag.x1)),
+      h: Math.min(height.value, Math.max(drag.y0, drag.y1) + 1) - Math.max(0, Math.min(drag.y0, drag.y1)),
+    })
 
     return
   }
@@ -1145,31 +1305,116 @@ function addPortal(rect: { x: number, y: number, w: number, h: number }) {
   const standable = firstWalkableIn(tiles.value, rect)
   if (!standable) return refuse("A doorway needs somewhere to stand in it.")
 
+  const choice = portalTo.value
+
+  /*
+   * "A new room" — the doorway makes the place it leads to.
+   *
+   * The whole point of offering it is that the two halves get built together. Doing this by hand
+   * is three steps in the wrong order — add a map, come back, hang a door, then go into the new
+   * room and hang another one back — and the middle one is easy to forget, which leaves a door
+   * into a room with no way out.
+   *
+   * It has to be its own path because it is the only one that *asks the server something* before
+   * the doorway can exist: the room needs a slug before anything can point at it.
+   */
+  if (choice === 'new') return void addPortalToNewMap(rect)
+
   const id = `p-${Date.now().toString(36)}`
-  const channelId = Number(portalTo.value)
+  const interior = choice.startsWith('map:') ? choice.slice(4) : null
+  const channelId = choice.startsWith('room:') ? Number(choice.slice(5)) : 0
 
   remember('add a doorway')
 
+  /*
+   * Where it goes, and what it is called by default.
+   *
+   * A doorway into an interior or another room is finished the moment it exists — the
+   * destination was chosen in the picker before the drag, and the far end is left unnamed, which
+   * means "come out at that room's own entrance". A doorway to somewhere on *this* map is not
+   * finished: it needs an exit, and asking for one as two number boxes would be asking somebody
+   * to read coordinates off a grid they are looking at. So it is parked on its own entrance —
+   * a legal portal that happens to go nowhere, so an interrupted edit still saves — and the next
+   * click on the canvas is the exit.
+   */
+  const to: SpacePortal['to'] = interior
+    ? { kind: 'map', map: interior }
+    : channelId
+      ? { kind: 'room', channel_id: channelId }
+      : { kind: 'point', x: standable.x, y: standable.y }
+
   const portal: SpacePortal = {
     id,
-    name: channelId
-      ? (spaceRooms.value.find(r => r.id === channelId)?.name ?? 'Doorway')
-      : `Doorway ${portals.value.length + 1}`,
+    name: interior
+      ? (interiors.value.find(m => m.slug === interior)?.name ?? 'Doorway')
+      : channelId
+        ? (spaceRooms.value.find(r => r.id === channelId)?.name ?? 'Doorway')
+        : `Doorway ${portals.value.length + 1}`,
     ...rect,
-    // A same-map doorway is parked on its own entrance until an exit is clicked. That is a legal
-    // portal that happens to go nowhere, rather than a half-built one the save would reject — so
-    // an interrupted edit leaves a map that still saves.
-    to: channelId ? { kind: 'room', channel_id: channelId } : { kind: 'point', x: standable.x, y: standable.y },
+    activation: portalActivation.value,
+    to,
   }
 
   portals.value = [...portals.value, portal]
   selectedPortal.value = id
   refused.value = ''
 
-  if (!channelId) {
+  if (to.kind === 'point') {
     awaitingExit.value = id
     refused.value = 'Now click where it should come out.'
   }
+}
+
+/**
+ * Drag out a doorway and let it build the room on the other side.
+ *
+ * Both halves are wired here, and each is hung on the map that owns it. The way *in* is the
+ * portal added to this draft; the way *out* is created by the server as part of the new room,
+ * pointing back at *this map* — and at no particular tile on it.
+ *
+ * That last part is deliberate and is what makes you come back out of the door you went in by.
+ * The far end finds this doorway when somebody travels rather than remembering where it was, so
+ * dragging it somewhere else later moves where you come back out, with nothing to keep in step.
+ * See the stage's arrivalIn.
+ */
+async function addPortalToNewMap(rect: { x: number, y: number, w: number, h: number }) {
+  const name = newDoorMapName.value.trim()
+  const slug = slugify(name)
+
+  if (!slug) return refuse('Give the new room a name first.')
+
+  // Names are the author's and may repeat; keys may not, and the key is what doors store. Rather
+  // than refuse a second "Lobby", number it — the name they typed is kept either way.
+  const taken = new Set((props.map.siblings ?? []).map(m => m.slug))
+  let key = slug
+  for (let i = 2; taken.has(key); i++) key = `${slug}-${i}`
+
+  addingMap.value = true
+
+  try {
+    await createMap({ slug: key, name, return_to: props.map.slug })
+  }
+  catch (e: any) {
+    return refuse(e?.data?.message ?? 'Could not make that room.')
+  }
+  finally {
+    addingMap.value = false
+  }
+
+  remember('add a doorway')
+
+  portals.value = [...portals.value, {
+    id: `p-${Date.now().toString(36)}`,
+    name,
+    ...rect,
+    activation: portalActivation.value,
+    to: { kind: 'map', map: key },
+  }]
+
+  newDoorMapName.value = ''
+  // Said out loud because the room is already real on the server while the doorway into it is
+  // not — this draft has to be saved, and that asymmetry is worth one sentence.
+  refused.value = `"${name}" is ready. Save this map to hang the doorway into it.`
 }
 
 /** The second click of building a same-map doorway: where you come out. */
@@ -1184,12 +1429,211 @@ function setPortalExit(x: number, y: number) {
   refused.value = ''
 }
 
+/**
+ * What a doorway says it leads to, under its name in the list.
+ *
+ * In the script rather than inline in the template because the three destination kinds are a
+ * discriminated union, and Vue's template compiler doesn't narrow one through a chained ternary
+ * — it type-checks each branch against the whole union, so `p.to.map` fails on the `point` arm
+ * even where the ternary has already ruled it out.
+ */
+function portalDestination(p: SpacePortal) {
+  // Pulled into a const first: narrowing a *property* is lost again inside the callbacks below,
+  // since TypeScript can't know `find` won't reassign it.
+  const to = p.to
+
+  if (to.kind === 'point') return `to ${to.x},${to.y} on this map`
+
+  if (to.kind === 'map') {
+    return `to ${interiors.value.find(m => m.slug === to.map)?.name ?? to.map}`
+  }
+
+  return spaceRooms.value.find(r => r.id === to.channel_id)?.name ?? 'another Side Space'
+}
+
 function removePortal(id: string) {
   remember('remove a doorway')
 
   portals.value = portals.value.filter(p => p.id !== id)
   if (selectedPortal.value === id) selectedPortal.value = null
   if (awaitingExit.value === id) awaitingExit.value = null
+}
+
+// --- screens ---
+
+/**
+ * Hang a surface that shows whatever the room is watching.
+ *
+ * Unlike a doorway, it is *not* checked for somewhere to stand: the whole point of a screen is
+ * that it goes where you cannot walk — up a wall, over a stage, across the back of a room.
+ * Requiring a standable tile would refuse every sensible placement and accept only the daft ones.
+ */
+function addScreen(rect: { x: number, y: number, w: number, h: number }) {
+  if (rect.w < 1 || rect.h < 1) return
+
+  if (screens.value.length >= MAX_SCREENS) {
+    return refuse(`A map can hold ${MAX_SCREENS} screens.`)
+  }
+
+  remember('add a screen')
+
+  const id = `s-${Date.now().toString(36)}`
+
+  screens.value = [...screens.value, {
+    id,
+    name: `Screen ${screens.value.length + 1}`,
+    ...rect,
+  }]
+
+  selectedScreen.value = id
+  refused.value = ''
+}
+
+/**
+ * Nudge one of a screen's four numbers, keeping it on the map.
+ *
+ * Clamped here rather than left to the save, because the save refuses the *whole map* for a
+ * screen that runs off the edge — so typing a width one digit too long would mean an editor that
+ * silently cannot be saved until you found which field did it. Width and height stay at least 1:
+ * a screen of zero tiles draws nothing and reads as the feature being broken.
+ */
+function resizeScreen(screen: SpaceScreen, field: 'x' | 'y' | 'w' | 'h', value: number) {
+  if (!Number.isFinite(value)) return
+
+  remember('resize a screen')
+
+  const next = { ...screen, [field]: Math.max(field === 'w' || field === 'h' ? 1 : 0, Math.round(value)) }
+
+  // Keep it inside the grid, moving the origin back rather than shrinking what was just typed —
+  // the number you touched is the one you meant.
+  next.w = Math.min(next.w, width.value)
+  next.h = Math.min(next.h, height.value)
+  next.x = Math.min(next.x, width.value - next.w)
+  next.y = Math.min(next.y, height.value - next.h)
+
+  screens.value = screens.value.map(s => (s.id === screen.id ? next : s))
+  selectedScreen.value = screen.id
+}
+
+function removeScreen(id: string) {
+  remember('remove a screen')
+
+  screens.value = screens.value.filter(s => s.id !== id)
+  if (selectedScreen.value === id) selectedScreen.value = null
+}
+
+// --- the gallery ---
+
+/**
+ * Draw a frame over a painting the artwork already contains.
+ *
+ * Not checked for standability, like a screen and for the same reason: a painting hangs on a wall
+ * and a statue stands where you can't. What matters is that you can get *near* it, and the room's
+ * own floor decides that.
+ */
+function addExhibit(rect: { x: number, y: number, w: number, h: number }) {
+  if (rect.w < 1 || rect.h < 1) return
+
+  if (exhibits.value.length >= MAX_EXHIBITS) {
+    return refuse(`A map can hold ${MAX_EXHIBITS} frames.`)
+  }
+
+  remember('add a frame')
+
+  const id = `a-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`
+
+  exhibits.value = [...exhibits.value, { id, name: `Artwork ${exhibits.value.length + 1}`, ...rect }]
+  selectedExhibit.value = id
+  refused.value = ''
+}
+
+function removeExhibit(id: string) {
+  remember('remove a frame')
+
+  exhibits.value = exhibits.value.filter(e => e.id !== id)
+  if (selectedExhibit.value === id) selectedExhibit.value = null
+}
+
+/** What's hanging in a frame, straight off the prop — the pictures are the server's, not the draft's. */
+function pieceFor(id: string) {
+  return (props.map.exhibit_pieces ?? []).find(p => p.exhibit_id === id) ?? null
+}
+
+/** The frame whose upload form is open, and what's being typed into it. */
+const hangingIn = ref<string | null>(null)
+const hangTitle = ref('')
+const hangArtist = ref('')
+const hangCaption = ref('')
+const hangFile = ref<File | null>(null)
+const hanging = ref(false)
+
+function openHangForm(id: string) {
+  const piece = pieceFor(id)
+
+  hangingIn.value = id
+  // Prefilled from what's already hanging, so replacing just the image doesn't mean retyping
+  // the label — which is the common case when a better scan of the same painting turns up.
+  hangTitle.value = piece?.title ?? exhibits.value.find(e => e.id === id)?.name ?? ''
+  hangArtist.value = piece?.artist ?? ''
+  hangCaption.value = piece?.caption ?? ''
+  hangFile.value = null
+}
+
+function onHangFile(e: Event) {
+  hangFile.value = (e.target as HTMLInputElement).files?.[0] ?? null
+}
+
+/**
+ * Upload the picture.
+ *
+ * Sent straight away rather than waiting for Save, and that's the honest shape: the picture is
+ * *not part of the map document*. It goes to its own endpoint, against its own table, under a
+ * staff-only check that a whole-map save doesn't have — so folding it into Save would mean one
+ * button doing two things with two different permissions and two different failure modes.
+ *
+ * The frame it hangs in does have to be saved first, though, because the server refuses to hang a
+ * picture in a frame nobody drew — see storeExhibit. Said plainly below rather than worked
+ * around, since the alternative is a save happening behind somebody's back.
+ */
+async function hangPicture() {
+  const id = hangingIn.value
+  if (!id || !hangFile.value || !hangTitle.value.trim()) return
+
+  const body = new FormData()
+  body.append('image', hangFile.value)
+  body.append('title', hangTitle.value.trim())
+  if (hangArtist.value.trim()) body.append('artist', hangArtist.value.trim())
+  if (hangCaption.value.trim()) body.append('caption', hangCaption.value.trim())
+
+  hanging.value = true
+
+  try {
+    await hangExhibit(id, body)
+    hangingIn.value = null
+    hangFile.value = null
+    refused.value = ''
+    // The map on the stage behind this now has a picture it didn't have. Told, not left to the
+    // broadcast — the editor's own upload shouldn't wait on a websocket round trip to show.
+    emit('rooms-changed')
+  }
+  catch (e: any) {
+    const errors = e?.data?.errors as Record<string, string[]> | undefined
+    refuse(errors ? Object.values(errors).flat()[0]! : (e?.data?.message ?? 'Could not hang that picture.'))
+  }
+  finally {
+    hanging.value = false
+  }
+}
+
+async function takeDownPicture(id: string) {
+  try {
+    await unhangExhibit(id)
+    refused.value = ''
+    emit('rooms-changed')
+  }
+  catch (e: any) {
+    refuse(e?.data?.message ?? 'Could not take that picture down.')
+  }
 }
 
 // --- the grid's size ---
@@ -1251,6 +1695,8 @@ function clearRoom() {
   zones.value = []
   objects.value = []
   backdrops.value = []
+  portals.value = []
+  screens.value = []
   spawn.value = { x: Math.floor(width.value / 2), y: Math.floor(height.value / 2) }
 }
 
@@ -1286,6 +1732,11 @@ function applyPreset(preset: MapPreset) {
   // brings its picture, and loading a tile-built one clears it. A backdrop left behind over a
   // different grid would be streets that no longer line up with anywhere you can stand.
   backdrops.value = (preset.backdrops ?? []).map(b => ({ ...b }))
+  // Doorways and screens swap with the rest, in both directions, for exactly the reason the
+  // artwork does: they are geometry cut for *this* grid, and a screen left hanging over a room
+  // that is now a different shape is a rectangle floating in the wrong place.
+  portals.value = (preset.portals ?? []).map(p => ({ ...p, to: { ...p.to } }))
+  screens.value = (preset.screens ?? []).map(s => ({ ...s }))
 
   loadedPreset.value = preset.key
   refused.value = ''
@@ -1519,6 +1970,120 @@ function placeInto(rect: { x: number, y: number, w: number, h: number }, label =
   fit()
 }
 
+// --- the building: this Side Space's other maps ---
+
+const newMapName = ref('')
+const addingMap = ref(false)
+
+/**
+ * A slug from a typed name — the one place in the app that derives one.
+ *
+ * The server takes the slug rather than deriving it, because it is what every doorway stores
+ * and a name is renameable: deriving it *there* would silently re-slug a map on rename and break
+ * every door into it. Deriving it here, once, at the moment the map is created, is the same
+ * convenience without the trap — after this the two are independent, and renaming "Screen One"
+ * to "The Big Screen" leaves its key, and its doors, alone.
+ */
+function slugify(name: string) {
+  return name
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 40)
+}
+
+async function addSibling() {
+  const name = newMapName.value.trim()
+  const slug = slugify(name)
+
+  if (!slug) return refuse('Give the map a name with a letter or number in it.')
+
+  addingMap.value = true
+
+  try {
+    await createMap({ slug, name })
+    newMapName.value = ''
+    refused.value = ''
+    /*
+     * Not `saved`, which closes the editor — you have just added a map and the next thing you
+     * want is the door into it, which is three tools away in this same panel. And not opened
+     * either: adding a map and walking into it are separate acts, and moving whoever pressed Add
+     * off the map they are halfway through editing is not what Add means.
+     */
+    emit('rooms-changed')
+  }
+  catch (e: any) {
+    refuse(e?.data?.message ?? 'Could not add that map.')
+  }
+  finally {
+    addingMap.value = false
+  }
+}
+
+/**
+ * Walk into another of this Side Space's maps.
+ *
+ * Guarded, because the editor's draft is *this* map and opening another one replaces it. Every
+ * other way of losing work here is undoable (there's an undo stack); this one isn't, and it's a
+ * click away from a list you're browsing.
+ */
+function openSibling(slug: string) {
+  if (slug === props.map.slug) return
+
+  // Unsaved work is the only reason this needs asking about, so it only asks when there is some.
+  if (touched.value) {
+    leavingTo.value = slug
+
+    return
+  }
+
+  emit('open', slug)
+}
+
+/** Which map we are about to walk into, once the unsaved-changes question is answered. */
+const leavingTo = ref<string | null>(null)
+
+function confirmLeave() {
+  const slug = leavingTo.value
+  leavingTo.value = null
+
+  if (slug) emit('open', slug)
+}
+
+/** The map the delete confirm is about, and whether the delete is in flight. */
+const deletingMap = ref<{ slug: string, name: string } | null>(null)
+const deletingMapBusy = ref(false)
+
+function removeSibling(slug: string, name: string) {
+  deletingMap.value = { slug, name }
+}
+
+async function confirmRemoveSibling() {
+  const target = deletingMap.value
+  if (!target) return
+
+  const { slug } = target
+  deletingMapBusy.value = true
+
+  try {
+    await deleteMap(slug)
+    deletingMap.value = null
+    refused.value = ''
+
+    // Deleting the map you are standing on has to move you, and the only place to go is the way
+    // in. `deleteMap` has already pointed its own composable there; this moves the editor too.
+    if (slug === props.map.slug) emit('open', MAIN_MAP)
+    else emit('rooms-changed')
+  }
+  catch (e: any) {
+    refuse(e?.data?.message ?? 'Could not delete that map.')
+    deletingMap.value = null
+  }
+  finally {
+    deletingMapBusy.value = false
+  }
+}
+
 // --- saving ---
 
 async function onSave() {
@@ -1536,6 +2101,10 @@ async function onSave() {
       // The whole draft. `save` strips the fields the server owns — see SERVER_OWNED there.
       await save(draft.value)
     }
+
+    // What is on screen is now what is stored, so there is nothing left to warn about losing.
+    // The undo stack goes with it: undoing past a save would silently re-dirty the map.
+    history.value = []
     emit('saved')
   }
   catch (e: any) {
@@ -1909,6 +2478,22 @@ function drawPortals(ctx: CanvasRenderingContext2D) {
     ctx.stroke()
   }
 
+  if (artDrag) {
+    const x = Math.min(artDrag.x0, artDrag.x1)
+    const y = Math.min(artDrag.y0, artDrag.y1)
+    traceTiles(ctx, x, y, Math.abs(artDrag.x1 - artDrag.x0) + 1, Math.abs(artDrag.y1 - artDrag.y0) + 1)
+    ctx.fillStyle = 'rgb(250 204 21 / 0.25)'
+    ctx.fill()
+  }
+
+  if (screenDrag) {
+    const x = Math.min(screenDrag.x0, screenDrag.x1)
+    const y = Math.min(screenDrag.y0, screenDrag.y1)
+    traceTiles(ctx, x, y, Math.abs(screenDrag.x1 - screenDrag.x0) + 1, Math.abs(screenDrag.y1 - screenDrag.y0) + 1)
+    ctx.fillStyle = 'rgb(15 23 42 / 0.55)'
+    ctx.fill()
+  }
+
   if (!portalDrag) return
 
   const x = Math.min(portalDrag.x0, portalDrag.x1)
@@ -2009,6 +2594,29 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
+  <!-- Leaving unsaved geometry behind. The one action in this editor that discards work with no
+       undo to get it back, which is why it is the one that asks. -->
+  <ConfirmDialog
+    :open="!!leavingTo"
+    title="Leave your changes behind?"
+    description="This map has edits you haven't saved. Opening another one discards them."
+    confirm-label="Discard and open"
+    variant="destructive"
+    @update:open="leavingTo = $event ? leavingTo : null"
+    @confirm="confirmLeave"
+  />
+
+  <ConfirmDialog
+    :open="!!deletingMap"
+    :title="`Delete “${deletingMap?.name}”?`"
+    description="Its floor, furniture, rooms and locked doors go with it. Doorways elsewhere that pointed at it will lead nowhere until you fix them. This cannot be undone."
+    confirm-label="Delete map"
+    busy-label="Deleting…"
+    :busy="deletingMapBusy"
+    @update:open="deletingMap = $event ? deletingMap : null"
+    @confirm="confirmRemoveSibling"
+  />
+
   <!-- A sheet over the whole app rather than a panel: laying out a floor needs the room. -->
   <div class="fixed inset-0 z-50 flex flex-col bg-background">
     <header class="flex h-12 shrink-0 items-center justify-between gap-3 border-b px-4">
@@ -2250,15 +2858,62 @@ onBeforeUnmount(() => {
 
           <select v-model="portalTo" class="h-8 w-full rounded border bg-background px-2 text-xs">
             <option value="">Somewhere on this map</option>
-            <optgroup v-if="spaceRooms.length" label="Another room">
-              <option v-for="r in spaceRooms" :key="r.id" :value="String(r.id)">{{ r.name }}</option>
+            <!--
+              First, because it is the one that builds both halves. Everything below it links to
+              somewhere that already exists; this makes the place as well as the door, and hangs
+              the way back inside it pointing at this very doorway.
+            -->
+            <option value="new">A new room…</option>
+            <!--
+              The interiors first, and labelled as being *inside* this space — because they are
+              the ones that behave like a door. Walking into one keeps you in the call; the
+              Side Spaces below it do not.
+            -->
+            <optgroup v-if="interiors.length" label="Inside this space">
+              <option v-for="m in interiors" :key="m.slug" :value="`map:${m.slug}`">{{ m.name }}</option>
+            </optgroup>
+            <optgroup v-if="spaceRooms.length" label="Another Side Space">
+              <option v-for="r in spaceRooms" :key="r.id" :value="`room:${r.id}`">{{ r.name }}</option>
             </optgroup>
           </select>
 
+          <!-- The new room's name. Only asked for when that is what was chosen. -->
+          <Input
+            v-if="portalTo === 'new'"
+            v-model="newDoorMapName"
+            class="h-8 text-xs"
+            placeholder="Name the new room, e.g. Screen One"
+          />
+
+          <!--
+            Walked into, or pressed. Per doorway rather than a setting, because a wormhole across
+            an island and a door out of the room want different answers.
+          -->
+          <div class="grid grid-cols-2 gap-1">
+            <button
+              v-for="a in ([
+                { key: 'walk', label: 'Walk in', hint: 'Steps you through as soon as you are on it' },
+                { key: 'press', label: 'Press E', hint: 'Stops there and offers — safer for a way out' },
+              ] as const)"
+              :key="a.key"
+              type="button"
+              class="rounded border px-2 py-1 text-left transition-colors"
+              :class="portalActivation === a.key ? 'border-primary bg-muted' : 'hover:bg-muted/50'"
+              @click="portalActivation = a.key"
+            >
+              <span class="block text-xs font-medium">{{ a.label }}</span>
+              <span class="block text-[10px] leading-snug text-muted-foreground">{{ a.hint }}</span>
+            </button>
+          </div>
+
           <p class="text-[11px] leading-snug text-muted-foreground">
-            {{ portalTo
-              ? 'Drag out the doorway. Walking into it takes you to that room.'
-              : 'Drag out the doorway, then click where it should come out.' }}
+            {{ portalTo === 'new'
+              ? 'Drag out the wormhole. The room is made for you, with a way back to this very spot.'
+              : portalTo.startsWith('map:')
+                ? 'Drag out the wormhole. It takes you straight there — nobody leaves the call.'
+                : portalTo
+                  ? 'Drag out the wormhole. It takes you to that Side Space, which means rejoining its call.'
+                  : 'Drag out the wormhole, then click where it should come out.' }}
           </p>
 
           <p v-if="awaitingExit" class="rounded border border-sky-500/40 bg-sky-500/10 p-1.5 text-[11px] leading-snug">
@@ -2275,16 +2930,182 @@ onBeforeUnmount(() => {
               <button type="button" class="min-w-0 flex-1 text-left" @click="selectedPortal = p.id">
                 <Input v-model="p.name" class="h-6 text-xs" @click.stop />
                 <span class="block truncate text-[10px] text-muted-foreground">
-                  {{ p.to.kind === 'point'
-                    ? `to ${p.to.x},${p.to.y} on this map`
-                    : (spaceRooms.find(r => r.id === p.to.channel_id)?.name ?? 'another room') }}
+                  {{ portalDestination(p) }}
                 </span>
+              </button>
+              <!-- Flip an existing doorway between walked and pressed. A toggle rather than a
+                   select: there are two states and the label says which one it is in. -->
+              <button
+                type="button"
+                class="shrink-0 rounded border px-1.5 py-0.5 text-[10px] text-muted-foreground transition-colors hover:bg-muted"
+                :title="(p.activation ?? 'walk') === 'press'
+                  ? 'Pressed: stops you and offers. Click to make it walk-in.'
+                  : 'Walk-in: takes you as soon as you step on it. Click to require E.'"
+                @click.stop="p.activation = (p.activation ?? 'walk') === 'press' ? 'walk' : 'press'"
+              >
+                {{ (p.activation ?? 'walk') === 'press' ? 'E' : 'walk' }}
               </button>
               <button
                 type="button"
                 class="rounded p-1 text-muted-foreground transition-colors hover:text-destructive"
                 title="Remove this doorway"
                 @click="removePortal(p.id)"
+              >
+                <Trash2 class="h-3.5 w-3.5" />
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Artwork. Shown with the tool, like the doorways and screens. -->
+        <div v-if="!isDecorMode && tool === 'art'" class="space-y-1.5">
+          <Label class="flex items-center gap-1.5 text-xs text-muted-foreground">
+            <Frame class="h-3.5 w-3.5" /> Artwork
+          </Label>
+
+          <p class="text-[11px] leading-snug text-muted-foreground">
+            Drag a frame over a painting or statue in the artwork, save the map, then hang a
+            picture in it. Walking up to a hung frame offers to open it.
+          </p>
+
+          <div v-if="exhibits.length" class="grid gap-1">
+            <div
+              v-for="art in exhibits"
+              :key="art.id"
+              class="rounded border px-1.5 py-1"
+              :class="selectedExhibit === art.id ? 'border-primary bg-muted' : ''"
+            >
+              <div class="flex items-center gap-1">
+                <button type="button" class="min-w-0 flex-1 text-left" @click="selectedExhibit = art.id">
+                  <Input v-model="art.name" class="h-6 text-xs" @click.stop />
+                  <span class="block truncate text-[10px]" :class="pieceFor(art.id) ? 'text-muted-foreground' : 'text-amber-600'">
+                    {{ pieceFor(art.id) ? pieceFor(art.id)!.title : 'empty — nothing hung yet' }}
+                  </span>
+                </button>
+                <button
+                  type="button"
+                  class="shrink-0 rounded border px-1.5 py-0.5 text-[10px] text-muted-foreground transition-colors hover:bg-muted"
+                  :title="pieceFor(art.id) ? 'Replace the picture' : 'Hang a picture here'"
+                  @click.stop="openHangForm(art.id)"
+                >
+                  {{ pieceFor(art.id) ? 'Replace' : 'Hang' }}
+                </button>
+                <button
+                  type="button"
+                  class="shrink-0 rounded p-1 text-muted-foreground transition-colors hover:text-destructive"
+                  title="Remove this frame"
+                  @click="removeExhibit(art.id)"
+                >
+                  <Trash2 class="h-3.5 w-3.5" />
+                </button>
+              </div>
+
+              <!--
+                The upload. Sent on its own rather than with Save, because the picture is not part
+                of the map document — different endpoint, different table, staff-only.
+              -->
+              <div v-if="hangingIn === art.id" class="mt-1.5 space-y-1 border-t pt-1.5">
+                <Input v-model="hangTitle" class="h-7 text-xs" placeholder="Title" />
+                <Input v-model="hangArtist" class="h-7 text-xs" placeholder="Artist (optional)" />
+                <textarea
+                  v-model="hangCaption"
+                  rows="3"
+                  class="w-full rounded border bg-background px-2 py-1 text-xs"
+                  placeholder="Wall label (optional)"
+                />
+                <input type="file" accept="image/*" class="w-full text-[11px]" @change="onHangFile">
+
+                <div class="flex items-center gap-1">
+                  <Button size="sm" class="h-7 px-2 text-xs" :disabled="!hangFile || !hangTitle.trim() || hanging" @click="hangPicture">
+                    {{ hanging ? 'Hanging…' : 'Hang it' }}
+                  </Button>
+                  <Button size="sm" variant="ghost" class="h-7 px-2 text-xs" :disabled="hanging" @click="hangingIn = null">
+                    Cancel
+                  </Button>
+                  <Button
+                    v-if="pieceFor(art.id)"
+                    size="sm"
+                    variant="ghost"
+                    class="h-7 px-2 text-xs text-destructive"
+                    :disabled="hanging"
+                    @click="takeDownPicture(art.id)"
+                  >
+                    Take down
+                  </Button>
+                </div>
+
+                <p class="text-[10px] leading-snug text-muted-foreground">
+                  Save the map first if this frame is new — a picture can only hang in a frame the
+                  server already knows about.
+                </p>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Screens. Shown with the tool, like the doorways above. -->
+        <div v-if="!isDecorMode && tool === 'screen'" class="space-y-1.5">
+          <Label class="flex items-center gap-1.5 text-xs text-muted-foreground">
+            <MonitorPlay class="h-3.5 w-3.5" /> Screens
+          </Label>
+
+          <p class="text-[11px] leading-snug text-muted-foreground">
+            Drag out the surface. Whatever anyone in the room shares plays on it, and standing in
+            front of it offers to watch fullscreen.
+          </p>
+
+          <div v-if="screens.length" class="grid gap-1">
+            <div
+              v-for="sc in screens"
+              :key="sc.id"
+              class="flex items-center gap-1 rounded border px-1.5 py-1"
+              :class="selectedScreen === sc.id ? 'border-primary bg-muted' : ''"
+            >
+              <div class="min-w-0 flex-1">
+                <button type="button" class="w-full text-left" @click="selectedScreen = sc.id">
+                  <Input v-model="sc.name" class="h-6 text-xs" @click.stop />
+                </button>
+                <!--
+                  Editable rather than a read-out.
+
+                  A screen is hung over artwork somebody drew, and dragging a rectangle onto an
+                  isometric picture by eye gets you close and never exact. Nudging a number and
+                  watching the canvas is how it actually gets lined up — so the four numbers that
+                  place it, and the shear that lays it flat onto the art, are all fields.
+                -->
+                <div class="mt-1 grid grid-cols-4 gap-1">
+                  <label v-for="f in (['x', 'y', 'w', 'h'] as const)" :key="f" class="flex items-center gap-0.5 text-[10px] text-muted-foreground">
+                    {{ f }}
+                    <Input
+                      :model-value="sc[f]"
+                      type="number"
+                      class="h-6 w-full px-1 text-xs"
+                      @click.stop
+                      @update:model-value="resizeScreen(sc, f, Number($event))"
+                    />
+                  </label>
+                </div>
+              </div>
+              <!--
+                Shear. Isometric artwork paints a screen as a parallelogram, and a share drawn
+                square onto one sits visibly crooked — `-w / 2` is the usual 2:1 slope, which is
+                what the Movie Theatre uses. Zero is a plain rectangle.
+              -->
+              <label class="flex shrink-0 items-center gap-1 text-[10px] text-muted-foreground" title="Raise the right edge, in tiles — for screens painted at an isometric angle">
+                skew
+                <Input
+                  :model-value="sc.skew ?? 0"
+                  type="number"
+                  class="h-6 w-12 px-1 text-xs"
+                  @click.stop
+                  @update:model-value="sc.skew = Number($event) || 0"
+                />
+              </label>
+              <button
+                type="button"
+                class="rounded p-1 text-muted-foreground transition-colors hover:text-destructive"
+                title="Remove this screen"
+                @click="removeScreen(sc.id)"
               >
                 <Trash2 class="h-3.5 w-3.5" />
               </button>
@@ -2416,6 +3237,62 @@ onBeforeUnmount(() => {
           </div>
           <p class="text-[11px] leading-snug text-muted-foreground">
             Only the camera changes — the same tiles, the same furniture, the same places to walk.
+          </p>
+        </div>
+
+        <!--
+          The building. A Side Space holds an overworld and the interiors behind its doors, and
+          this is where they are added, opened and removed.
+
+          Separate from the "Rooms" list below it, which is a different thing wearing a similar
+          word: a *zone* is a sealed rectangle on this one grid, and a *map* is a whole other
+          grid you reach by walking through a doorway.
+        -->
+        <div v-if="!isDecorMode" class="space-y-1.5">
+          <Label class="flex items-center gap-1.5 text-xs text-muted-foreground">
+            <DoorOpen class="h-3.5 w-3.5" /> Maps in this space
+          </Label>
+
+          <div class="grid gap-1">
+            <div
+              v-for="m in (props.map.siblings ?? [])"
+              :key="m.slug"
+              class="flex items-center gap-1 rounded border px-1.5 py-1"
+              :class="m.slug === props.map.slug ? 'border-primary bg-muted' : ''"
+            >
+              <button
+                type="button"
+                class="min-w-0 flex-1 truncate text-left text-xs"
+                :title="m.slug === props.map.slug ? 'You are editing this one' : `Walk into ${m.name}`"
+                :disabled="m.slug === props.map.slug"
+                @click="openSibling(m.slug)"
+              >
+                {{ m.name }}
+                <span class="text-[10px] text-muted-foreground">{{ m.slug === 'main' ? '(the way in)' : '' }}</span>
+              </button>
+              <!-- The way in has no delete: a Side Space with no main map opens to nothing. -->
+              <button
+                v-if="m.slug !== 'main'"
+                type="button"
+                class="rounded p-1 text-muted-foreground transition-colors hover:text-destructive"
+                :title="`Delete ${m.name} and everything in it`"
+                @click="removeSibling(m.slug, m.name)"
+              >
+                <Trash2 class="h-3.5 w-3.5" />
+              </button>
+            </div>
+          </div>
+
+          <div class="flex items-center gap-1">
+            <Input v-model="newMapName" class="h-7 flex-1 text-xs" placeholder="New map, e.g. Screen One" />
+            <Button size="sm" class="h-7 px-2 text-xs" :disabled="!newMapName.trim() || addingMap" @click="addSibling">
+              Add
+            </Button>
+          </div>
+
+          <p class="text-[11px] leading-snug text-muted-foreground">
+            A new map starts empty, with a wormhole home on its entrance. Hang one *into* it with
+            the Doorway tool — stepping through keeps everybody in the same call.
           </p>
         </div>
 

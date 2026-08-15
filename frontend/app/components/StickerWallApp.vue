@@ -216,15 +216,43 @@ watch(stickers, (list: AppSticker[]) => {
   if (inspecting.value && !list.some(s => s.id === inspecting.value!.id)) inspecting.value = null
 })
 
-async function onRemove(s: AppSticker) {
-  // eslint-disable-next-line no-alert
-  if (!window.confirm(`Remove “${s.name ?? 'this sticker'}” from the wall?`)) return
-  if (inspecting.value?.id === s.id) inspecting.value = null
-  await remove(s.id)
+/** The sticker the confirm is about, and whether its removal is in flight. */
+const removing = ref<AppSticker | null>(null)
+const removeBusy = ref(false)
+
+function onRemove(s: AppSticker) {
+  removing.value = s
+}
+
+async function confirmRemove() {
+  const s = removing.value
+  if (!s) return
+
+  removeBusy.value = true
+
+  try {
+    if (inspecting.value?.id === s.id) inspecting.value = null
+    await remove(s.id)
+    removing.value = null
+  }
+  finally {
+    removeBusy.value = false
+  }
 }
 </script>
 
 <template>
+  <ConfirmDialog
+    :open="!!removing"
+    :title="`Remove “${removing?.name ?? 'this sticker'}”?`"
+    description="It comes off the wall for everyone. The image itself is not deleted."
+    confirm-label="Remove"
+    busy-label="Removing…"
+    :busy="removeBusy"
+    @update:open="removing = $event ? removing : null"
+    @confirm="confirmRemove"
+  />
+
   <div class="flex min-h-0 flex-1 flex-col">
     <header class="flex h-12 shrink-0 items-center gap-2 border-b px-2 sm:px-3">
       <button

@@ -1048,6 +1048,11 @@ export interface VoiceParticipant {
   x: number | null
   y: number | null
   facing: 'up' | 'down' | 'left' | 'right' | null
+  /**
+   * Which of the channel's maps that position is on — a Side Space holds several. Null on a row
+   * written before interiors existed, and read as the way in.
+   */
+  space_map: string | null
   joined_at: string
 }
 

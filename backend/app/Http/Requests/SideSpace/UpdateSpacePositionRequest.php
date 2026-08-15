@@ -24,6 +24,10 @@ class UpdateSpacePositionRequest extends MemberRequest
             'x' => ['required', 'integer', 'min:0', 'max:1000'],
             'y' => ['required', 'integer', 'min:0', 'max:1000'],
             'facing' => ['nullable', 'string', 'in:up,down,left,right'],
+            // Which of the channel's maps those coordinates are on. Unvalidated against the
+            // building's actual rooms for the same reason the tile is unvalidated: this is a
+            // note-to-self written on a throttle, and it is checked at the moment it is *used*.
+            'space_map' => ['nullable', 'string', 'max:40'],
         ];
     }
 }

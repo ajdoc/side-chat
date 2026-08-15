@@ -2,6 +2,7 @@
 
 namespace App\Http\Resources;
 
+use App\Models\SideSpaceExhibit;
 use App\Models\SideSpaceMap;
 use App\Support\SideSpace\Doors;
 use Illuminate\Http\Request;
@@ -23,7 +24,24 @@ class SideSpaceMapResource extends JsonResource
         return [
             'id' => $this->id,
             'channel_id' => $this->channel_id,
+            // Which room of the building this is. `main` is the way in; see the migration.
+            'slug' => $this->slug,
             'name' => $this->name,
+            /*
+             * The building's other rooms — key and name only, never their grids.
+             *
+             * Rides with every read of a map because both things that need it need it *while you
+             * are standing somewhere*: the editor's room switcher, and the destination picker on
+             * a doorway. Sending the names with the map costs a few dozen bytes and saves a
+             * second endpoint that would be called immediately after this one every time.
+             *
+             * Names, not geometry. An interior is a full map and there is no version of "a bit
+             * of one" worth sending — walking through the door fetches it.
+             */
+            'siblings' => $this->whenLoaded('channel', fn () => $this->channel->spaceMaps
+                ->map(fn (SideSpaceMap $map) => ['slug' => $map->slug, 'name' => $map->name])
+                ->values()
+                ->all()),
             'width' => $this->width,
             'height' => $this->height,
             'tiles' => $this->tiles,
@@ -44,6 +62,39 @@ class SideSpaceMapResource extends JsonResource
              * again when they use it; this is the geometry, not the permission.
              */
             'portals' => $this->portals ?? [],
+            /*
+             * Where a shared screen is painted in the room.
+             *
+             * Geometry, like the doorways above, and sent to everybody for the same reason: every
+             * browser draws the whole room including the parts of it nobody is standing in. What
+             * *appears* on a screen never comes through here — that is the call's business, and
+             * each browser paints whatever share it is already receiving.
+             */
+            'screens' => $this->screens ?? [],
+            // The frames. Rectangles only — what is hanging in one arrives below, from its own
+            // table, because a member editing this document may move a frame but not fill it.
+            'exhibits' => $this->exhibits ?? [],
+            /*
+             * What is actually hanging, keyed by frame.
+             *
+             * Labels and a URL, never the bytes. The image is fetched when somebody opens a
+             * frame and not before — a gallery of eighty paintings must not be eighty downloads
+             * for anybody who walks in, and most of them will never be looked at.
+             *
+             * The URL is signed and expiring (see SideSpaceExhibit::url), which is what lets an
+             * <img> in a private channel's museum work with no auth header and still not be
+             * readable by anybody who guesses the path.
+             */
+            'exhibit_pieces' => $this->whenLoaded('exhibitPieces', fn () => $this->exhibitPieces
+                ->map(fn (SideSpaceExhibit $piece) => [
+                    'exhibit_id' => $piece->exhibit_id,
+                    'title' => $piece->title,
+                    'artist' => $piece->artist,
+                    'caption' => $piece->caption,
+                    'url' => $piece->url(),
+                ])
+                ->values()
+                ->all()),
             // Furniture. Positions and kinds only — the browser has the same catalogue and
             // looks the rest up, so there is nothing to send that it doesn't already know.
             'objects' => $this->objects ?? [],

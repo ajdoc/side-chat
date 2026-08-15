@@ -63,6 +63,34 @@ final class Backdrops
                 'tiles' => ['w' => 64, 'h' => 35],
             ],
 
+            /*
+             * An interior, and the first one drawn for a *submap* rather than for a whole
+             * channel — the room you find on the other side of a doorway. Its rim is transparent
+             * rather than walkable: the theatre is a diamond seen isometrically, so everything
+             * outside it is off the map rather than pavement you could walk on.
+             */
+            'movie-theatre' => [
+                'label' => 'Movie theatre',
+                'description' => 'An isometric auditorium: raked seating, a lit screen and the exit at the back',
+                'src' => 'backdrops/movie-theatre.png',
+                // 1376x768 at 32px a tile, exactly — no resampling, so the pixel art stays sharp.
+                'tiles' => ['w' => 43, 'h' => 24],
+            ],
+
+            /*
+             * A cutaway museum. Unlike every other backdrop here, the picture shows *several
+             * floors at once* — domes and upper galleries above, the halls and the plaza below —
+             * which is worth knowing before anybody tries to lay a grid over it. See the
+             * `met-museum` preset for what that means for where you can walk.
+             */
+            'met-museum' => [
+                'label' => 'Museum',
+                'description' => 'A cutaway art museum: the great hall, the galleries, the sculpture court and the Egyptian wing',
+                'src' => 'backdrops/met-museum.png',
+                // 1408x768 at 32px a tile, exactly — no resampling.
+                'tiles' => ['w' => 44, 'h' => 24],
+            ],
+
             'nyc-street' => [
                 'label' => 'NYC street',
                 'description' => 'Four blocks around a fountain square: the bakery, the bookshop, the deli and the cinema',

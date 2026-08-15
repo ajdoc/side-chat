@@ -119,3 +119,23 @@ function dmBetween(): array
 
     return [$a, $b, $conversation->load('members', 'channel')];
 }
+
+/**
+ * A real, tiny PNG as an uploaded file.
+ *
+ * Not `UploadedFile::fake()->image()`, which needs GD — this image has no GD extension. And a
+ * `fake()->create()` with an image MIME wouldn't do either: the `image` validation rule inspects
+ * the file's actual *contents*, which is exactly the property worth keeping, since it is what
+ * stops the upload endpoint becoming a way to store arbitrary bytes under a name ending in .png.
+ *
+ * So these are real PNG bytes — 1x1, transparent, sixty-odd of them.
+ */
+function fakeImageUpload(string $name = 'artwork.png'): \Illuminate\Http\UploadedFile
+{
+    $png = base64_decode('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==');
+    $path = tempnam(sys_get_temp_dir(), 'exhibit').'.png';
+    file_put_contents($path, $png);
+
+    // `test: true` skips the is_uploaded_file() check, which only ever passes for a real request.
+    return new \Illuminate\Http\UploadedFile($path, $name, 'image/png', null, true);
+}

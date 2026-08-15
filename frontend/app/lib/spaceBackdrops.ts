@@ -46,6 +46,16 @@ export const BACKDROPS: Record<string, Backdrop> = {
     src: 'backdrops/gather-town.png',
     tiles: { w: 64, h: 35 },
   },
+  'movie-theatre': {
+    label: 'Movie theatre',
+    src: 'backdrops/movie-theatre.png',
+    tiles: { w: 43, h: 24 },
+  },
+  'met-museum': {
+    label: 'Museum',
+    src: 'backdrops/met-museum.png',
+    tiles: { w: 44, h: 24 },
+  },
   'nyc-street': {
     label: 'NYC street',
     src: 'backdrops/nyc-street.png',

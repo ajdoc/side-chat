@@ -21,7 +21,7 @@ import { Button } from '~/components/ui/button'
  * words, and the server's are used verbatim so a throttled flood of guesses reads as what it is
  * rather than as a wrong password.
  */
-const props = defineProps<{ doorId: string, channelId: number, roomName?: string | null }>()
+const props = defineProps<{ doorId: string, channelId: number, mapSlug: string, roomName?: string | null }>()
 /**
  * `entered` is the door's cue to open now rather than in a moment.
  *
@@ -32,7 +32,8 @@ const props = defineProps<{ doorId: string, channelId: number, roomName?: string
  */
 const emit = defineEmits<{ close: [], entered: [] }>()
 
-const { enter } = useSpaceLocks(props.channelId)
+// The door is on the map you're standing on — see useSpaceLocks.
+const { enter } = useSpaceLocks(props.channelId, () => props.mapSlug)
 
 const password = ref('')
 const busy = ref(false)

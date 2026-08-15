@@ -1,7 +1,7 @@
 import type { Facing, Occupant, SpaceMap } from '~/lib/spaceMapEngine'
 import type { AvatarLook } from '~/lib/spaceAvatar'
 import type { PetKind } from '~/lib/spacePets'
-import { facingOf, isWalkable, spawnPoint, step, zoneAt } from '~/lib/spaceMapEngine'
+import { MAIN_MAP, facingOf, isWalkable, spawnPoint, step, zoneAt } from '~/lib/spaceMapEngine'
 import { normaliseLook } from '~/lib/spaceAvatar'
 import { proximityMoved } from '~/composables/useSpaceProximity'
 
@@ -116,6 +116,23 @@ interface MovePayload {
   hand?: number | null
   /** When they stepped onto a stage, if they're on one — see Occupant.stageAt. */
   stage?: number | null
+  /**
+   * Which of the channel's maps they are standing on.
+   *
+   * A Side Space is a building — an overworld and the interiors behind its doors — and all of
+   * it shares one call and one presence channel, which is exactly what makes walking through a
+   * door instant rather than a reconnect. The cost of that is this field: everybody's whispers
+   * reach everybody, so being in the same *call* no longer means being in the same *place*, and
+   * this is the only thing that distinguishes the two.
+   *
+   * Filtering happens once, on arrival in {@link onMove}, rather than at each of the dozen
+   * places that ask about the people in the room. Somebody in another room simply never enters
+   * the roster — so drawing, proximity audio, stage broadcasts, hands and pets all exclude them
+   * without any of them having heard of interiors.
+   *
+   * Absent means the way in: a tab running an older build is in the only room it knows about.
+   */
+  map?: string | null
 }
 
 /**
@@ -369,6 +386,34 @@ export function useSpacePresence(channelId: number, map: Ref<SpaceMap | null>) {
   /** Are we already standing in this particular room? */
   const attached = computed(() => attachedTo === channelId)
 
+  /**
+   * Which of the channel's maps we are standing on — the way in, unless a door has moved us.
+   *
+   * Read from the map itself rather than tracked separately, because the map *is* the answer:
+   * the composable that fetches it swaps in a whole new document when you walk through a door,
+   * so there is no moment where the grid under your feet and this disagree.
+   */
+  function mapSlug() {
+    return map.value?.slug ?? MAIN_MAP
+  }
+
+  /*
+   * Walking through a door empties the room of everybody else, at once.
+   *
+   * Their whispers will sort this out on their own — each one carries a slug and {@link onMove}
+   * drops anybody whose slug isn't ours — but "on their own" means up to a second and a half for
+   * somebody standing still, and a second and a half of the lobby's crowd standing about inside
+   * the cinema is the kind of thing that makes a door feel broken rather than slow.
+   *
+   * Ours alone is untouched: `me` walked through the door on purpose.
+   */
+  watch(() => map.value?.slug, (now, before) => {
+    if (now === before || before === undefined) return
+
+    others.value = {}
+    proximityMoved()
+  })
+
   // --- placement ---
 
   /**
@@ -521,6 +566,8 @@ export function useSpacePresence(channelId: number, map: Ref<SpaceMap | null>) {
     look?: AvatarLook | null
     pet?: PetKind | null
     shout?: string | null
+    /** Which room of the building they were last standing in. Null reads as the way in. */
+    space_map?: string | null
   }>) {
     if (!map.value) return
 
@@ -533,6 +580,12 @@ export function useSpacePresence(channelId: number, map: Ref<SpaceMap | null>) {
       knownFaces.add(o.id)
 
       if (o.id === user.value?.id || o.x === null || o.y === null) continue
+
+      // Remembered somewhere else in the building. Their coordinates are real but they are for
+      // another grid, so drawing them here would put somebody from the cinema in the lobby —
+      // and a *remembered* position is the one case the whisper filter can't catch, because it
+      // arrives before anybody has whispered anything.
+      if ((o.space_map ?? MAIN_MAP) !== mapSlug()) continue
 
       next[o.id] = {
         id: o.id,
@@ -961,11 +1014,31 @@ export function useSpacePresence(channelId: number, map: Ref<SpaceMap | null>) {
       shout: me.value.shout ?? null,
       hand: me.value.handWith ?? null,
       stage: me.value.stageAt ?? null,
+      map: mapSlug(),
     } satisfies MovePayload)
   }
 
   function onMove(payload: MovePayload) {
     if (payload.id === user.value?.id) return
+
+    /*
+     * Somebody in another room of the same building.
+     *
+     * They are on this presence channel and this call, so their whispers arrive — but they are
+     * not *here*, and drawing them would put an avatar from the cinema's screen one in the
+     * middle of the lobby. Dropped rather than ignored, because they may have walked out of
+     * this room a moment ago and still be on the roster: leaving them there would freeze them
+     * mid-step at the doorway until the stale sweep eventually took them.
+     */
+    if ((payload.map ?? MAIN_MAP) !== mapSlug()) {
+      if (others.value[payload.id]) {
+        const { [payload.id]: gone, ...rest } = others.value
+        others.value = rest
+        proximityMoved()
+      }
+
+      return
+    }
 
     const existing = others.value[payload.id]
 
@@ -1084,7 +1157,9 @@ export function useSpacePresence(channelId: number, map: Ref<SpaceMap | null>) {
 
     api(`/api/channels/${channelId}/space/position`, {
       method: 'POST',
-      body: { x: Math.round(me.value.x), y: Math.round(me.value.y), facing: me.value.facing },
+      // The room as well as the tile: (12, 4) means two different places in two different
+      // rooms of the same building, so coordinates alone would put people back through a wall.
+      body: { x: Math.round(me.value.x), y: Math.round(me.value.y), facing: me.value.facing, space_map: mapSlug() },
     }).catch(() => {})
   }
 
@@ -1241,6 +1316,7 @@ export function useSpacePresence(channelId: number, map: Ref<SpaceMap | null>) {
           x: Math.round(me.value.x),
           y: Math.round(me.value.y),
           facing: me.value.facing,
+          space_map: mapSlug(),
         }),
         keepalive: true,
       }).catch(() => {})

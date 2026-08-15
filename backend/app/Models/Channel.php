@@ -453,10 +453,31 @@ class Channel extends Model
         return $this->hasMany(AppSticker::class);
     }
 
-    /** The room itself, when this is a Side Space. Null for every other kind of channel. */
+    /**
+     * The room this Side Space opens to. Null for every other kind of channel.
+     *
+     * Since a Side Space became a *building* rather than a room, this is specifically its main
+     * map — the one you arrive in. It stays a `HasOne` and stays the meaning of "the channel's
+     * map" everywhere that only cares where people walk in, which is nearly everywhere.
+     * {@see spaceMaps()} is for the places that have to see the interiors too.
+     */
     public function spaceMap(): HasOne
     {
-        return $this->hasOne(SideSpaceMap::class);
+        return $this->hasOne(SideSpaceMap::class)->where('slug', SideSpaceMap::MAIN);
+    }
+
+    /**
+     * Every room of this Side Space — the main map and its interiors, the way in first.
+     *
+     * Ordered rather than left to the database because this list is shown to people (the
+     * editor's map switcher, a portal's destination picker) and a building whose rooms reorder
+     * themselves between two reads is one nobody can navigate.
+     */
+    public function spaceMaps(): HasMany
+    {
+        return $this->hasMany(SideSpaceMap::class)
+            ->orderByRaw("case when slug = ? then 0 else 1 end", [SideSpaceMap::MAIN])
+            ->orderBy('name');
     }
 
     /** The game currently living in this Side Space, if any — proposed, running or just ended. */

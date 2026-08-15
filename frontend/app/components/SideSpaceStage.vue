@@ -32,7 +32,7 @@ import {
 } from 'lucide-vue-next'
 import { useLocalStorage } from '@vueuse/core'
 import type { AmongUsState, Channel, SpaceInteraction, VoiceParticipant } from '~/types'
-import type { Camera, MapTheme, Occupant, SpacePortal } from '~/lib/spaceMapEngine'
+import type { Camera, ExhibitPiece, MapTheme, Occupant, SpaceExhibit, SpaceMap, SpacePortal, SpaceScreen } from '~/lib/spaceMapEngine'
 import type { SpaceObject } from '~/lib/spaceDecor'
 import type { RoomEffectInstance } from '~/lib/spaceEffects'
 import type { RoomEvent } from '~/composables/useSpacePresence'
@@ -50,7 +50,14 @@ import {
   drawPet,
   drawTrainer,
   isWalkable,
+  activationOf,
+  doorwayInto,
+  exhibitNear,
+  pieceIn,
   portalAt,
+  screenNear,
+  spawnPoint,
+  standableIn,
   spriteHue,
   toScreen,
   toWorld,
@@ -113,6 +120,8 @@ const {
   selfSpeaking,
   micOpen,
   isSharing,
+  screenStream,
+  sharingPeer,
   isCameraOn,
   inCall,
   channelId: activeCallChannel,
@@ -134,7 +143,21 @@ const {
   fireEffect,
 } = useVoice()
 
-const { map, loading, error: mapError, load: loadMap, refresh: refreshMap, subscribe: subscribeMap, unsubscribe: unsubscribeMap } = useSpaceMap(props.channel.id)
+const {
+  map,
+  // Which room of the building we're standing in, and how to walk into another one. A Side
+  // Space is several maps behind one channel — see useSpaceMap.
+  slug: mapSlug,
+  openMap,
+  createMap,
+  deleteMap,
+  loading,
+  error: mapError,
+  load: loadMap,
+  refresh: refreshMap,
+  subscribe: subscribeMap,
+  unsubscribe: unsubscribeMap,
+} = useSpaceMap(props.channel.id)
 const {
   me,
   others,
@@ -1017,6 +1040,7 @@ async function enter() {
       look: p.user.space_avatar,
       pet: p.user.space_pet,
       shout: p.user.space_shout,
+      space_map: p.space_map ?? null,
     })))
     /*
      * …and put yourself back where you were standing, if the room still allows it.
@@ -1027,10 +1051,39 @@ async function enter() {
      * time you visited — which is the one thing a door is supposed to decide.
      */
     const mine = roster.find(p => p.user.id === user.value?.id)
+
+    /*
+     * Back into the room you were actually in, not just onto the tile.
+     *
+     * A Side Space holds several maps now, and a remembered position is a pair of coordinates
+     * *on one of them*. Restoring the tile without the room is how you reload inside the cinema
+     * and reappear standing in a wall in the lobby — so the map is opened first, before anybody
+     * is placed on it, and everything below then reasons about the right grid.
+     *
+     * A room that has since been deleted throws, and the catch leaves us in the way in, which
+     * is exactly where somebody whose room no longer exists should be.
+     */
+    if (mine?.space_map && mine.space_map !== mapSlug.value) {
+      await openMap(mine.space_map).catch(() => {})
+    }
+
+    // Read *after* the map is settled: it validates against the grid you are actually on.
     const arrival = arrivalPoint()
 
     place(arrival
       ?? (mine && mine.x !== null && mine.y !== null ? { x: mine.x, y: mine.y, facing: mine.facing ?? null } : null))
+
+    /*
+     * Whatever doorway you have just been put down in, you did not walk into.
+     *
+     * Restoring somebody onto the tile they logged out on is the one arrival that can land on a
+     * *walked* doorway without any travelling having happened — and an interior's way home stands
+     * on its entrance, so this is not a corner case. Without this, coming back to the room you
+     * were in would fire the door under you on the first frame and eject you out of it.
+     */
+    if (map.value && me.value) {
+      usedPortal = portalAt(map.value, me.value.x, me.value.y)?.id ?? null
+    }
 
     // Last, because it needs somewhere to measure from: it runs the instant it's registered.
     watchProximity()
@@ -1083,6 +1136,124 @@ async function leave() {
   await disconnect()
 }
 
+// --- the room's screens ---
+
+/**
+ * The one `<video>` whose frames the map's screens are painted from.
+ *
+ * It lives in the template but is a pixel across and fully transparent, which is doing two jobs.
+ * Painting: `drawImage` copies a video element's *current frame*, so the element only has to be
+ * playing, not visible — the room paints the share at whatever rate it is already painting
+ * itself, with no second pipeline and nothing to keep in sync. And fullscreen: an element the
+ * browser is willing to blow up has to be a real element, and `requestFullscreen` does not care
+ * how small it was.
+ *
+ * `muted` matters more than it looks. The share's *sound* already arrives through the call's
+ * audio path, positioned by proximity like everything else, and letting this play it too would
+ * play every share twice — once flat, once in the room. Muting is also what lets it autoplay
+ * without a click.
+ */
+const screenEl = ref<HTMLVideoElement | null>(null)
+
+/**
+ * Whichever screen the room is watching: somebody else's share, or your own.
+ *
+ * `sharingPeer` is the call's own answer to "what is on the stage", so the cinema screen and the
+ * band of tiles over the room can never disagree about what is playing. Your own share is the
+ * fallback, because presenting to a room you are standing in should show you the thing you are
+ * presenting — a cinema where the projectionist sees a blank screen is a bug.
+ */
+const roomScreen = computed(() => sharingPeer.value?.screen ?? screenStream.value ?? null)
+
+/** Does this map have anywhere to paint one? Nothing below costs anything on a map without. */
+const hasScreens = computed(() => !!map.value?.screens?.length)
+
+/** Point the element at the current share, and let go of it when there isn't one. */
+watch([roomScreen, screenEl], ([stream, el]) => {
+  if (!el) return
+
+  el.srcObject = stream ?? null
+
+  // Autoplay can still be refused. Nothing depends on the promise: a screen that never starts
+  // paints its name, exactly as an empty one does.
+  if (stream) void el.play().catch(() => {})
+}, { immediate: true })
+
+/** The screen you're standing in front of — what the "watch fullscreen" prompt hangs off. */
+const screenAhead = ref<SpaceScreen | null>(null)
+
+function checkScreen() {
+  const m = map.value
+  const here = me.value
+
+  const found = m && here && !gameRunning.value ? screenNear(m, here.x, here.y) : null
+
+  if (found?.id !== screenAhead.value?.id) screenAhead.value = found
+}
+
+/** Is there actually a picture on it, as opposed to a screen with nothing playing? */
+const screenIsLive = computed(() => !!roomScreen.value)
+
+/**
+ * Watch what's on the room's screen, full size.
+ *
+ * Fullscreens the video element rather than the canvas, deliberately. The canvas is the *room*,
+ * and blowing that up fills the display with a cinema seen from across a cinema. What you want is
+ * the picture.
+ *
+ * The room carries on running behind it — walking, proximity and the call are all untouched, so
+ * coming out of fullscreen puts you exactly where you were, which is the point of watching from
+ * inside a room rather than instead of one.
+ */
+function watchFullscreen() {
+  const el = screenEl.value
+
+  if (!el || !roomScreen.value) return
+
+  void el.requestFullscreen?.().catch(() => {})
+}
+
+// --- the gallery ---
+
+/**
+ * The frame you're standing at, and the painting open over the room.
+ *
+ * A frame is the museum equivalent of a screen: something across the room you look at rather than
+ * something under your feet. So it is checked the same way, prompts the same way, and — like the
+ * screen — only offers when there is actually something to see. An empty frame is a job somebody
+ * hasn't finished, not an interaction.
+ */
+const exhibitAhead = ref<SpaceExhibit | null>(null)
+const viewingPiece = ref<ExhibitPiece | null>(null)
+
+function checkExhibit() {
+  const m = map.value
+  const here = me.value
+
+  const found = m && here && !gameRunning.value ? exhibitNear(m, here.x, here.y) : null
+
+  if (found?.id !== exhibitAhead.value?.id) exhibitAhead.value = found
+}
+
+/** What's hanging in the frame you're at, if anything has been. */
+const pieceAhead = computed(() => {
+  const m = map.value
+  const frame = exhibitAhead.value
+
+  return m && frame ? pieceIn(m, frame.id) : null
+})
+
+/**
+ * Open the painting you're standing at.
+ *
+ * The room carries on behind it — the call, everyone's walking, proximity — so closing puts you
+ * back exactly where you were standing. That is what makes a gallery worth walking around rather
+ * than a list of pictures with a map attached.
+ */
+function viewExhibit() {
+  if (pieceAhead.value) viewingPiece.value = pieceAhead.value
+}
+
 // --- doorways ---
 
 /**
@@ -1110,52 +1281,132 @@ function arrivalPoint(): { x: number, y: number, facing: null } | null {
 }
 
 /**
- * The doorway you are currently standing in, if any — and whether you have already used it.
+ * The wormhole you are standing in, if any, and what taking it would mean.
  *
- * The second half is the whole difficulty. A portal fires on *being inside it*, checked every
- * frame, so without a memory you would trigger it sixty times a second; and if two portals face
- * each other, arriving at one puts you inside it and it sends you straight back. Holding "the one
- * I arrived in" and clearing it only when you step out means a doorway you walk into takes you
- * once, and the one you arrive in stays quiet until you leave it and come back.
+ * ## Two ways in, chosen per doorway
+ *
+ * A doorway is either `walk` — it takes you the moment you are inside it — or `press`, where
+ * standing in it only offers, and E accepts. See {@link activationOf}.
+ *
+ * Both exist because the right answer is genuinely different per door. Running between two
+ * halves of one island wants walking: a key at every wormhole makes crossing the map a chore.
+ * Leaving the room wants a press, because one careless step should not end the conversation you
+ * were in.
+ *
+ * ## The two traps that only `walk` has
+ *
+ * A walked doorway fires on *being inside it*, which is a state, and this is checked every frame
+ * — so without a memory it fires sixty times a second. And if two doorways face each other,
+ * arriving at one puts you inside it and it sends you straight back.
+ *
+ * `usedPortal` answers both: it remembers the doorway you arrived in and clears only when you
+ * step out of it. So a doorway you walk into takes you once, and the one you come out of stays
+ * quiet until you leave and come back. A pressed doorway needs none of this — nothing fires from
+ * a state — which is why arriving in one is simply standing at the way back.
  */
 let usedPortal: string | null = null
+
+/** The doorway under your feet that E would take. Null for a walked one — it needs no prompt. */
+const portalHere = ref<SpacePortal | null>(null)
 const travelling = ref(false)
+
+/**
+ * Why the last attempt to step through a wormhole did nothing.
+ *
+ * A doorway that fails has to *say* so. A keypress that silently does nothing is
+ * indistinguishable from a key that isn't bound, and the cases that produce it — a door pointing
+ * at a deleted room, or one whose exit was never set — are exactly the ones the person standing
+ * there cannot diagnose.
+ *
+ * Cleared by stepping out of the doorway, so the message belongs to the door you are at.
+ */
+const travelProblem = ref('')
 
 function checkPortal() {
   const m = map.value
   const here = me.value
-  if (!m || !here || travelling.value) return
 
-  const portal = portalAt(m, here.x, here.y)
+  if (!m || !here || gameRunning.value || travelling.value) return
 
-  if (!portal) {
+  const found = portalAt(m, here.x, here.y)
+
+  if (!found) {
     usedPortal = null
+    if (portalHere.value) portalHere.value = null
+    travelProblem.value = ''
 
     return
   }
 
-  if (portal.id === usedPortal) return
-  usedPortal = portal.id
+  // A doorway you press: it only ever offers. The prompt hangs off this, so it is written only
+  // when it changes — this runs sixty times a second.
+  if (activationOf(found) === 'press') {
+    if (found.id !== portalHere.value?.id) {
+      portalHere.value = found
+      // Whatever went wrong belonged to the doorway you were stood in. Walking to another one is
+      // the end of it.
+      travelProblem.value = ''
+    }
 
-  void travelThrough(portal)
+    return
+  }
+
+  // A doorway you walk into. Nothing to prompt — it is already happening.
+  if (portalHere.value) portalHere.value = null
+
+  if (found.id === usedPortal) return
+  usedPortal = found.id
+
+  void travelThrough(found)
 }
 
 /**
  * Go through a doorway.
  *
- * Two destinations and they could hardly be less alike underneath. A point on this map is a
- * `warp` — the map is already loaded and the only thing that changes is where you are standing.
- * Another room is a *navigation*: a different channel, a different map, a different call. So
- * walking out is done properly rather than by changing the URL underneath a live room — the
- * arrival point rides in the query string, which is also what makes a doorway shareable as a
- * link.
+ * Three destinations, and they could hardly be less alike underneath — they differ by how much
+ * is torn down on the way through:
+ *
+ *  - A **point** on this map is a `warp`. The map is already loaded; the only thing that changes
+ *    is where you are standing.
+ *  - An **interior** is a new grid and nothing else. Same channel, same call, same presence
+ *    channel, same people on the other end of it — you do not leave, so there is no teardown to
+ *    do and no silence to sit through. This is what makes a door feel like a door.
+ *  - Another **room** is a navigation: a different channel, a different call. Walking out is done
+ *    properly rather than by changing the URL underneath a live room — the arrival point rides in
+ *    the query string, which is also what makes that doorway shareable as a link.
  */
 async function travelThrough(portal: SpacePortal) {
+  if (travelling.value) return
+
   if (portal.to.kind === 'point') {
+    /*
+     * A doorway whose exit is inside itself.
+     *
+     * This is what a same-map doorway looks like *before its exit has been chosen*: the editor
+     * parks a new one on its own entrance, so that an interrupted edit leaves a map that still
+     * saves, and the next click on the canvas is meant to set the real exit. Somebody who drags
+     * one out and never makes that click saves a portal that leads to where it already is.
+     *
+     * Warping there does happen — it just moves you a fraction of a tile — which is the worst
+     * possible outcome, because it is indistinguishable from the key not working at all. Saying
+     * so is the whole fix; the editor is where it gets finished.
+     */
+    if (portalAt(map.value!, portal.to.x, portal.to.y)?.id === portal.id) {
+      travelProblem.value = 'This doorway has no exit set yet — finish it in the editor.'
+
+      return
+    }
+
     warp(portal.to.x, portal.to.y)
-    // Marked as used at the far end too, so a portal whose exit sits inside another one doesn't
-    // immediately fire that one as well and bounce you down a chain of them.
+    // Marked as used at the far end too, so a doorway whose exit sits inside another walked one
+    // doesn't immediately fire that one as well and bounce you down a chain of them.
     usedPortal = portalAt(map.value!, portal.to.x, portal.to.y)?.id ?? null
+
+    return
+  }
+
+  if (portal.to.kind === 'map') {
+    await enterInterior(portal.to)
 
     return
   }
@@ -1176,6 +1427,91 @@ async function travelThrough(portal: SpacePortal) {
       path: `/servers/${props.channel.server_id}/channels/${portal.to.channel_id}`,
       query: at,
     })
+  }
+  finally {
+    travelling.value = false
+  }
+}
+
+/**
+ * Where you come out, on the far side of a doorway between two of this channel's maps.
+ *
+ * Three answers, in the order they are worth having:
+ *
+ * 1. **A tile the doorway names.** An author who set an exit meant it, so it wins — but it is
+ *    checked against the map as it is *now*. The two maps are saved by separate requests, so an
+ *    interior can be rebuilt under a door that points into it and the named tile can be a wall by
+ *    the time somebody walks through.
+ *
+ * 2. **The doorway back the other way.** If the room we are arriving in has a door into the room
+ *    we just left, we come out standing in it — which is what makes leaving a submap put you back
+ *    at its entrance in the overworld rather than at the building's front door. This is the
+ *    common case, because it is what the auto-created way home relies on: it deliberately stores
+ *    *no* coordinates, so that moving the doorway in the overworld moves where you come back out,
+ *    with nothing to keep in step.
+ *
+ * 3. **The room's own entrance**, when there is no door back — a room reached from two places, or
+ *    one whose doorway hasn't been saved yet.
+ *
+ * Note that arriving *inside* a doorway is fine and expected here. The caller marks it used, so a
+ * walked one doesn't fire on the frame you land and send you straight back where you came from.
+ */
+function arrivalIn(next: SpaceMap, from: string, to: { x?: number | null, y?: number | null }) {
+  if (to.x != null && to.y != null && isWalkable(next, to.x, to.y)) {
+    return { x: to.x, y: to.y }
+  }
+
+  const back = doorwayInto(next, from)
+  const inDoorway = back ? standableIn(next, back) : null
+
+  return inDoorway ?? spawnPoint(next)
+}
+
+/**
+ * Step into one of this channel's other rooms.
+ *
+ * `travelling` is held for the fetch, which is the one thing here that can take a moment. It
+ * stops the frame loop firing this doorway again while the new grid is in the air — and it also
+ * stops you *walking* meanwhile, which matters more than it sounds: your keys are still bound
+ * and a step taken against the old map, landing after the new one arrives, is a step into
+ * whatever happens to be at those coordinates in the new room.
+ *
+ * The order at the far end is deliberate. The map is swapped first, then you are placed on it,
+ * and only then is the doorway remembered — each of those reads the one before it.
+ */
+async function enterInterior(to: { map: string, x?: number | null, y?: number | null }) {
+  travelling.value = true
+
+  // Which room we are leaving, read before the swap — it is what the far side is searched for.
+  const from = mapSlug.value
+
+  try {
+    const next = await openMap(to.map)
+
+    const at = arrivalIn(next, from, to)
+
+    /*
+     * Arriving *on* the way back is the intended shape rather than a hazard: a new interior is
+     * created with a wormhole home standing at its entrance, so you come out of one door already
+     * stood in the other.
+     *
+     * Which is exactly why the far end has to be marked used. If that way home is a *walked*
+     * doorway, landing on it would otherwise fire it on the very next frame and send you
+     * straight back out — a door that bounces you off itself. Read against the new map, since
+     * `usedPortal` means "on whichever grid I am now on".
+     */
+    warp(at.x, at.y)
+    usedPortal = portalAt(next, at.x, at.y)?.id ?? null
+  }
+  catch {
+    /*
+     * The room isn't there — deleted since the door was hung — or the read failed.
+     *
+     * You stay exactly where you were, and the doorway says why. Nothing retries by itself,
+     * because nothing fires by itself any more; pressing E again is the retry, which is what you
+     * want if the failure was the network rather than the room.
+     */
+    travelProblem.value = 'That room isn\'t there any more.'
   }
   finally {
     travelling.value = false
@@ -1218,6 +1554,8 @@ function loop(now: number) {
     checkFurniture()
     checkGame()
     checkPortal()
+    checkScreen()
+    checkExhibit()
   }
 
   // Outside the `inThisRoom` guard on purpose: an effect that started while you were standing in
@@ -1336,6 +1674,18 @@ function toggleHand() {
 const interactHint = computed(() => {
   if (seated.value) return 'Get up'
 
+  // Named, because "step through" is only half an answer — a room full of wormholes is a room
+  // where the useful question is which one, and the name is the only thing that can say.
+  if (portalHere.value) return `Step through to ${portalHere.value.name}`
+
+  // Only when something is actually playing. Offering to enlarge a blank screen is an offer that
+  // makes the prompt worth less everywhere it means something.
+  if (screenAhead.value && screenIsLive.value) return 'Watch fullscreen'
+
+  // Named, because a wall of paintings is a wall of prompts otherwise, and which one you are
+  // standing at is the only useful thing the prompt can tell you.
+  if (pieceAhead.value) return `Look at ${pieceAhead.value.title}`
+
   const kind = facingObject.value ? decorKind(facingObject.value.kind) : null
   if (kind) return `${kind.verb ?? 'Use'} the ${kind.label.toLowerCase()}`
 
@@ -1345,7 +1695,12 @@ const interactHint = computed(() => {
 })
 
 /** Whether E has anything to do where you're standing — what the prompt hangs off. */
-const hasPrompt = computed(() => seated.value || !!facingObject.value || !!facingSeat.value)
+const hasPrompt = computed(() => seated.value
+  || !!portalHere.value
+  || (!!screenAhead.value && screenIsLive.value)
+  || !!pieceAhead.value
+  || !!facingObject.value
+  || !!facingSeat.value)
 
 /**
  * Sit down, or get up again.
@@ -1392,7 +1747,14 @@ async function useFurniture() {
   using.value = true
 
   try {
-    const res = await api<SpaceInteraction>(`/api/channels/${props.channel.id}/space/interact`, {
+    /*
+     * Named with the map you are standing on.
+     *
+     * The server looks the object up in the map it resolves, and a Side Space holds several — so
+     * without this, pressing E on the cinema's screen would have the server hunt for that id in
+     * the lobby's furniture and 404.
+     */
+    const res = await api<SpaceInteraction>(`/api/channels/${props.channel.id}/space/interact?map=${encodeURIComponent(mapSlug.value)}`, {
       method: 'POST',
       body: { object_id: object.id },
     })
@@ -1635,7 +1997,7 @@ function onInteractKey(e: KeyboardEvent) {
   if (!inThisRoom.value) return
   // A sheet is open over the room — the editor, or the picker. Neither is a place where a
   // letter should reach past it and switch the telly on.
-  if (editing.value || dressing.value || shouting.value || askingDoor.value) return
+  if (editing.value || dressing.value || shouting.value || askingDoor.value || viewingPiece.value) return
 
   const el = e.target as HTMLElement | null
   if (el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.isContentEditable)) return
@@ -1677,6 +2039,30 @@ function onInteractKey(e: KeyboardEvent) {
 
   // Getting up comes first: while you're sitting, E is the way off the couch and nothing else.
   if (seated.value) { e.preventDefault(); toggleSeat(); return }
+
+  /*
+   * A wormhole under your feet beats the furniture in front of you.
+   *
+   * They can genuinely coincide — a doorway is a region and a couch can stand at the edge of one
+   * — and when they do, the wormhole is what you walked onto and the couch is what happened to be
+   * there. Ordering it this way also means the answer to "what does E do here" is the same
+   * wherever you stand in a doorway, rather than changing with which way you happen to be facing.
+   */
+  if (portalHere.value) { e.preventDefault(); void travelThrough(portalHere.value); return }
+
+  /*
+   * A screen with something on it, in front of you.
+   *
+   * Below the doorway because a doorway is under your feet and this is across the room, and above
+   * the furniture because sitting down in a cinema and then pressing E should make the film
+   * bigger — the couch you are facing is not what you came in for. Only when something is
+   * playing, so a dark screen leaves E to whatever else is around.
+   */
+  if (screenAhead.value && screenIsLive.value) { e.preventDefault(); watchFullscreen(); return }
+
+  // A painting you're standing at. Below the screen because a room has one screen and a gallery
+  // has eighty frames, so the screen is the more specific place to be standing.
+  if (pieceAhead.value) { e.preventDefault(); viewExhibit(); return }
 
   if (facingObject.value) { e.preventDefault(); void useFurniture(); return }
 
@@ -1811,7 +2197,8 @@ function draw() {
   ctx.fillStyle = OUTSIDE
   ctx.fillRect(0, 0, camera.width, camera.height)
 
-  drawMap(ctx, m, camera, palette, (performance.now() - openedAt) / 1000)
+  // The share, if there is one — painted onto whatever screens this map hangs. See drawScreens.
+  drawMap(ctx, m, camera, palette, (performance.now() - openedAt) / 1000, screenEl.value)
 
   // The game's things on the floor — tasks to walk to, bodies to find — under everyone.
   if (gameRunning.value) drawGame(ctx)
@@ -1984,6 +2371,12 @@ function drawPrompt(ctx: CanvasRenderingContext2D) {
   // the button below the room and nothing here. A label floating over your own head would be
   // over the sprite it's about.
   if (seated.value) return
+
+  // Same for a wormhole, and for the same reason twice over: you are standing *in* it, and it
+  // already draws its own name above itself. Suppressed rather than merely skipped, because E
+  // belongs to the wormhole here — a tag reading "E · Sit" over a couch you happen to be facing
+  // would be advertising the one thing the key will not do.
+  if (portalHere.value) return
 
   const object = facingObject.value ?? facingSeat.value
   const kind = object ? decorKind(object.kind) : null
@@ -2541,6 +2934,29 @@ async function onMapSaved() {
   await loadMap()
 }
 
+/**
+ * The editor asking to be pointed at another of this Side Space's maps.
+ *
+ * The same move as walking through a doorway into it, and done the same way — the editor stays
+ * open, keyed on the new map, and you are put down at its entrance. Editing a room you are not
+ * standing in would mean drawing a grid nobody's avatar is on, which is exactly the arrangement
+ * that lets somebody paint a wall through a person.
+ */
+async function onEditorOpenMap(slug: string) {
+  try {
+    const next = await openMap(slug)
+    const at = spawnPoint(next)
+
+    warp(at.x, at.y)
+    // Put down on the interior's entrance, which is where its way home stands. Same reason as
+    // the doorway path: a walked one would otherwise fire the instant you landed on it.
+    usedPortal = portalAt(next, at.x, at.y)?.id ?? null
+  }
+  catch {
+    // Gone since the list was drawn. The editor stays on the map it has, which is still real.
+  }
+}
+
 onMounted(async () => {
   openedAt = performance.now()
 
@@ -2978,6 +3394,23 @@ watch(inThisRoom, (now) => {
       <div ref="wrap" class="relative min-w-0 flex-1 overflow-hidden">
         <!-- `touch-none` is load-bearing: without it a drag across the room is a scroll gesture
              and the browser takes the pointer stream away mid-walk. -->
+        <!--
+          The share, kept a pixel across and invisible.
+
+          Two jobs, and it has to be a real element for both: drawScreens copies its current frame
+          onto the map's screens, and `requestFullscreen` needs something to enlarge. Not
+          `display:none` — a hidden video is one some browsers stop decoding, and a screen painted
+          from a stalled element is a frozen frame nobody can explain.
+        -->
+        <video
+          v-if="hasScreens"
+          ref="screenEl"
+          muted
+          playsinline
+          autoplay
+          class="space-share pointer-events-none absolute left-0 top-0 h-px w-px opacity-0"
+        />
+
         <canvas
           ref="canvas"
           class="block h-full w-full touch-none"
@@ -3069,14 +3502,26 @@ watch(inThisRoom, (now) => {
           <span v-if="blockedDoorTakesPassword && !narrow" class="rounded border border-background/40 px-1 text-[10px] leading-4">E</span>
         </component>
 
+        <!-- A doorway that led nowhere. Sits where the prompt would be, because it is the answer
+             to the press that was just made there. -->
+        <div
+          v-if="inThisRoom && travelProblem"
+          class="absolute bottom-2 left-1/2 flex -translate-x-1/2 items-center gap-2 rounded-full bg-destructive px-3 py-1.5 text-xs font-medium text-destructive-foreground shadow-lg"
+        >
+          {{ travelProblem }}
+        </div>
+
         <button
-          v-if="inThisRoom && hasPrompt && !blockedDoor && !handOffer && !following"
+          v-if="inThisRoom && hasPrompt && !travelProblem && !blockedDoor && !handOffer && !following"
           type="button"
           class="absolute bottom-2 left-1/2 flex -translate-x-1/2 items-center gap-2 rounded-full bg-foreground px-3 py-1.5 text-xs font-medium text-background shadow-lg transition hover:opacity-90 disabled:opacity-60"
-          :disabled="using"
-          @click="facingObject ? useFurniture() : toggleSeat()"
+          :disabled="using || travelling"
+          @click="portalHere ? travelThrough(portalHere)
+            : (screenAhead && screenIsLive) ? watchFullscreen()
+              : pieceAhead ? viewExhibit()
+                : facingObject ? useFurniture() : toggleSeat()"
         >
-          <Loader2 v-if="using" class="h-3.5 w-3.5 animate-spin" />
+          <Loader2 v-if="using || travelling" class="h-3.5 w-3.5 animate-spin" />
           <span v-else-if="!narrow" class="rounded border border-background/40 px-1 text-[10px] leading-4">E</span>
           {{ interactHint }}
         </button>
@@ -3469,13 +3914,29 @@ watch(inThisRoom, (now) => {
          chat is hidden, since there is nothing to trade against. -->
     <ResizeHandle v-if="!chatHidden" edge="bottom" @resize="startResize" />
 
+    <!--
+      Keyed on the map, so walking into another of this Side Space's rooms rebuilds the editor
+      around it. Without the key the panel would keep the draft it built from the map it opened
+      on — every ref in it is seeded from the prop at setup — and the next Save would write the
+      lobby's grid into the cinema.
+    -->
     <SideSpaceMapEditor
       v-if="editing && map"
+      :key="map.slug"
       :channel-id="channel.id"
       :map="map"
       :mode="editing"
       @close="editing = null"
       @saved="onMapSaved"
+      @open="onEditorOpenMap"
+      @rooms-changed="refreshMap()"
+    />
+
+    <!-- A painting, full size. Over everything, and the room keeps running behind it. -->
+    <SpaceExhibitViewer
+      v-if="viewingPiece"
+      :piece="viewingPiece"
+      @close="viewingPiece = null"
     />
 
     <SpaceAppearanceDialog
@@ -3494,6 +3955,7 @@ watch(inThisRoom, (now) => {
       v-if="askingDoor"
       :door-id="askingDoor"
       :channel-id="channel.id"
+      :map-slug="mapSlug"
       :room-name="blockedRoomName"
       @entered="onEnteredDoor"
       @close="askingDoor = null"
@@ -3508,3 +3970,32 @@ watch(inThisRoom, (now) => {
     />
   </div>
 </template>
+
+<style scoped>
+/*
+ * The share, once it *is* the whole display.
+ *
+ * The element is a transparent pixel the rest of the time — it exists so the canvas has a frame
+ * to copy — and none of that stops applying when it goes fullscreen. Which is the bug this
+ * fixes: `requestFullscreen` on an `opacity: 0` element a pixel across gives you a perfectly
+ * working fullscreen video that is invisible, i.e. a black screen.
+ *
+ * A `:fullscreen` rule rather than a bound class because the element can leave fullscreen without
+ * us asking — Escape, the window manager, another element taking it — and a class would have to
+ * be unset from a listener for every one of those. The pseudo-class is true exactly when it is
+ * true.
+ *
+ * The `!important`s are load-bearing against Tailwind: `.opacity-0` and `.h-px` are author styles
+ * of the same specificity order, and the UA's own fullscreen sizing loses to both.
+ */
+.space-share:fullscreen {
+  width: 100vw !important;
+  height: 100vh !important;
+  opacity: 1 !important;
+  /* Letterboxed, not stretched — a share is whatever shape somebody's monitor is. */
+  object-fit: contain;
+  background: #000;
+  /* It is the whole screen now, so it may as well take its own clicks. */
+  pointer-events: auto !important;
+}
+</style>

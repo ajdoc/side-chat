@@ -91,20 +91,40 @@ final class CreateDiscussionAction
      */
     private function copyMap(Channel $discussion, ?Channel $source): void
     {
-        $map = $source?->loadMissing('spaceMap')->spaceMap;
+        $maps = $source?->loadMissing('spaceMaps')->spaceMaps ?? collect();
 
-        if ($map === null) {
-            return;
+        foreach ($maps as $map) {
+            $discussion->spaceMaps()->create([
+                /*
+                 * The slug comes along unchanged, and that is what makes the copy work.
+                 *
+                 * A Side Space is a building now — an overworld and its interiors, joined by
+                 * portals that name their destination by *slug*. Copy the rooms under fresh
+                 * slugs and every door in the copy points at a name that isn't there; copy them
+                 * under the same ones and the whole building arrives with its doors working,
+                 * pointing within itself, having touched nothing about the original.
+                 *
+                 * `portals` is copied for the same reason, and its absence here was a latent
+                 * bug even while a channel had one map: a room duplicated without its doorways
+                 * is not the room that was duplicated.
+                 */
+                'slug' => $map->slug,
+                'name' => $map->name,
+                'width' => $map->width,
+                'height' => $map->height,
+                'tiles' => $map->tiles,
+                'zones' => $map->zones,
+                'objects' => $map->objects,
+                'spawn' => $map->spawn,
+                'projection' => $map->projection,
+                'backdrops' => $map->backdrops,
+                'portals' => $map->portals,
+                'screens' => $map->screens,
+                // The frames, not what is hanging in them: the pictures are staff-uploaded rows
+                // against the *original* map, and copying files into a duplicate silently is a
+                // decision this action has no business making.
+                'exhibits' => $map->exhibits,
+            ]);
         }
-
-        $discussion->spaceMap()->create([
-            'name' => $map->name,
-            'width' => $map->width,
-            'height' => $map->height,
-            'tiles' => $map->tiles,
-            'zones' => $map->zones,
-            'objects' => $map->objects,
-            'spawn' => $map->spawn,
-        ]);
     }
 }

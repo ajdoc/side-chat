@@ -28,6 +28,9 @@ class VoiceParticipant extends Model
         'x',
         'y',
         'facing',
+        // Which of the channel's maps that position is on — see the migration. Null for a row
+        // written before Side Spaces held interiors, and read as the way in.
+        'space_map',
     ];
 
     protected function casts(): array

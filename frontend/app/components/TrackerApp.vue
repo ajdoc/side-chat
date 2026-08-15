@@ -139,17 +139,31 @@ async function onRemoveTask() {
   await removeTask(id)
 }
 
-async function onRemoveProject(p: TrackerProject) {
-  // eslint-disable-next-line no-alert
-  const ok = window.confirm(
-    `Delete “${p.name}”?\n\nThis permanently deletes the project, its tasks, and their comments and history. This cannot be undone.`,
-  )
-  if (!ok) return
-  if (openProjectId.value === p.id) {
-    openProjectId.value = null
-    openTaskId.value = null
+/** The project the confirm is about, and whether its deletion is in flight. */
+const removingProject = ref<TrackerProject | null>(null)
+const removeProjectBusy = ref(false)
+
+function onRemoveProject(p: TrackerProject) {
+  removingProject.value = p
+}
+
+async function confirmRemoveProject() {
+  const p = removingProject.value
+  if (!p) return
+
+  removeProjectBusy.value = true
+
+  try {
+    if (openProjectId.value === p.id) {
+      openProjectId.value = null
+      openTaskId.value = null
+    }
+    await removeProject(p.id)
+    removingProject.value = null
   }
-  await removeProject(p.id)
+  finally {
+    removeProjectBusy.value = false
+  }
 }
 
 /** Create a tag the channel doesn't have yet, then put it on the open task. */
@@ -163,6 +177,17 @@ async function onCreateTag(label: string) {
 </script>
 
 <template>
+  <ConfirmDialog
+    :open="!!removingProject"
+    :title="`Delete “${removingProject?.name}”?`"
+    description="The project, its tasks, and their comments and history are permanently deleted. This cannot be undone."
+    confirm-label="Delete project"
+    busy-label="Deleting…"
+    :busy="removeProjectBusy"
+    @update:open="removingProject = $event ? removingProject : null"
+    @confirm="confirmRemoveProject"
+  />
+
   <div class="flex min-h-0 flex-1 flex-col">
     <!-- The one header for all three screens. Back appears exactly when there's somewhere to
          go, so the home screen has no dead button on it. -->

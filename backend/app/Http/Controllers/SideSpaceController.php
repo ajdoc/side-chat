@@ -5,11 +5,15 @@ namespace App\Http\Controllers;
 use App\Events\SideSpaceMapUpdated;
 use App\Events\SideSpaceSummoned;
 use App\Http\Requests\SideSpace\AssignSpaceRoomOwnerRequest;
+use App\Http\Requests\SideSpace\DestroySideSpaceMapRequest;
+use App\Http\Requests\SideSpace\DestroySpaceExhibitRequest;
 use App\Http\Requests\SideSpace\DestroySpaceLockRequest;
 use App\Http\Requests\SideSpace\EnterSpaceLockRequest;
 use App\Http\Requests\SideSpace\IndexSpaceLocksRequest;
 use App\Http\Requests\SideSpace\InteractWithSpaceObjectRequest;
 use App\Http\Requests\SideSpace\ShowSideSpaceMapRequest;
+use App\Http\Requests\SideSpace\StoreSideSpaceMapRequest;
+use App\Http\Requests\SideSpace\StoreSpaceExhibitRequest;
 use App\Http\Requests\SideSpace\StoreSpaceLockRequest;
 use App\Http\Requests\SideSpace\SummonSpaceRequest;
 use App\Http\Requests\SideSpace\UpdateSideSpaceMapRequest;
@@ -18,6 +22,7 @@ use App\Http\Requests\SideSpace\UpdateSpacePositionRequest;
 use App\Http\Resources\SideSpaceMapResource;
 use App\Http\Resources\WidgetResource;
 use App\Models\Channel;
+use App\Models\SideSpaceExhibit;
 use App\Models\SideSpaceLock;
 use App\Models\SideSpaceMap;
 use App\Models\SideSpaceRoom;
@@ -32,6 +37,7 @@ use App\Support\SideSpace\RoomPresets;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Response;
 use Illuminate\Support\Facades\Hash;
+use Illuminate\Support\Facades\Storage;
 use Illuminate\Validation\ValidationException;
 
 /**
@@ -78,6 +84,8 @@ class SideSpaceController extends Controller
                 // arrived without its backdrop would come up as a grid of bare collision tiles.
                 'backdrops' => $preset['backdrops'] ?? [],
                 'portals' => $preset['portals'] ?? [],
+                'screens' => $preset['screens'] ?? [],
+                'exhibits' => $preset['exhibits'] ?? [],
                 'zones' => $preset['zones'],
                 'objects' => $preset['objects'],
                 'spawn' => $preset['spawn'],
@@ -111,6 +119,156 @@ class SideSpaceController extends Controller
     public function show(ShowSideSpaceMapRequest $request, Channel $channel): SideSpaceMapResource
     {
         return new SideSpaceMapResource($this->mapFor($channel));
+    }
+
+    /**
+     * Add an interior — another room to this Side Space, reachable through a door.
+     *
+     * ## The way out is built; the way in is not
+     *
+     * The new map arrives with a wormhole home already standing at its entrance, and with nothing
+     * pointing *at* it. The asymmetry is not an oversight — it falls out of which map each door
+     * would have to be cut into.
+     *
+     * The way back belongs to the map being created here, which no one else is holding and which
+     * this request already owns entirely. The way in belongs to some *other* map — whichever one
+     * the author decides to hang it on — and writing to that would mean this endpoint editing a
+     * grid it was not given and that somebody may be halfway through editing in the editor.
+     *
+     * So the room you have just made is a room you can leave, which is the half that can never be
+     * wrong, and getting into it is the author's next decision. Until they make one it is simply
+     * a room under construction, which is what a new one is.
+     *
+     * Starts from a preset for the same reason the request takes one: geometry is validated in
+     * exactly one place, and it isn't here.
+     */
+    public function storeMap(StoreSideSpaceMapRequest $request, Channel $channel): SideSpaceMapResource
+    {
+        abort_unless($channel->isSpace(), 404);
+
+        // Counted rather than left to the unique key, because the ceiling is about how many
+        // rooms a person can hold in their head and navigate, not about collisions.
+        abort_if(
+            $channel->spaceMaps()->count() >= SideSpaceMap::MAX_PER_CHANNEL,
+            422,
+            'This Side Space is full — it can hold '.SideSpaceMap::MAX_PER_CHANNEL.' rooms.',
+        );
+
+        $preset = MapPresets::find($request->validated('preset') ?? 'blank') ?? MapPresets::find('blank');
+
+        $map = $channel->spaceMaps()->create([
+            'slug' => $request->validated('slug'),
+            // The author's name for the room, not the preset's — the preset is a starting
+            // layout, and "Blank" is nobody's name for the cinema they are building.
+            'name' => $request->validated('name'),
+            'width' => $preset['width'],
+            'height' => $preset['height'],
+            'tiles' => $preset['tiles'],
+            'zones' => $preset['zones'],
+            'objects' => $preset['objects'] ?? [],
+            'spawn' => $preset['spawn'],
+            // A preset may name the view it was drawn for — the cinema is authored isometrically
+            // and is a grid of chairs seen flat. Most name none, and those are flat as they were.
+            'projection' => $preset['projection'] ?? 'flat',
+            // The artwork, without which a backdrop preset arrives as a grid of bare collision
+            // tiles — a cinema-shaped hole where the cinema should be.
+            'backdrops' => $preset['backdrops'] ?? [],
+            'screens' => $preset['screens'] ?? [],
+            'exhibits' => $preset['exhibits'] ?? [],
+            // The way home — see wayHome().
+            'portals' => [$this->wayHome($channel, $preset, $request)],
+            'updated_by' => $request->user()?->id,
+        ]);
+
+        // Everyone standing in the building hears about it, so the editor's room list and every
+        // portal's destination picker gain the new room without a reload.
+        broadcast(new SideSpaceMapUpdated($map));
+
+        return new SideSpaceMapResource($map->load('editor', 'channel.spaceMaps'));
+    }
+
+    /**
+     * The wormhole home that every new interior is born with.
+     *
+     * ## Where it stands
+     *
+     * On the room's own entrance, not beside it. A doorway *into* this room that names no exit
+     * puts you at the spawn — so you arrive out of one wormhole already stood in the other, which
+     * is how a door in a Pokémon town behaves. The spawn is also the one tile the map is
+     * guaranteed to have and guaranteed to be standable on, which is exactly what a portal needs.
+     *
+     * ## Where it goes, and why it names no tile
+     *
+     * Back to whichever map asked for this one — and *deliberately without coordinates*.
+     *
+     * It did bake in the doorway's tile, taken from the door being drawn at the moment the room
+     * was created. That put you back exactly where you left, and it went stale the first time
+     * anybody moved that doorway: nothing about dragging a door two tiles to the left suggests
+     * you must also go into the other room and correct its way home.
+     *
+     * So the tile is resolved when somebody actually travels, by looking for the doorway *into*
+     * this room on the map at the far end and coming out standing in it — see `arrivalIn` in the
+     * stage. Storing nothing is what makes that possible: a stored point would win, being the
+     * author's explicit choice, and would shadow the lookup forever.
+     *
+     * It also fixes an ordering problem this could not otherwise solve. The doorway into this new
+     * room lives in the editor's *unsaved draft* at the moment the room is created, so there is
+     * no door to point at yet. By the time anyone walks through, there is.
+     *
+     * @param  array<string, mixed>  $preset
+     * @return array<string, mixed>
+     */
+    private function wayHome(Channel $channel, array $preset, StoreSideSpaceMapRequest $request): array
+    {
+        $slug = (string) ($request->validated('return_to') ?: SideSpaceMap::MAIN);
+
+        // A return to a map that isn't here is a return to the way in, which always is.
+        if (! $channel->spaceMaps()->where('slug', $slug)->exists()) {
+            $slug = SideSpaceMap::MAIN;
+        }
+
+        return [
+            'id' => 'way-home',
+            'name' => 'Back',
+            'x' => $preset['spawn']['x'],
+            'y' => $preset['spawn']['y'],
+            'w' => 1,
+            'h' => 1,
+            // No tile — see above. The client resolves one against the far map as it is *then*.
+            'to' => ['kind' => 'map', 'map' => $slug],
+        ];
+    }
+
+    /**
+     * Pull an interior out of the building.
+     *
+     * Staff only ({@see DestroySideSpaceMapRequest}) and refused for the main map, which is the
+     * channel's way in. The doors *into* the deleted room are deliberately left where they are,
+     * hanging over nothing: rewriting other maps' portals as a side effect of this call would
+     * mean silently editing rooms the caller did not ask about — and a door that leads nowhere
+     * is visible, mentioned in the editor, and fixed by opening the map it is on. See the walk's
+     * fallback for what happens if somebody reaches one first.
+     */
+    public function destroyMap(DestroySideSpaceMapRequest $request, Channel $channel, string $slug): Response
+    {
+        abort_unless($channel->isSpace(), 404);
+        abort_if($slug === SideSpaceMap::MAIN, 422, 'The main room is the way in — it can\'t be removed.');
+
+        $map = $channel->spaceMaps()->where('slug', $slug)->first();
+
+        abort_if($map === null, 404);
+
+        $map->delete();
+
+        // Announced against the main map: the deleted one no longer exists to name, and what
+        // every listener actually has to do is re-read the building's room list.
+        $main = $channel->spaceMap;
+
+        if ($main !== null) {
+            broadcast(new SideSpaceMapUpdated($main));
+        }
+
+        return response()->noContent();
     }
 
     /**
@@ -154,6 +312,18 @@ class SideSpaceController extends Controller
             'backdrops' => $request->validated('backdrops') ?? [],
             // Same rule as the artwork: a whole-map save carries the whole map, doorways included.
             'portals' => $request->validated('portals') ?? [],
+            // And its screens, on the same rule again.
+            'screens' => $request->validated('screens') ?? [],
+            /*
+             * And its frames — the rectangles, never what is hanging in them.
+             *
+             * A member rearranging the gallery moves frames around. The pictures are rows in
+             * their own table keyed by frame id, so they stay exactly where they were and simply
+             * belong to a frame that has moved. Deleting a frame here leaves its picture
+             * unreferenced rather than destroying it, which is the forgiving direction: draw the
+             * frame again with the same id and the painting is back on the wall.
+             */
+            'exhibits' => $request->validated('exhibits') ?? [],
             'updated_by' => $request->user()?->id,
         ]);
 
@@ -197,6 +367,73 @@ class SideSpaceController extends Controller
     }
 
     /**
+     * Hang a picture in one of the map's frames, or replace the one that's there.
+     *
+     * Staff only ({@see StoreSpaceExhibitRequest}) — see that class for why this is the one part
+     * of building a room that isn't open to every member.
+     *
+     * An upsert rather than a create, so re-hanging a wall is one action instead of a delete and
+     * an add that can half-fail and leave a frame empty. The old file is deleted *after* the row
+     * points at the new one: the other order risks a row pointing at bytes that are already gone,
+     * which is a broken picture rather than a stale one.
+     */
+    public function storeExhibit(StoreSpaceExhibitRequest $request, Channel $channel, string $exhibit): JsonResponse
+    {
+        $map = $this->mapFor($channel);
+
+        // The frame has to exist *now*. Hanging a picture in a frame nobody drew is a row that
+        // can never resolve, and refusing it is a far clearer answer than accepting it and having
+        // nothing appear on any wall.
+        abort_unless(
+            collect($map->exhibits ?? [])->contains(fn ($f) => ($f['id'] ?? null) === $exhibit),
+            404,
+        );
+
+        $existing = $map->exhibitPieces()->where('exhibit_id', $exhibit)->first();
+        $disk = config('filesystems.default');
+        $path = $request->file('image')->store("space-exhibits/{$channel->id}", $disk);
+
+        $row = $map->exhibitPieces()->updateOrCreate(
+            ['exhibit_id' => $exhibit],
+            [
+                'title' => $request->validated('title'),
+                'artist' => $request->validated('artist'),
+                'caption' => $request->validated('caption'),
+                'disk' => $disk,
+                'path' => $path,
+                'mime_type' => $request->file('image')->getMimeType(),
+                'size' => $request->file('image')->getSize(),
+                'uploaded_by' => $request->user()?->id,
+            ],
+        );
+
+        // Only now, and only if it really was a different file — an upsert that happened to
+        // store to the same path would otherwise delete what it had just written.
+        if ($existing && $existing->path !== $path) {
+            Storage::disk($existing->disk)->delete($existing->path);
+        }
+
+        return $this->announce($map);
+    }
+
+    /**
+     * Take a picture back down. The frame stays — it is geometry, and this endpoint does not edit
+     * the map document.
+     */
+    public function destroyExhibit(DestroySpaceExhibitRequest $request, Channel $channel, string $exhibit): JsonResponse
+    {
+        $map = $this->mapFor($channel);
+        $row = $map->exhibitPieces()->where('exhibit_id', $exhibit)->first();
+
+        abort_if($row === null, 404);
+
+        Storage::disk($row->disk)->delete($row->path);
+        $row->delete();
+
+        return $this->announce($map);
+    }
+
+    /**
      * Remember where somebody is standing.
      *
      * Silent on purpose: no broadcast, no event. Everyone who needs to know where you are is
@@ -218,6 +455,9 @@ class SideSpaceController extends Controller
                 'x' => $request->validated('x'),
                 'y' => $request->validated('y'),
                 'facing' => $request->validated('facing'),
+                // Coordinates without a room are an answer to the wrong question once a Side
+                // Space holds interiors — see the migration.
+                'space_map' => $request->validated('space_map') ?? SideSpaceMap::MAIN,
             ]);
 
         return response()->noContent();
@@ -317,14 +557,28 @@ class SideSpaceController extends Controller
     {
         abort_unless($channel->isSpace(), 404);
 
-        $map = $channel->spaceMap;
+        /*
+         * Which room of the building. Absent means the way in, so every caller that predates
+         * interiors — and every client that has never heard of them — keeps asking for and
+         * getting exactly what it always got.
+         *
+         * A slug that names no map is a 404 rather than a quiet fall back to the main one. The
+         * two are indistinguishable to a client otherwise, and "the door led somewhere that
+         * isn't there" silently becoming "you're in the lobby" is the kind of wrong that only
+         * shows up as people mysteriously not being where they walked to.
+         */
+        $slug = (string) request()->query('map', SideSpaceMap::MAIN);
+
+        $map = $channel->spaceMaps()->where('slug', $slug)->first();
 
         abort_if($map === null, 404);
 
         // Rooms and locks ride along with every read of the map. The browser needs them to
         // decide whether a door opens, which is a question it answers per frame and cannot go
         // and ask about. See SideSpaceMapResource.
-        return $map->load('rooms.owner', 'locks.creator');
+        // `channel.spaceMaps` is the building's room list — names only in the payload, but it
+        // has to be loaded here or the resource omits it and the editor loses its switcher.
+        return $map->load('rooms.owner', 'locks.creator', 'channel.spaceMaps', 'exhibitPieces');
     }
 
     // --- rooms and their doors ---
@@ -630,7 +884,7 @@ class SideSpaceController extends Controller
     {
         $map->touch();
 
-        $fresh = $map->fresh(['rooms.owner', 'locks.creator', 'editor']);
+        $fresh = $map->fresh(['rooms.owner', 'locks.creator', 'editor', 'exhibitPieces']);
 
         broadcast(new SideSpaceMapUpdated($fresh));
 

@@ -38,3 +38,12 @@ Route::get('/space-documents/{document}/download', [App\Http\Controllers\SpaceDo
 Route::get('/widgets/{widget}/video/{source}', [App\Http\Controllers\WidgetVideoController::class, 'show'])
     ->name('widget-videos.show')
     ->middleware('signed');
+
+/*
+ * Artwork hanging in a Side Space's frames. Same private-disk + signed-URL model as attachments,
+ * so an <img> in a museum opens with no auth header — and a picture in a private channel's
+ * gallery is still not readable by anybody who guesses the path.
+ */
+Route::get('/space-exhibits/{exhibit}', [App\Http\Controllers\SpaceExhibitFileController::class, 'show'])
+    ->name('space-exhibits.show')
+    ->middleware('signed');

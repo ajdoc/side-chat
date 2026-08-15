@@ -1,3 +1,4 @@
+import { MAIN_MAP } from '~/lib/spaceMapEngine'
 /**
  * The management side of rooms and locks — as distinct from the *runtime* side, which arrives
  * inside the map and is what makes doors open.
@@ -46,7 +47,12 @@ export interface SpaceLockRow {
   created_at: string
 }
 
-export function useSpaceLocks(channelId: number) {
+/**
+ * @param mapSlug which of the channel's maps these doors are on — a Side Space holds several,
+ *   and a lock belongs to one grid. Defaults to the way in, which is what a channel with no
+ *   interiors has and all this used to mean.
+ */
+export function useSpaceLocks(channelId: number, mapSlug: MaybeRefOrGetter<string> = MAIN_MAP) {
   const api = useApi()
 
   const locks = ref<SpaceLockRow[]>([])
@@ -59,11 +65,25 @@ export function useSpaceLocks(channelId: number) {
 
   const base = `/api/channels/${channelId}/space`
 
+  /*
+   * `?map=` for anything but the way in.
+   *
+   * A function rather than a captured string because the room under your feet changes while this
+   * composable lives — walking through a doorway swaps the map without remounting anything — and
+   * a lock written against the map you were standing in two doors ago is a lock on the wrong
+   * door.
+   */
+  function query() {
+    const slug = toValue(mapSlug)
+
+    return slug === MAIN_MAP ? '' : `?map=${encodeURIComponent(slug)}`
+  }
+
   async function load() {
     loading.value = true
     error.value = ''
     try {
-      const res = await api<{ data: SpaceLockRow[], can_manage_rooms: boolean, my_rooms: string[] }>(`${base}/locks`)
+      const res = await api<{ data: SpaceLockRow[], can_manage_rooms: boolean, my_rooms: string[] }>(`${base}/locks${query()}`)
       locks.value = res.data
       canManageRooms.value = res.can_manage_rooms
       myRooms.value = res.my_rooms
@@ -90,12 +110,12 @@ export function useSpaceLocks(channelId: number) {
     const body: Record<string, unknown> = { allowed }
     if (password !== undefined) body.password = password
 
-    await api(`${base}/locks/${objectId}`, { method: 'PUT', body })
+    await api(`${base}/locks/${objectId}${query()}`, { method: 'PUT', body })
     await load()
   }
 
   async function unlock(objectId: string) {
-    await api(`${base}/locks/${objectId}`, { method: 'DELETE' })
+    await api(`${base}/locks/${objectId}${query()}`, { method: 'DELETE' })
     await load()
   }
 
@@ -108,7 +128,7 @@ export function useSpaceLocks(channelId: number) {
    * for: the last list written is the list.
    */
   async function assignRoom(zoneId: string, ownerIds: number[]) {
-    await api(`${base}/rooms/${zoneId}`, { method: 'PUT', body: { owner_ids: ownerIds } })
+    await api(`${base}/rooms/${zoneId}${query()}`, { method: 'PUT', body: { owner_ids: ownerIds } })
     await load()
   }
 
@@ -125,7 +145,7 @@ export function useSpaceLocks(channelId: number) {
    * one is called far more often than it looks like it would be.
    */
   async function enter(objectId: string, password: string) {
-    await api(`${base}/locks/${objectId}/enter`, { method: 'POST', body: { password } })
+    await api(`${base}/locks/${objectId}/enter${query()}`, { method: 'POST', body: { password } })
   }
 
   return { locks, canManageRooms, myRooms, loading, error, load, lock, unlock, assignRoom, enter }

@@ -50,6 +50,16 @@ class SideSpaceMapUpdated implements ShouldBroadcastNow
         return [
             'id' => $this->map->id,
             'channel_id' => $this->map->channel_id,
+            /*
+             * Which of the channel's rooms was rebuilt.
+             *
+             * A Side Space holds several maps but one broadcast channel, so this event now
+             * reaches people who are standing in a *different* room of the same building. They
+             * must not refetch: they would be told about a grid they aren't on, and the one
+             * they are on would be replaced by it. The slug is what lets each listener decide
+             * whether the news is about the floor under its own feet.
+             */
+            'slug' => $this->map->slug,
             'updated_at' => $this->map->updated_at?->toISOString(),
         ];
     }

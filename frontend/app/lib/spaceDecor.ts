@@ -96,6 +96,18 @@ export interface DecorKind {
    */
   seat: boolean
   /**
+   * Occupies a tile and draws nothing.
+   *
+   * For furniture that is part of the *picture* rather than standing on it. A backdrop map is one
+   * piece of artwork over a grid of pure collision, so a cinema's seats are painted — there is
+   * nothing in this catalogue to place on them, and placing a chair would stand a sixteen-pixel
+   * sprite on top of a drawn one.
+   *
+   * Distinct from `art: null`, which draws a flat coloured rectangle as a fallback. This draws
+   * nothing at all, on purpose.
+   */
+  hidden: boolean
+  /**
    * Is the whole piece **one** seat, rather than a row of them?
    *
    * The distinction a footprint can't make on its own. A two-tile bench is two places to sit and
@@ -1882,6 +1894,9 @@ export const DECOR: Record<string, DecorKind & { art: string[] | string[][] | nu
   bench: kind('Bench', { w: 2, seat: true, art: BENCH, side: BENCH_SIDE, back: BENCH_BACK }),
   chair: kind('Office chair', { solid: false, seat: true, art: CHAIR, side: CHAIR_SIDE, back: CHAIR_BACK }),
   stool: kind('Stool', { solid: false, seat: true, art: STOOL }),
+  // A seat with nothing drawn on it — for sitting on furniture that is part of the artwork. See
+  // `hidden`, and the Movie Theatre, whose rows of seats are painted into its backdrop.
+  seat: kind('Seat (invisible)', { solid: false, seat: true, hidden: true, art: null }),
   // Walk-on-able like the other single seats, for the same reason: a throne you had to stand
   // *beside* to sit on would put you next to the crown rather than on it. Two tiles square, so
   // that sitting on it doesn't hide it — see the note on the artwork.
@@ -1997,6 +2012,7 @@ function kind(
     interact: over.interact ?? null,
     verb: over.verb ?? null,
     seat: over.seat ?? false,
+    hidden: over.hidden ?? false,
     oneSeat: over.oneSeat ?? false,
     sheet: over.sheet ?? null,
     still: over.still ?? null,
@@ -2335,6 +2351,10 @@ export function drawDecor(
 ): void {
   const kind = DECOR[object.kind]
   if (!kind) return
+
+  // Draws nothing by design — it is a place to sit on furniture somebody painted. Checked before
+  // any of the sizing below, which would all be work towards a picture that never gets drawn.
+  if (kind.hidden) return
 
   // Two rectangles, and the difference between them is the whole of rotation. The *placed*
   // footprint is what the piece occupies on the floor (turned, so possibly w and h swapped);

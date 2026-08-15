@@ -4,6 +4,7 @@ use App\Events\SideSpaceMapUpdated;
 use App\Events\SideSpaceSummoned;
 use App\Events\VoiceStateUpdated;
 use App\Models\Channel;
+use App\Models\SideSpaceExhibit;
 use App\Models\SideSpaceMap;
 use App\Models\User;
 use App\Models\VoiceParticipant;
@@ -14,7 +15,9 @@ use App\Support\SideSpace\Decorations;
 use App\Support\SideSpace\MapPresets;
 use App\Support\SideSpace\RoomPresets;
 use App\Support\SideSpace\Tiles;
+use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Facades\Event;
+use Illuminate\Support\Facades\Storage;
 use Laravel\Passport\Passport;
 
 /*
@@ -806,6 +809,18 @@ it('builds every preset as a room the API would accept', function () {
             'zones' => $preset['zones'],
             'objects' => $preset['objects'],
             'spawn' => $preset['spawn'],
+            /*
+             * The whole preset, not the parts that existed when this test was written.
+             *
+             * Sent because the editor *loads* a preset and saves it back, so anything a preset
+             * carries has to survive the validator — and because a preset that named artwork the
+             * server has never heard of, or hung a screen off the edge of its own grid, would
+             * otherwise fail on somebody's first channel rather than here.
+             */
+            'projection' => $preset['projection'] ?? 'flat',
+            'backdrops' => $preset['backdrops'] ?? [],
+            'portals' => $preset['portals'] ?? [],
+            'screens' => $preset['screens'] ?? [],
         ])->assertOk("The '$key' preset is not a legal room.");
     }
 });
@@ -1286,4 +1301,558 @@ it('is not a thing you can do to a channel nobody walks around in', function () 
     ])->assertNotFound();
 
     Event::assertNotDispatched(SideSpaceSummoned::class);
+});
+
+// --- interiors: several maps behind one channel ---
+
+/*
+ * A Side Space stopped being a room and became a building — an overworld plus the interiors
+ * behind its doors, all sharing one channel, one call and one presence channel. That last part is
+ * the whole point of the feature, and it is also what makes these tests worth having: the
+ * alternative design (an interior is another channel) is one line of portal config and needs no
+ * schema at all. What it costs is a reconnect at every doorway.
+ *
+ * So what's tested here is the seam: that a second map can exist under one channel, that every
+ * endpoint can be aimed at one, that the way in cannot be removed, and that a doorway between two
+ * of them is refused unless it lands somewhere you can actually stand.
+ */
+
+it('opens on its main map, and lets an interior be added beside it', function () {
+    [$owner, , $channel] = ownerWithSpaceChannel();
+    Passport::actingAs($owner);
+
+    expect($channel->spaceMap->slug)->toBe(SideSpaceMap::MAIN);
+
+    $this->postJson("/api/channels/{$channel->id}/space/maps", [
+        'slug' => 'screen-one',
+        'name' => 'Screen One',
+        'preset' => 'movie-theatre',
+    ])
+        ->assertCreated()
+        ->assertJsonPath('data.slug', 'screen-one')
+        // The author's name for the room, not the preset's — see the controller.
+        ->assertJsonPath('data.name', 'Screen One')
+        /*
+         * The cinema is *drawn*, not tiled — so what has to arrive with it is the artwork and the
+         * screen hung over it. Without the backdrop a preset like this is a grid of bare
+         * collision tiles: a cinema-shaped hole where the cinema should be.
+         */
+        ->assertJsonPath('data.backdrops.0.key', 'movie-theatre')
+        ->assertJsonPath('data.screens.0.id', 'the-screen');
+
+    expect($channel->spaceMaps()->count())->toBe(2)
+        // The way in is still the way in: adding a room must not change what the channel opens to.
+        ->and($channel->fresh()->spaceMap->slug)->toBe(SideSpaceMap::MAIN);
+});
+
+it('reads and writes whichever map the request names', function () {
+    [$owner, , $channel] = ownerWithSpaceChannel();
+    Passport::actingAs($owner);
+
+    $this->postJson("/api/channels/{$channel->id}/space/maps", ['slug' => 'attic', 'name' => 'Attic'])
+        ->assertCreated();
+
+    // Absent `?map=` is the way in — which is what keeps every client that has never heard of
+    // interiors working unchanged.
+    $this->getJson("/api/channels/{$channel->id}/space/map")
+        ->assertOk()
+        ->assertJsonPath('data.slug', SideSpaceMap::MAIN);
+
+    $this->getJson("/api/channels/{$channel->id}/space/map?map=attic")
+        ->assertOk()
+        ->assertJsonPath('data.slug', 'attic')
+        // The building's room list rides with every read, so the editor's switcher and a
+        // doorway's destination picker need no second call.
+        ->assertJsonPath('data.siblings.0.slug', SideSpaceMap::MAIN)
+        ->assertJsonPath('data.siblings.1.slug', 'attic');
+
+    $this->putJson("/api/channels/{$channel->id}/space/map?map=attic", validMapPayload(['name' => 'The Attic']))
+        ->assertOk();
+
+    // The edit landed in the attic and nowhere near the lobby. This is the failure the whole
+    // `?map=` thread exists to prevent: one wrong default and the editor writes an interior's
+    // grid over the room everybody is standing in.
+    expect($channel->spaceMaps()->where('slug', 'attic')->sole()->name)->toBe('The Attic')
+        ->and($channel->fresh()->spaceMap->name)->not->toBe('The Attic');
+
+    $this->getJson("/api/channels/{$channel->id}/space/map?map=cellar")->assertNotFound();
+});
+
+it('refuses a second map with the same key, and never a second way in', function () {
+    [$owner, , $channel] = ownerWithSpaceChannel();
+    Passport::actingAs($owner);
+
+    $this->postJson("/api/channels/{$channel->id}/space/maps", ['slug' => 'lobby', 'name' => 'Lobby'])
+        ->assertCreated();
+
+    // Doorways point at maps *by key*, so two rooms sharing one would be a door with two
+    // destinations.
+    $this->postJson("/api/channels/{$channel->id}/space/maps", ['slug' => 'lobby', 'name' => 'Other lobby'])
+        ->assertStatus(422)->assertJsonValidationErrors('slug');
+
+    $this->postJson("/api/channels/{$channel->id}/space/maps", ['slug' => 'main', 'name' => 'Impostor'])
+        ->assertStatus(422)->assertJsonValidationErrors('slug');
+
+    // The key is what every door stores and what survives a channel being copied, so it is
+    // deliberately narrow — no spaces, no capitals, nothing to mistype.
+    $this->postJson("/api/channels/{$channel->id}/space/maps", ['slug' => 'Screen One', 'name' => 'Screen One'])
+        ->assertStatus(422)->assertJsonValidationErrors('slug');
+});
+
+it('lets staff pull an interior out, but never the way in', function () {
+    [$owner, $server, $channel] = ownerWithSpaceChannel();
+    $member = memberOf($server);
+
+    Passport::actingAs($owner);
+    $this->postJson("/api/channels/{$channel->id}/space/maps", ['slug' => 'attic', 'name' => 'Attic'])
+        ->assertCreated();
+
+    /*
+     * Building is open to any member; deleting is not, and the asymmetry is the point. Every
+     * other edit in this feature is undone by editing it back — this one takes a grid, its
+     * furniture and its locks with it and nothing can put them back.
+     */
+    Passport::actingAs($member);
+    $this->postJson("/api/channels/{$channel->id}/space/maps", ['slug' => 'cellar', 'name' => 'Cellar'])
+        ->assertCreated();
+    $this->deleteJson("/api/channels/{$channel->id}/space/maps/attic")->assertForbidden();
+
+    Passport::actingAs($owner);
+    $this->deleteJson("/api/channels/{$channel->id}/space/maps/attic")->assertNoContent();
+
+    // A Side Space with no main map is a channel that opens to a blank canvas.
+    $this->deleteJson("/api/channels/{$channel->id}/space/maps/main")->assertStatus(422);
+
+    expect($channel->spaceMaps()->pluck('slug')->all())->toEqualCanonicalizing(['main', 'cellar']);
+});
+
+it('hangs a doorway into an interior, and refuses one that lands in a wall', function () {
+    [$owner, , $channel] = ownerWithSpaceChannel();
+    Passport::actingAs($owner);
+
+    $this->postJson("/api/channels/{$channel->id}/space/maps", ['slug' => 'attic', 'name' => 'Attic'])
+        ->assertCreated();
+
+    $doorway = fn (array $to) => [[
+        'id' => 'p1', 'name' => 'Up the stairs', 'x' => 2, 'y' => 2, 'w' => 2, 'h' => 1, 'to' => $to,
+    ]];
+
+    // No exit named means "put me at that room's own entrance", which is always somewhere you
+    // can stand — the interior's own save proved it.
+    $this->putJson("/api/channels/{$channel->id}/space/map", validMapPayload([
+        'portals' => $doorway(['kind' => 'map', 'map' => 'attic']),
+    ]))
+        ->assertOk()
+        ->assertJsonPath('data.portals.0.to.kind', 'map')
+        ->assertJsonPath('data.portals.0.to.map', 'attic');
+
+    // A named exit is checked against the *interior's* stored grid, not against this payload —
+    // they are different maps saved by different requests.
+    $this->putJson("/api/channels/{$channel->id}/space/map", validMapPayload([
+        'portals' => $doorway(['kind' => 'map', 'map' => 'attic', 'x' => 0, 'y' => 0]),
+    ]))->assertStatus(422)->assertJsonValidationErrors('portals.0.to');
+
+    // A door to a room that isn't in this building.
+    $this->putJson("/api/channels/{$channel->id}/space/map", validMapPayload([
+        'portals' => $doorway(['kind' => 'map', 'map' => 'cellar']),
+    ]))->assertStatus(422)->assertJsonValidationErrors('portals.0.to');
+
+    // And a door back into the room it is cut into, which would reload the grid you are already
+    // standing on — a black frame in place of a step sideways.
+    $this->putJson("/api/channels/{$channel->id}/space/map", validMapPayload([
+        'portals' => $doorway(['kind' => 'map', 'map' => 'main']),
+    ]))->assertStatus(422)->assertJsonValidationErrors('portals.0.to');
+});
+
+it('remembers which room of the building somebody was standing in', function () {
+    [$owner, $server, $channel] = ownerWithSpaceChannel();
+    Passport::actingAs($owner);
+
+    $this->postJson("/api/channels/{$channel->id}/space/maps", ['slug' => 'attic', 'name' => 'Attic'])
+        ->assertCreated();
+
+    VoiceParticipant::factory()->create([
+        'channel_id' => $channel->id, 'user_id' => $owner->id, 'last_seen_at' => now(),
+    ]);
+
+    $this->postJson("/api/channels/{$channel->id}/space/position", [
+        'x' => 5, 'y' => 5, 'facing' => 'down', 'space_map' => 'attic',
+    ])->assertNoContent();
+
+    // Coordinates without a room are an answer to the wrong question: (5,5) in the attic and
+    // (5,5) in the lobby are different places, and a reload that restored the tile alone would
+    // put people back inside a wall in a room they were never in.
+    $this->getJson("/api/servers/{$server->id}/voice")
+        ->assertOk()
+        ->assertJsonPath("data.{$channel->id}.0.space_map", 'attic');
+});
+
+it('carries the whole building, and the links between its rooms, into a copy', function () {
+    [$owner, $server] = ownerWithServer();
+    Passport::actingAs($owner);
+
+    // Through the API, because a discussion copies its map from a *sibling* — so the channel has
+    // to be the real thing, with its own General, rather than a bare factory row.
+    $this->postJson("/api/servers/{$server->id}/channels", [
+        'name' => 'the-cinema', 'type' => 'space', 'preset' => 'office',
+    ])->assertCreated();
+
+    $channel = Channel::where('name', 'the-cinema')->sole();
+    $general = $channel->discussions()->sole();
+
+    $this->postJson("/api/channels/{$general->id}/space/maps", ['slug' => 'attic', 'name' => 'Attic'])
+        ->assertCreated();
+
+    $this->putJson("/api/channels/{$general->id}/space/map", validMapPayload([
+        'portals' => [[
+            'id' => 'p1', 'name' => 'Up the stairs', 'x' => 2, 'y' => 2, 'w' => 2, 'h' => 1,
+            'to' => ['kind' => 'map', 'map' => 'attic'],
+        ]],
+    ]))->assertOk();
+
+    $this->postJson("/api/channels/{$channel->id}/discussions", ['name' => 'the-annex'])->assertCreated();
+
+    $annex = $channel->discussions()->where('name', 'the-annex')->sole();
+
+    /*
+     * The keys come across unchanged, and that is what makes the copy work: a doorway names its
+     * destination by slug, so copying the rooms under fresh keys would leave every door in the
+     * copy pointing at a name that isn't there.
+     */
+    expect($annex->spaceMaps()->pluck('slug')->all())->toEqualCanonicalizing(['main', 'attic'])
+        ->and($annex->spaceMap->portals[0]['to']['map'])->toBe('attic')
+        // Pointing within itself, having touched nothing about the original.
+        ->and($annex->spaceMap->id)->not->toBe($general->spaceMap->id);
+});
+
+it('gives a new interior a wormhole home, standing on its entrance', function () {
+    [$owner, , $channel] = ownerWithSpaceChannel();
+    Passport::actingAs($owner);
+
+    $res = $this->postJson("/api/channels/{$channel->id}/space/maps", [
+        'slug' => 'screen-one',
+        'name' => 'Screen One',
+        'preset' => 'movie-theatre',
+    ])->assertCreated();
+
+    $preset = MapPresets::find('movie-theatre');
+
+    /*
+     * On the entrance rather than beside it.
+     *
+     * A doorway *into* this room that names no exit puts you at the spawn — so you arrive out of
+     * one wormhole already stood in the other, the way a door in a Pokémon town behaves. That is
+     * only safe because standing in a wormhole does nothing on its own: it takes an E.
+     */
+    $res->assertJsonPath('data.portals.0.to.kind', 'map')
+        ->assertJsonPath('data.portals.0.to.map', SideSpaceMap::MAIN)
+        ->assertJsonPath('data.portals.0.x', $preset['spawn']['x'])
+        ->assertJsonPath('data.portals.0.y', $preset['spawn']['y']);
+
+    // And the room saves as it stands, which is the check that matters: the way home is a real
+    // portal by the rules of the validator, not a shape only this endpoint can write.
+    $map = $channel->spaceMaps()->where('slug', 'screen-one')->sole();
+
+    $this->putJson("/api/channels/{$channel->id}/space/map?map=screen-one", [
+        'name' => $map->name,
+        'width' => $map->width,
+        'height' => $map->height,
+        'tiles' => $map->tiles,
+        'zones' => $map->zones,
+        'objects' => $map->objects,
+        'spawn' => $map->spawn,
+        'projection' => $map->projection,
+        'portals' => $map->portals,
+    ])->assertOk()->assertJsonPath('data.portals.0.to.map', SideSpaceMap::MAIN);
+});
+
+it('points a new room\'s way home at a map, and deliberately at no tile on it', function () {
+    [$owner, , $channel] = ownerWithSpaceChannel();
+    Passport::actingAs($owner);
+
+    $this->postJson("/api/channels/{$channel->id}/space/maps", [
+        'slug' => 'attic',
+        'name' => 'Attic',
+        'return_to' => SideSpaceMap::MAIN,
+    ])
+        ->assertCreated()
+        ->assertJsonPath('data.portals.0.to.map', SideSpaceMap::MAIN)
+        /*
+         * No coordinates, and that is the assertion worth having.
+         *
+         * This used to bake in the tile of the doorway being drawn, which put you back exactly
+         * where you left — until somebody moved that doorway, at which point the way home
+         * silently pointed at the old spot. A stored point would also *win* over the lookup that
+         * replaced it, being the author's explicit choice, and would shadow it forever.
+         *
+         * So the tile is resolved when somebody travels: the client finds the doorway back on
+         * the far map and comes out standing in it. See arrivalIn in SideSpaceStage.
+         */
+        ->assertJsonPath('data.portals.0.to.x', null)
+        ->assertJsonPath('data.portals.0.to.y', null);
+
+    // A return to a room that isn't in this building falls back to the way in, which always is —
+    // rather than refusing, since this cannot be the caller's mistake to fix.
+    $this->postJson("/api/channels/{$channel->id}/space/maps", [
+        'slug' => 'cellar', 'name' => 'Cellar', 'return_to' => 'nowhere',
+    ])
+        ->assertCreated()
+        ->assertJsonPath('data.portals.0.to.map', SideSpaceMap::MAIN);
+});
+
+it('remembers whether a doorway is walked into or pressed', function () {
+    [$owner, , $channel] = ownerWithSpaceChannel();
+    Passport::actingAs($owner);
+
+    $doorway = fn (?string $activation) => [array_filter([
+        'id' => 'p1', 'name' => 'Doorway', 'x' => 2, 'y' => 2, 'w' => 2, 'h' => 1,
+        'activation' => $activation,
+        'to' => ['kind' => 'point', 'x' => 6, 'y' => 6],
+    ], fn ($v) => $v !== null)];
+
+    $this->putJson("/api/channels/{$channel->id}/space/map", validMapPayload([
+        'portals' => $doorway('press'),
+    ]))->assertOk()->assertJsonPath('data.portals.0.activation', 'press');
+
+    // Absent is walked into — what every doorway built before this existed did.
+    $this->putJson("/api/channels/{$channel->id}/space/map", validMapPayload([
+        'portals' => $doorway(null),
+    ]))->assertOk()->assertJsonPath('data.portals.0.activation', null);
+
+    $this->putJson("/api/channels/{$channel->id}/space/map", validMapPayload([
+        'portals' => $doorway('teleport'),
+    ]))->assertStatus(422)->assertJsonValidationErrors('portals.0.activation');
+});
+
+// --- screens: where the room's shared picture is painted ---
+
+it('saves screens, and refuses one that runs off the map', function () {
+    [$owner, , $channel] = ownerWithSpaceChannel();
+    Passport::actingAs($owner);
+
+    /*
+     * A screen is checked for *fitting* and for nothing else — unlike a zone or a doorway, it is
+     * deliberately not required to contain somewhere to stand. The whole point of hanging one is
+     * that it goes where you can't walk: up a wall, over a stage, across the back of a room.
+     */
+    $this->putJson("/api/channels/{$channel->id}/space/map", validMapPayload([
+        'screens' => [['id' => 's1', 'name' => 'The screen', 'x' => 0, 'y' => 0, 'w' => 6, 'h' => 2]],
+    ]))
+        ->assertOk()
+        ->assertJsonPath('data.screens.0.name', 'The screen');
+
+    $this->putJson("/api/channels/{$channel->id}/space/map", validMapPayload([
+        'screens' => [['id' => 's1', 'name' => 'Too big', 'x' => 0, 'y' => 0, 'w' => 999, 'h' => 2]],
+    ]))->assertStatus(422)->assertJsonValidationErrors('screens.0');
+
+    $this->putJson("/api/channels/{$channel->id}/space/map", validMapPayload([
+        'screens' => array_fill(0, SideSpaceMap::MAX_SCREENS + 1, [
+            'id' => 's1', 'name' => 'Screen', 'x' => 0, 'y' => 0, 'w' => 2, 'h' => 2,
+        ]),
+    ]))->assertStatus(422)->assertJsonValidationErrors('screens');
+});
+
+it('keeps a map\'s screens through an ordinary save', function () {
+    [$owner, , $channel] = ownerWithSpaceChannel();
+    Passport::actingAs($owner);
+
+    // The regression this file has seen three times: a new map field the editor can change but
+    // the save quietly drops, so every edit wipes the thing that was just added. See useSpaceMap.
+    $this->putJson("/api/channels/{$channel->id}/space/map", validMapPayload([
+        'screens' => [['id' => 's1', 'name' => 'The screen', 'x' => 2, 'y' => 0, 'w' => 4, 'h' => 2]],
+    ]))->assertOk();
+
+    $this->getJson("/api/channels/{$channel->id}/space/map")
+        ->assertOk()
+        ->assertJsonPath('data.screens.0.id', 's1')
+        ->assertJsonPath('data.screens.0.w', 4);
+});
+
+it('gives the drawn cinema seats you can actually sit in', function () {
+    $preset = MapPresets::find('movie-theatre');
+
+    /*
+     * A backdrop map has no furniture on it — the room *is* the picture — so a cinema's seats are
+     * painted and there is nothing in the catalogue to stand on them. The `seat` kind is the
+     * missing half: it occupies a tile, can be sat on, and draws nothing.
+     *
+     * Worth a test because the failure is silent in both directions. A seat on a tile nobody can
+     * walk onto is a seat nobody can reach, and a seat kind that were solid would fence the
+     * auditorium into a grid of one-tile pens.
+     */
+    expect($preset['objects'])->not->toBeEmpty()
+        ->and(collect($preset['objects'])->pluck('kind')->unique()->all())->toBe(['seat'])
+        ->and(Decorations::find('seat')['solid'])->toBeFalse();
+
+    foreach ($preset['objects'] as $seat) {
+        expect(Tiles::isWalkable($preset['tiles'][$seat['y']][$seat['x']]))
+            ->toBeTrue("The seat at {$seat['x']},{$seat['y']} is on a tile nobody can walk onto.");
+    }
+});
+
+// --- the gallery: frames, and the pictures hung in them ---
+
+it('saves frames, and refuses two that would share a picture', function () {
+    [$owner, , $channel] = ownerWithSpaceChannel();
+    Passport::actingAs($owner);
+
+    $this->putJson("/api/channels/{$channel->id}/space/map", validMapPayload([
+        'exhibits' => [['id' => 'a1', 'name' => 'The big one', 'x' => 1, 'y' => 0, 'w' => 3, 'h' => 2]],
+    ]))
+        ->assertOk()
+        ->assertJsonPath('data.exhibits.0.name', 'The big one');
+
+    /*
+     * Two frames sharing an id is not merely confusing here, the way it would be for a zone: the
+     * picture is stored *against the id*, so the second frame would silently show the first
+     * one's painting.
+     */
+    $this->putJson("/api/channels/{$channel->id}/space/map", validMapPayload([
+        'exhibits' => [
+            ['id' => 'a1', 'name' => 'One', 'x' => 1, 'y' => 0, 'w' => 2, 'h' => 2],
+            ['id' => 'a1', 'name' => 'Two', 'x' => 5, 'y' => 0, 'w' => 2, 'h' => 2],
+        ],
+    ]))->assertStatus(422)->assertJsonValidationErrors('exhibits.1.id');
+
+    $this->putJson("/api/channels/{$channel->id}/space/map", validMapPayload([
+        'exhibits' => [['id' => 'a1', 'name' => 'Off the edge', 'x' => 1, 'y' => 0, 'w' => 999, 'h' => 2]],
+    ]))->assertStatus(422)->assertJsonValidationErrors('exhibits.0');
+});
+
+it('lets staff hang a picture in a frame, and nobody else', function () {
+    Storage::fake('local');
+
+    [$owner, $server, $channel] = ownerWithSpaceChannel();
+    $member = memberOf($server);
+
+    Passport::actingAs($owner);
+    $this->putJson("/api/channels/{$channel->id}/space/map", validMapPayload([
+        'exhibits' => [['id' => 'a1', 'name' => 'Frame', 'x' => 1, 'y' => 0, 'w' => 3, 'h' => 2]],
+    ]))->assertOk();
+
+    /*
+     * Hanging a picture is curating rather than building, which is the one place this feature
+     * departs from the rest of the editor: a member may draw the frame and move it, and may not
+     * decide what the room shows everybody who walks past.
+     */
+    Passport::actingAs($member);
+    $this->postJson("/api/channels/{$channel->id}/space/exhibits/a1", [
+        'image' => fakeImageUpload('painting.png'),
+        'title' => 'Sneaky',
+    ])->assertForbidden();
+
+    Passport::actingAs($owner);
+    $this->postJson("/api/channels/{$channel->id}/space/exhibits/a1", [
+        'image' => fakeImageUpload('painting.png'),
+        'title' => 'A Sunday Afternoon',
+        'artist' => 'Georges Seurat',
+        'caption' => 'Oil on canvas, 1884.',
+    ])
+        ->assertOk()
+        ->assertJsonPath('data.exhibit_pieces.0.exhibit_id', 'a1')
+        ->assertJsonPath('data.exhibit_pieces.0.title', 'A Sunday Afternoon')
+        ->assertJsonPath('data.exhibit_pieces.0.artist', 'Georges Seurat');
+
+    // A frame nobody drew is a row that could never resolve — refused rather than accepted and
+    // silently invisible on every wall.
+    $this->postJson("/api/channels/{$channel->id}/space/exhibits/nope", [
+        'image' => fakeImageUpload('painting.png'),
+        'title' => 'Nowhere',
+    ])->assertNotFound();
+
+    // Contents, not the filename: this must not become a way to store arbitrary bytes under
+    // something ending in .png.
+    $this->postJson("/api/channels/{$channel->id}/space/exhibits/a1", [
+        // A zip wearing a .png name — refused on contents, which is the property that matters.
+        'image' => UploadedFile::fake()->create('notreally.png', 16, 'application/zip'),
+        'title' => 'Not a picture',
+    ])->assertStatus(422)->assertJsonValidationErrors('image');
+});
+
+it('replaces a hung picture without leaving the old file behind', function () {
+    Storage::fake('local');
+
+    [$owner, , $channel] = ownerWithSpaceChannel();
+    Passport::actingAs($owner);
+
+    $this->putJson("/api/channels/{$channel->id}/space/map", validMapPayload([
+        'exhibits' => [['id' => 'a1', 'name' => 'Frame', 'x' => 1, 'y' => 0, 'w' => 3, 'h' => 2]],
+    ]))->assertOk();
+
+    $hang = fn (string $title) => $this->postJson("/api/channels/{$channel->id}/space/exhibits/a1", [
+        'image' => fakeImageUpload("{$title}.png"),
+        'title' => $title,
+    ])->assertOk();
+
+    $hang('First');
+    $first = SideSpaceExhibit::sole();
+    $firstPath = $first->path;
+
+    $hang('Second');
+
+    // An upsert, not a second row: re-hanging a wall is one action rather than a delete and an
+    // add that can half-fail and leave the frame empty.
+    expect(SideSpaceExhibit::count())->toBe(1)
+        ->and(SideSpaceExhibit::sole()->title)->toBe('Second');
+
+    Storage::disk('local')->assertMissing($firstPath);
+    Storage::disk('local')->assertExists(SideSpaceExhibit::sole()->path);
+});
+
+it('leaves the frame standing when a picture is taken down', function () {
+    Storage::fake('local');
+
+    [$owner, , $channel] = ownerWithSpaceChannel();
+    Passport::actingAs($owner);
+
+    $this->putJson("/api/channels/{$channel->id}/space/map", validMapPayload([
+        'exhibits' => [['id' => 'a1', 'name' => 'Frame', 'x' => 1, 'y' => 0, 'w' => 3, 'h' => 2]],
+    ]))->assertOk();
+
+    $this->postJson("/api/channels/{$channel->id}/space/exhibits/a1", [
+        'image' => fakeImageUpload('p.png'),
+        'title' => 'Something',
+    ])->assertOk();
+
+    $path = SideSpaceExhibit::sole()->path;
+
+    $this->deleteJson("/api/channels/{$channel->id}/space/exhibits/a1")
+        ->assertOk()
+        // The frame is geometry and this endpoint has no business editing the map document. What
+        // is left is an empty frame — a room somebody is still curating.
+        ->assertJsonPath('data.exhibits.0.id', 'a1')
+        ->assertJsonCount(0, 'data.exhibit_pieces');
+
+    Storage::disk('local')->assertMissing($path);
+});
+
+it('keeps the pictures where they were when a member rearranges the gallery', function () {
+    Storage::fake('local');
+
+    [$owner, $server, $channel] = ownerWithSpaceChannel();
+    $member = memberOf($server);
+
+    Passport::actingAs($owner);
+    $this->putJson("/api/channels/{$channel->id}/space/map", validMapPayload([
+        'exhibits' => [['id' => 'a1', 'name' => 'Frame', 'x' => 1, 'y' => 0, 'w' => 3, 'h' => 2]],
+    ]))->assertOk();
+
+    $this->postJson("/api/channels/{$channel->id}/space/exhibits/a1", [
+        'image' => fakeImageUpload('p.png'),
+        'title' => 'Kept',
+    ])->assertOk();
+
+    /*
+     * The whole point of storing the two halves apart. A member may move the frame — that is
+     * building the room — and cannot touch, repoint or replace what is in it.
+     */
+    Passport::actingAs($member);
+    $this->putJson("/api/channels/{$channel->id}/space/map", validMapPayload([
+        'exhibits' => [['id' => 'a1', 'name' => 'Moved', 'x' => 6, 'y' => 4, 'w' => 2, 'h' => 2]],
+    ]))->assertOk();
+
+    $this->getJson("/api/channels/{$channel->id}/space/map")
+        ->assertOk()
+        ->assertJsonPath('data.exhibits.0.x', 6)
+        ->assertJsonPath('data.exhibit_pieces.0.title', 'Kept');
 });

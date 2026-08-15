@@ -34,7 +34,8 @@ import { Button } from '~/components/ui/button'
 const props = defineProps<{ channelId: number, map: SpaceMap, members: Array<{ id: number, name: string }> }>()
 const emit = defineEmits<{ close: [] }>()
 
-const { locks, canManageRooms, myRooms, loading, error, load, lock, unlock, assignRoom } = useSpaceLocks(props.channelId)
+// Scoped to the map being shown: a lock belongs to one grid, and a Side Space holds several.
+const { locks, canManageRooms, myRooms, loading, error, load, lock, unlock, assignRoom } = useSpaceLocks(props.channelId, () => props.map.slug)
 const { nameFor } = useNicknames()
 
 type Tab = 'locks' | 'rooms'

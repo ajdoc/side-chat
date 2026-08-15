@@ -535,9 +535,30 @@ Route::middleware('auth:api')->group(function () {
     // The ways a *room* inside a map can be furnished — a different thing from the layouts
     // above, which are whole maps. See App\Support\SideSpace\RoomPresets.
     Route::get('space/room-presets', [SideSpaceController::class, 'roomPresets']);
+    /*
+     * A Side Space holds several maps — an overworld and its interiors — and every endpoint
+     * below reads `?map=<slug>` to say which one it means. Absent means the way in, so a client
+     * that has never heard of interiors sees exactly the room it always saw.
+     *
+     * A query parameter rather than a path segment because the map is a *lens* on the channel
+     * rather than a resource under it: rooms, locks, furniture and interaction are all already
+     * addressed by channel, they all now need the same extra word, and pushing it into the path
+     * would fork nine routes to say one thing.
+     */
     Route::get('channels/{channel}/space/map', [SideSpaceController::class, 'show']);
     // Owner only: this replaces the room everyone is standing in.
     Route::put('channels/{channel}/space/map', [SideSpaceController::class, 'update']);
+    // Any member: add an interior. Staff only to take one away — see the two requests for why
+    // building is open where deleting is not.
+    /*
+     * Hanging a picture in a frame, and taking one down. Staff only — see the two requests: a
+     * frame is geometry any member may draw, and what goes in it is a file shown to everybody
+     * who walks past, which is curating rather than building.
+     */
+    Route::post('channels/{channel}/space/exhibits/{exhibit}', [SideSpaceController::class, 'storeExhibit']);
+    Route::delete('channels/{channel}/space/exhibits/{exhibit}', [SideSpaceController::class, 'destroyExhibit']);
+    Route::post('channels/{channel}/space/maps', [SideSpaceController::class, 'storeMap']);
+    Route::delete('channels/{channel}/space/maps/{slug}', [SideSpaceController::class, 'destroyMap']);
     // Any member: rearrange the furniture. The geometry above is owner-only; the furniture
     // isn't, so a room can be decorated by whoever's in it.
     Route::put('channels/{channel}/space/objects', [SideSpaceController::class, 'objects']);

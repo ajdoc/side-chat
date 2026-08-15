@@ -89,8 +89,20 @@ class SideSpaceMap extends Model
      */
     private ?array $solid = null;
 
+    /**
+     * A map with no slug is the channel's way in.
+     *
+     * Mirrors the column's default rather than relying on it, so a map that has just been
+     * created knows which one it is without being read back — `$channel->spaceMap()->create()`
+     * is how every Side Space in the app is born, and it names no slug.
+     */
+    protected $attributes = [
+        'slug' => self::MAIN,
+    ];
+
     protected $fillable = [
         'channel_id',
+        'slug',
         'name',
         'width',
         'height',
@@ -101,6 +113,8 @@ class SideSpaceMap extends Model
         'projection',
         'backdrops',
         'portals',
+        'screens',
+        'exhibits',
         'updated_by',
     ];
 
@@ -134,6 +148,77 @@ class SideSpaceMap extends Model
      */
     public const MAX_PORTALS = 40;
 
+    /**
+     * How a doorway is taken: by walking into it, or by pressing E while stood in it.
+     *
+     * A property of the *doorway* rather than a setting, because the right answer genuinely
+     * differs per door. A wormhole between two halves of one island wants `walk` — it is scenery
+     * you run through, and stopping to press a key at every one would make crossing the map a
+     * chore. A door out of the room, or into another Side Space, wants `press`: it is a decision,
+     * and one careless step should not end the conversation you were having.
+     *
+     * `walk` is the default, and absent reads as `walk`, because that is what every doorway built
+     * before this existed did.
+     */
+    public const ACTIVATIONS = ['walk', 'press'];
+
+    /**
+     * How many screen surfaces one map may have.
+     *
+     * Small, and the reason is cost rather than taste: every surface is a `drawImage` of a live
+     * video frame, every frame, and a video frame is the most expensive thing this renderer ever
+     * paints. Four is a foyer and three auditoria, which is more cinema than anybody needs; a map
+     * with forty would spend its frame budget painting the same picture forty times.
+     */
+    public const MAX_SCREENS = 4;
+
+    /**
+     * How many frames one map may hang.
+     *
+     * Generous, because a gallery is the point: the Met's artwork covers most of its walls, and a
+     * museum that ran out of frames a third of the way round would be a worse room than one with
+     * none. Each is a rectangle and, at most, one row and one image — and the images are fetched
+     * only when somebody opens one, never with the map.
+     */
+    public const MAX_EXHIBITS = 120;
+
+    /**
+     * The map a Side Space opens to, and the only one that has to exist.
+     *
+     * Every other map on a channel is an *interior*: somewhere you can only arrive by walking
+     * through a door, which is what lets it be built without a way in and be nowhere rather than
+     * be broken. The main one is the way in, so it is never deleteable and never renameable —
+     * a channel whose main map went missing is a room that opens to a blank canvas.
+     */
+    public const MAIN = 'main';
+
+    /**
+     * How many maps one Side Space may hold, the main one included.
+     *
+     * The cost of an interior is not what it does — nobody is standing in most of them at any
+     * moment — but that the editor lists them, a portal target dropdown lists them, and the
+     * duplicate-a-channel path copies every one. A dozen is a cinema with its screens, a house
+     * with its rooms, a dungeon with its floors; past that the thing being built is a world, and
+     * a world is what several channels are for.
+     */
+    public const MAX_PER_CHANNEL = 12;
+
+    /**
+     * What a map's slug may be: lowercase, digits and dashes.
+     *
+     * Narrow on purpose. A slug is written into every portal that points at the map and survives
+     * being copied between channels, so it is an identifier people type and read in the editor
+     * rather than a label they style — and the set of characters that are unambiguous in that
+     * role is small.
+     */
+    public const SLUG_PATTERN = '/^[a-z0-9]+(-[a-z0-9]+)*$/';
+
+    /** Is this the map the channel opens to? */
+    public function isMain(): bool
+    {
+        return $this->slug === self::MAIN;
+    }
+
     protected function casts(): array
     {
         return [
@@ -145,6 +230,8 @@ class SideSpaceMap extends Model
             'spawn' => 'array',
             'backdrops' => 'array',
             'portals' => 'array',
+            'screens' => 'array',
+            'exhibits' => 'array',
         ];
     }
 
@@ -157,6 +244,17 @@ class SideSpaceMap extends Model
     public function rooms(): HasMany
     {
         return $this->hasMany(SideSpaceRoom::class);
+    }
+
+    /**
+     * What is hanging in each frame. A frame with no row here is an empty one.
+     *
+     * The rectangles themselves are in the `exhibits` column, which any member may edit; these
+     * are the pictures, which only staff may hang. See the exhibits migration for the split.
+     */
+    public function exhibitPieces(): HasMany
+    {
+        return $this->hasMany(SideSpaceExhibit::class);
     }
 
     /** The locked doors. A door with no row here is one anybody may walk through. */

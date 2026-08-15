@@ -72,17 +72,42 @@ async function submit() {
   composing.value = false
 }
 
-async function onRemove() {
+/** Whether the delete confirm is up, and whether the delete is in flight. */
+const removing = ref(false)
+const removeBusy = ref(false)
+
+function onRemove() {
+  if (openId.value != null) removing.value = true
+}
+
+async function confirmRemove() {
   const id = openId.value
   if (id == null) return
-  // eslint-disable-next-line no-alert
-  if (!window.confirm('Delete this poll?\n\nIts votes, reactions and comments go with it. This cannot be undone.')) return
-  openId.value = null
-  await remove(id)
+
+  removeBusy.value = true
+
+  try {
+    openId.value = null
+    await remove(id)
+    removing.value = false
+  }
+  finally {
+    removeBusy.value = false
+  }
 }
 </script>
 
 <template>
+  <ConfirmDialog
+    v-model:open="removing"
+    title="Delete this poll?"
+    description="Its votes, reactions and comments go with it. This cannot be undone."
+    confirm-label="Delete poll"
+    busy-label="Deleting…"
+    :busy="removeBusy"
+    @confirm="confirmRemove"
+  />
+
   <div class="flex min-h-0 flex-1 flex-col">
     <header class="flex h-12 shrink-0 items-center gap-2 border-b px-2 sm:px-3">
       <button
