@@ -839,3 +839,42 @@ it('leaves cloudflare out entirely when no key is configured', function () {
 
     Http::assertNothingSent();
 });
+
+it('puts cloudflare turn ahead of the statically configured relays', function () {
+    config([
+        'webrtc.cloudflare.key_id' => 'key-123',
+        'webrtc.cloudflare.api_token' => 'secret-token',
+        'webrtc.turn' => [
+            ['urls' => ['turn:backup-one.example:3478'], 'username' => 'a', 'credential' => 'b'],
+            ['urls' => ['turn:backup-two.example:3478'], 'username' => 'c', 'credential' => 'd'],
+        ],
+    ]);
+
+    Http::fake([
+        'rtc.live.cloudflare.com/*' => Http::response([
+            'iceServers' => [
+                ['urls' => ['stun:stun.cloudflare.com:3478']],
+                [
+                    'urls' => ['turn:turn.cloudflare.com:3478?transport=udp'],
+                    'username' => 'minted-user',
+                    'credential' => 'minted-secret',
+                ],
+            ],
+        ]),
+    ]);
+
+    [$user, , $channel] = ownerWithVoiceChannel();
+    Passport::actingAs($user);
+
+    $servers = $this->postJson("/api/channels/{$channel->id}/voice/join")->json('ice_servers');
+
+    // Relay candidates all share the lowest type preference, so what separates them is local
+    // preference — which browsers derive partly from the order they were handed. Where order
+    // matters at all, earlier means preferred, and Cloudflare is the one we want: best
+    // connected, and not billed twice when it relays into the Cloudflare SFU.
+    $relays = array_values(array_filter($servers, fn ($s) => ! empty($s['username'])));
+
+    expect($relays[0]['username'])->toBe('minted-user')
+        // The others are still there — failover is the whole reason to configure more than one.
+        ->and($relays)->toHaveCount(3);
+});

@@ -100,9 +100,31 @@ final class VoiceService
             $servers[] = ['urls' => $stun];
         }
 
-        // Every configured TURN entry is handed over, each with its own credentials — ICE
-        // fails over between providers on its own (see config/webrtc.php). Empty entries are
-        // already filtered out in config, so a single-TURN deployment yields a single entry.
+        /*
+         * Cloudflare first, ahead of the statically configured relays — a change from when it
+         * was appended last under the belief that ordering was cosmetic.
+         *
+         * It isn't quite. Every entry is gathered from regardless, so failover works either
+         * way; but relay candidates all share the lowest type preference, and what separates
+         * them is *local* preference, which browsers derive partly from the order they were
+         * given. Where order has any effect at all, earlier means preferred — so listing the
+         * relay we actually want last was expressing the opposite of the intent.
+         *
+         * Two reasons it's the one to prefer. It is the best-connected of the three from most
+         * networks, and — the part that is not a matter of taste — traffic between Cloudflare
+         * TURN and the Cloudflare SFU is not billed twice, so a call that has to relay *and*
+         * is going through the SFU costs materially less this way than through a third party.
+         *
+         * Still only a preference. ICE decides on connectivity checks and will use whatever
+         * actually works, which is exactly what the other entries are here for.
+         */
+        if ($cloudflare = $this->cloudflareTurn->iceServer()) {
+            $servers[] = $cloudflare;
+        }
+
+        // The statically configured relays, each with its own credentials — failover for when
+        // Cloudflare is unreachable or its minting failed. Empty entries are filtered out in
+        // config, so a deployment with none of these configured yields nothing here.
         foreach ((array) config('webrtc.turn', []) as $turn) {
             if (empty($turn['urls'])) {
                 continue;
@@ -113,13 +135,6 @@ final class VoiceService
                 'username' => $turn['username'] ?? null,
                 'credential' => $turn['credential'] ?? null,
             ];
-        }
-
-        // Cloudflare last, and only if configured: its credentials are minted rather than
-        // read from config, so unlike the entries above it can come back empty on a bad day
-        // (see CloudflareTurn). Ordering is cosmetic — ICE tries every entry regardless.
-        if ($cloudflare = $this->cloudflareTurn->iceServer()) {
-            $servers[] = $cloudflare;
         }
 
         return $servers;
