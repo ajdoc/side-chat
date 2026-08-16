@@ -11,6 +11,8 @@ import type {
   VoiceTransport,
 } from '~/lib/voice/VoiceTransport'
 import type { MeshSignaling, SignalPayload } from '~/lib/voice/MeshTransport'
+import type { CloudflareAnnouncement } from '~/lib/voice/CloudflareTransport'
+import { createCloudflareTransport } from '~/lib/voice/CloudflareTransport'
 import { createMeshTransport } from '~/lib/voice/MeshTransport'
 import { createLiveKitTransport } from '~/lib/voice/LiveKitTransport'
 import {
@@ -274,6 +276,15 @@ interface StatePayload {
    * it is doing.
    */
   screen_transport?: TransportKind
+  /**
+   * Where this person's media sits on a relaying SFU, when they're using one.
+   *
+   * Cloudflare Realtime has no track discovery of its own: to pull somebody's screen you need
+   * their session id and the name they published it under, and nothing on Cloudflare's side
+   * will ever tell you. So it rides here, alongside the other "what is this person doing"
+   * facts, which is the one message every peer already receives.
+   */
+  sfu?: CloudflareAnnouncement | null
 }
 
 interface JoinResponse {
@@ -386,6 +397,18 @@ let activeTransport: VoiceTransport | null = null
 let sfuTransport: VoiceTransport | null = null
 
 /**
+ * The in-flight open, so concurrent callers share one.
+ *
+ * Without this, `openScreenSfu` races itself: the assignment to `sfuTransport` happens after
+ * the connect, and the state-whisper handler calls it on *every* whisper from a sharing peer —
+ * which arrive in bursts, not least because announcing our own tracks sends one. Several land
+ * inside the connect window and each builds its own transport, its own Cloudflare session, and
+ * its own pull of the same tracks. Heard as the same audio two or three times over, and billed
+ * that way too.
+ */
+let sfuOpening: Promise<VoiceTransport | null> | null = null
+
+/**
  * Signalling for the mesh, bridged onto the presence channel.
  *
  * The transport is handed this rather than reaching for Echo itself, so that the thing which
@@ -394,6 +417,16 @@ let sfuTransport: VoiceTransport | null = null
  * before `presence` exists — whispers simply start arriving once it does.
  */
 let signalHandler: ((payload: SignalPayload) => void) | null = null
+
+/**
+ * Our Cloudflare coordinates, and the handler waiting for everyone else's.
+ *
+ * Only meaningful while a Cloudflare share is up. Held at module scope beside the signalling
+ * bridge because it is the same kind of thing: a transport that needs a message bus, handed one
+ * rather than reaching for it.
+ */
+let sfuAnnouncement: CloudflareAnnouncement | null = null
+let sfuAnnounceHandler: ((peerId: number, announcement: CloudflareAnnouncement | null) => void) | null = null
 
 const meshSignaling: MeshSignaling = {
   send: (body) => { presence?.whisper('signal', body) },
@@ -1411,6 +1444,7 @@ export function useVoice() {
       deafened: selfDeafened.value,
       screen_sharing: isSharing.value,
       screen_transport: screenTransport.value,
+      sfu: sfuAnnouncement,
       camera_on: isCameraOn.value,
       audio_sharing: isAudioSharing.value,
     } satisfies StatePayload)
@@ -1546,8 +1580,13 @@ export function useVoice() {
     restackUnplaced()
     ensureSpatial(id)
 
-    // And open the pipe. Last, so nothing can arrive before there's anywhere to put it.
-    activeTransport?.setSubscribed(id, true)
+    // And open the pipes. Last, so nothing can arrive before there's anywhere to put it.
+    //
+    // *Both* transports, because they carry different halves of the same person: the mesh has
+    // their voice, and the SFU — if a share is running through one — has their screen. Telling
+    // only the mesh is invisible with LiveKit, which subscribes to everything on its own, and
+    // fatal with Cloudflare, which pulls nothing it wasn't explicitly asked for.
+    subscribeEverywhere(id, true)
   }
 
   /** Stop hearing somebody: close the pipe, then dismantle what was playing them. */
@@ -1560,7 +1599,7 @@ export function useVoice() {
     // pass returns at the guard above instead of tearing the same person down twice.
     handles.delete(id)
 
-    activeTransport?.setSubscribed(id, false)
+    subscribeEverywhere(id, false)
 
     handle.audio.srcObject = null
     handle.audio.remove()
@@ -1666,9 +1705,53 @@ export function useVoice() {
    */
   async function openScreenSfu(): Promise<VoiceTransport | null> {
     if (sfuTransport) return sfuTransport
+    if (sfuOpening) return sfuOpening
     if (!sfuCredentials) return null
 
-    const sfu = createLiveKitTransport()
+    sfuOpening = buildScreenSfu()
+
+    try {
+      return await sfuOpening
+    } finally {
+      sfuOpening = null
+    }
+  }
+
+  /** The actual work, called once per open — see the guard in openScreenSfu. */
+  async function buildScreenSfu(): Promise<VoiceTransport | null> {
+    if (!sfuCredentials) return null
+
+    const sfu = sfuCredentials.driver === 'cloudflare'
+      ? createCloudflareTransport({
+        // Called through a plainly-typed reference on purpose: $fetch's route-and-method
+        // generics recurse to an "excessive stack depth" error on a union method, and nothing
+        // here benefits from inferring a response type the relay passes straight through.
+        api: (path, body, method = 'POST') => (api as unknown as (
+          url: string,
+          options: { method: string, body: unknown },
+        ) => Promise<any>)(
+          `/api/channels/${channelId.value}/voice/sfu/${path}`,
+          { method, body },
+        ),
+        // Our coordinates go out with the next state whisper, and one is sent immediately so
+        // peers don't wait on an unrelated mute or camera toggle to learn where to pull from.
+        announce: (announcement) => {
+          sfuAnnouncement = announcement
+          whisperState()
+        },
+        onAnnounce: (handler) => {
+          sfuAnnounceHandler = handler
+
+          // Anything already heard, replayed — a share may well have been announced before we
+          // had a transport to tell about it.
+          for (const [id, state] of lastStates) {
+            if (state.screen_sharing && state.screen_transport === 'sfu') handler(id, state.sfu ?? null)
+          }
+
+          return () => { sfuAnnounceHandler = null }
+        },
+      })
+      : createLiveKitTransport()
 
     try {
       await sfu.connect({
@@ -1700,6 +1783,11 @@ export function useVoice() {
 
     sfuTransport = sfu
 
+    // Everybody already in the call. The SFU is opened partway through — on the first share
+    // that wants it — so unlike the mesh it never saw anyone arrive, and would otherwise sit
+    // there subscribed to nobody.
+    for (const id of handles.keys()) sfu.setSubscribed(id, true)
+
     return sfu
   }
 
@@ -1721,6 +1809,15 @@ export function useVoice() {
     const going = sfuTransport
     sfuTransport = null
     await going.close().catch(() => {})
+  }
+
+  /**
+   * Want, or stop wanting, everything one person is sending — on every transport carrying any
+   * of it. See the note in createPeer for why this isn't just the mesh.
+   */
+  function subscribeEverywhere(id: number, subscribed: boolean) {
+    activeTransport?.setSubscribed(id, subscribed)
+    sfuTransport?.setSubscribed(id, subscribed)
   }
 
   /** Whichever transport the screen should be travelling on right now. */
@@ -1755,11 +1852,25 @@ export function useVoice() {
     const carrier = screenCarrier()
     if (!carrier) return
 
+    /*
+     * Video overlaps; audio does not. The two want opposite things from this moment.
+     *
+     * A picture that briefly arrives twice is invisible — the viewer renders one of them, and
+     * the overlap is what stops the screen going black mid-switch. The *same sound* arriving
+     * twice is not invisible at all: it phases against itself and reads as an echo, or as the
+     * audio playing two or three times over. And the gap between the two routes here is a
+     * round-trip to a media server plus a renegotiation, which is far longer than the few
+     * milliseconds of overlap the video benefits from.
+     *
+     * So the old route's audio is dropped *before* the new one picks it up, and the video the
+     * other way round.
+     */
+    await previous?.publish('screenAudio', null)
+
     await carrier.publish('screen', screenTrack)
     if (screenAudioTrack) await carrier.publish('screenAudio', screenAudioTrack)
 
     await previous?.publish('screen', null)
-    await previous?.publish('screenAudio', null)
 
     // The encoder settings are per-transport, so the new carrier has to be told what the
     // sampler last decided — otherwise a film moved onto the SFU goes back to slideshow rates.
@@ -2114,8 +2225,16 @@ export function useVoice() {
         // it. This is the whole receiving half of the feature: a viewer has no other reason
         // to open an SFU connection, and without it a share that moved there simply
         // disappears from the call.
-        if (state.screen_sharing && state.screen_transport === 'sfu') void openScreenSfu()
-        else void maybeCloseScreenSfu()
+        if (state.screen_sharing && state.screen_transport === 'sfu') {
+          void openScreenSfu().then(() => {
+            // Cloudflare needs to be told where their tracks are; LiveKit works it out itself,
+            // and its adapter never registers a handler for this.
+            sfuAnnounceHandler?.(state.id, state.sfu ?? null)
+          })
+        } else {
+          sfuAnnounceHandler?.(state.id, null)
+          void maybeCloseScreenSfu()
+        }
       })
       // The remote-control handshake. Whispered rather than sent down the data channel because
       // it has to work *before* control exists, and because a request that quietly failed to

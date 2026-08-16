@@ -52,7 +52,21 @@ return Application::configure(basePath: dirname(__DIR__))
          * So the tile rows, and only the tile rows, keep their whitespace. See
          * App\Support\SideSpace\Tiles.
          */
-        $middleware->trimStrings(except: ['tiles.*']);
+        /*
+         * An SDP is not text either, and it fails in a nastier way than the map does.
+         *
+         * A session description is a line-oriented protocol whose every line, including the
+         * last, is terminated by CRLF. Trimming eats that final terminator, and the far end
+         * rejects the whole thing — Cloudflare answers `invalid_session_description: Unable
+         * to parse SDP ... common issue: missing termination at the end`, which is a long way
+         * from "your web framework tidied the request". Nothing in the browser or the relay
+         * looks wrong; the bytes are simply not what was sent.
+         */
+        $middleware->trimStrings(except: [
+            'tiles.*',
+            'session_description.sdp',
+            'sessionDescription.sdp',
+        ]);
 
         // Bots authenticate with their own long-lived token rather than a Passport one —
         // see App\Http\Middleware\AuthenticateBot.

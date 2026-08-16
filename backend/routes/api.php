@@ -76,6 +76,7 @@ use App\Http\Controllers\ThreadController;
 use App\Http\Controllers\ThreadMessageController;
 use App\Http\Controllers\TrackerProjectController;
 use App\Http\Controllers\TrackerTaskController;
+use App\Http\Controllers\SfuController;
 use App\Http\Controllers\VoiceController;
 use App\Http\Controllers\WhiteboardController;
 use App\Http\Controllers\WidgetController;
@@ -433,6 +434,13 @@ Route::middleware('auth:api')->group(function () {
     Route::post('channels/{channel}/voice/leave', [VoiceController::class, 'leave']);
     Route::patch('channels/{channel}/voice/state', [VoiceController::class, 'updateState']);
     Route::post('channels/{channel}/voice/heartbeat', [VoiceController::class, 'heartbeat']);
+
+    // The SDP relay for Cloudflare Realtime, whose API a browser can't call itself. Same
+    // membership check as every other voice route — these forward to a metered account.
+    Route::post('channels/{channel}/voice/sfu/session', [SfuController::class, 'session']);
+    Route::post('channels/{channel}/voice/sfu/tracks', [SfuController::class, 'tracks']);
+    Route::put('channels/{channel}/voice/sfu/renegotiate', [SfuController::class, 'renegotiate']);
+    Route::put('channels/{channel}/voice/sfu/tracks/close', [SfuController::class, 'close']);
     // What the call plays when people come and go: readable by any member, set by the owner.
     Route::get('channels/{channel}/voice/effects', [VoiceController::class, 'effects']);
     Route::patch('channels/{channel}/voice/effects', [VoiceController::class, 'updateEffects']);

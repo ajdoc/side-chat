@@ -1165,8 +1165,98 @@ const screenEl = ref<HTMLVideoElement | null>(null)
  */
 const roomScreen = computed(() => sharingPeer.value?.screen ?? screenStream.value ?? null)
 
-/** Does this map have anywhere to paint one? Nothing below costs anything on a map without. */
+/**
+ * Does the room under your feet hang a screen?
+ *
+ * Declared before everything that reads it, because a good deal below is switched off entirely by
+ * it: nearly every Side Space has no screen and none of them should be creating video players or
+ * holding video elements. It follows the *current* map, so walking into an interior turns it on.
+ */
 const hasScreens = computed(() => !!map.value?.screens?.length)
+
+/*
+ * The room's watch-along, for the screens to paint when nobody is sharing.
+ *
+ * A separate element from the share, rather than one element with its source swapped: a share is
+ * a `srcObject` MediaStream that is always live, and a film is a `src` URL that has to be sought
+ * and kept in step with the room. Folding them into one would mean clearing whichever the other
+ * left behind on every change, which is the kind of thing that works until somebody starts
+ * sharing halfway through a film.
+ */
+const filmEl = ref<HTMLVideoElement | null>(null)
+const {
+  film,
+  unpaintable: filmUnpaintable,
+  playing: filmPlaying,
+  speed: filmSpeed,
+  targetPosition: filmTarget,
+  load: loadFilm,
+  subscribe: subscribeFilm,
+  unsubscribe: unsubscribeFilm,
+  forget: forgetFilm,
+} = useRoomFilm(props.channel.id, () => hasScreens.value)
+
+/*
+ * Pick the room's player up when you walk into a room that has a screen, and put it down again
+ * when you leave one.
+ *
+ * A watcher rather than a check on mount, and that distinction is the whole of it: a cinema is
+ * normally an *interior*, so the map you arrive on has no screen and the one you walk into does.
+ * Deciding this once, against whichever map happened to be loaded at mount, meant the screens in
+ * every submap stayed dark — the player was never fetched and nothing was ever listening for it.
+ *
+ * `immediate` so a channel whose main map *does* hang a screen still works: at setup the map
+ * isn't loaded yet, so this first run does nothing and the real one fires when it arrives.
+ */
+watch(hasScreens, async (yes) => {
+  if (!yes) return forgetFilm()
+
+  await loadFilm()
+  subscribeFilm()
+}, { immediate: true })
+
+/**
+ * Which picture the screens show, and which element it lives in.
+ *
+ * A live share wins over the film. Somebody presenting is a deliberate act happening *now*, and
+ * a room where a film quietly outranked the person trying to show everyone something would be a
+ * room where sharing appears broken.
+ */
+const activeScreenEl = computed(() => (roomScreen.value ? screenEl.value : filmEl.value))
+
+/**
+ * Keep the film where the room is.
+ *
+ * Called from the frame loop, and cheap: four comparisons and, almost always, no action. Seeking
+ * is only forced past a threshold — a `<video>` nudged every frame never plays smoothly, and
+ * being a third of a second out is invisible where the stutter would not be.
+ */
+function syncFilm() {
+  const el = filmEl.value
+  const source = film.value
+
+  if (!el || !source?.url) return
+
+  if (el.dataset.src !== source.url) {
+    el.dataset.src = source.url
+    el.src = source.url
+  }
+
+  if (el.playbackRate !== filmSpeed.value) el.playbackRate = filmSpeed.value
+
+  const drift = Math.abs(el.currentTime - filmTarget())
+
+  if (filmPlaying.value) {
+    if (drift > 1.5) el.currentTime = filmTarget()
+    // Autoplay can be refused until this tab has been interacted with. Nothing depends on it —
+    // an unstarted film paints as a dark screen, exactly like an empty one.
+    if (el.paused) void el.play().catch(() => {})
+  }
+  else {
+    if (drift > 1) el.currentTime = filmTarget()
+    if (!el.paused) el.pause()
+  }
+}
 
 /** Point the element at the current share, and let go of it when there isn't one. */
 watch([roomScreen, screenEl], ([stream, el]) => {
@@ -1192,7 +1282,7 @@ function checkScreen() {
 }
 
 /** Is there actually a picture on it, as opposed to a screen with nothing playing? */
-const screenIsLive = computed(() => !!roomScreen.value)
+const screenIsLive = computed(() => !!roomScreen.value || !!film.value)
 
 /**
  * Watch what's on the room's screen, full size.
@@ -1206,11 +1296,36 @@ const screenIsLive = computed(() => !!roomScreen.value)
  * inside a room rather than instead of one.
  */
 function watchFullscreen() {
-  const el = screenEl.value
+  const el = activeScreenEl.value
 
-  if (!el || !roomScreen.value) return
+  if (!el || !screenIsLive.value) return
+
+  /*
+   * A film gets its sound; a share does not.
+   *
+   * The two are genuinely different. A screen share's audio already arrives through the call,
+   * positioned by proximity like everybody's voice, so unmuting the element would play it twice.
+   * A watch-along's audio arrives with nothing — the widget plays it for whoever joined *that*,
+   * and somebody watching from the cinema floor has joined nothing. Sitting down in front of the
+   * screen and pressing E is as clear a "yes, play this to me" as the widget's own button.
+   *
+   * Only in fullscreen. The picture on the wall stays silent, or every room with a screen would
+   * be a room playing a film at you from across it.
+   */
+  if (el === filmEl.value) el.muted = false
 
   void el.requestFullscreen?.().catch(() => {})
+}
+
+/*
+ * Out of fullscreen, the film goes quiet again.
+ *
+ * Bound to the event rather than to the button that opened it, because fullscreen ends in ways
+ * this component never hears about otherwise — Escape, the window manager, another element
+ * claiming it. A film still audible after the overlay has gone is a room with a ghost in it.
+ */
+function onFullscreenChange() {
+  if (!document.fullscreenElement && filmEl.value) filmEl.value.muted = true
 }
 
 // --- the gallery ---
@@ -1558,6 +1673,15 @@ function loop(now: number) {
     checkExhibit()
   }
 
+  /*
+   * Outside the in-the-room guard, like the effects below.
+   *
+   * What is on the room's screen has nothing to do with whether *you* have joined the call —
+   * somebody looking at the space without joining it should still see the film playing on the
+   * wall, and the element has to be kept in step for that to be true.
+   */
+  syncFilm()
+
   // Outside the `inThisRoom` guard on purpose: an effect that started while you were standing in
   // the room has to be able to finish (and be cleared) after you've left it.
   sweepEffects()
@@ -1682,6 +1806,15 @@ const interactHint = computed(() => {
   // makes the prompt worth less everywhere it means something.
   if (screenAhead.value && screenIsLive.value) return 'Watch fullscreen'
 
+  /*
+   * Standing at a screen showing something that cannot be painted.
+   *
+   * Not an offer — there is nothing E can do here — but the prompt is the only place the room
+   * can explain itself. A dark screen while everybody's video widget plays a YouTube link reads
+   * as broken, and "open the player" is the actual answer.
+   */
+  if (screenAhead.value && filmUnpaintable.value) return 'Playing in the video player — press E on the TV'
+
   // Named, because a wall of paintings is a wall of prompts otherwise, and which one you are
   // standing at is the only useful thing the prompt can tell you.
   if (pieceAhead.value) return `Look at ${pieceAhead.value.title}`
@@ -1697,7 +1830,7 @@ const interactHint = computed(() => {
 /** Whether E has anything to do where you're standing — what the prompt hangs off. */
 const hasPrompt = computed(() => seated.value
   || !!portalHere.value
-  || (!!screenAhead.value && screenIsLive.value)
+  || (!!screenAhead.value && (screenIsLive.value || filmUnpaintable.value))
   || !!pieceAhead.value
   || !!facingObject.value
   || !!facingSeat.value)
@@ -2198,7 +2331,7 @@ function draw() {
   ctx.fillRect(0, 0, camera.width, camera.height)
 
   // The share, if there is one — painted onto whatever screens this map hangs. See drawScreens.
-  drawMap(ctx, m, camera, palette, (performance.now() - openedAt) / 1000, screenEl.value)
+  drawMap(ctx, m, camera, palette, (performance.now() - openedAt) / 1000, activeScreenEl.value)
 
   // The game's things on the floor — tasks to walk to, bodies to find — under everyone.
   if (gameRunning.value) drawGame(ctx)
@@ -2968,6 +3101,8 @@ onMounted(async () => {
   await loadMap()
   subscribeMap()
 
+  document.addEventListener('fullscreenchange', onFullscreenChange)
+
   // The room's game, if one's afoot. Loaded and listened to alongside the map, on the same
   // channel stream — a game you walk in on should already be on screen, not a beat behind.
   await loadGame()
@@ -3008,6 +3143,8 @@ onBeforeUnmount(() => {
   stopRoomEvents?.()
   stopRoomEvents = undefined
   effects.length = 0
+  document.removeEventListener('fullscreenchange', onFullscreenChange)
+  unsubscribeFilm()
   ro?.disconnect()
   widthRo?.disconnect()
   probe?.remove()
@@ -3411,6 +3548,26 @@ watch(inThisRoom, (now) => {
           class="space-share pointer-events-none absolute left-0 top-0 h-px w-px opacity-0"
         />
 
+        <!--
+          The room's watch-along. Same trick as the share above and the same reasons; muted here
+          too, and unmuted only for the length of a fullscreen — see watchFullscreen.
+
+          `preload="auto"` is load-bearing rather than an optimisation. Left to the default the
+          browser fetches metadata only, which leaves `readyState` at HAVE_METADATA — dimensions
+          known, no frame decoded — and `drawScreens` has nothing to copy. A *paused* film would
+          therefore paint as a black screen, which is exactly what somebody walking into a room
+          mid-pause would see. Buffering costs a download in rooms that hang a screen, which is
+          the one place a room has asked for it.
+        -->
+        <video
+          v-if="hasScreens"
+          ref="filmEl"
+          muted
+          playsinline
+          preload="auto"
+          class="space-share pointer-events-none absolute left-0 top-0 h-px w-px opacity-0"
+        />
+
         <canvas
           ref="canvas"
           class="block h-full w-full touch-none"
@@ -3518,6 +3675,7 @@ watch(inThisRoom, (now) => {
           :disabled="using || travelling"
           @click="portalHere ? travelThrough(portalHere)
             : (screenAhead && screenIsLive) ? watchFullscreen()
+              : (screenAhead && filmUnpaintable) ? undefined
               : pieceAhead ? viewExhibit()
                 : facingObject ? useFurniture() : toggleSeat()"
         >

@@ -3,25 +3,31 @@
 namespace App\Services\Sfu;
 
 /**
- * Everything a browser needs to join a room on one particular SFU.
+ * Everything a browser needs to reach one particular SFU.
  *
- * Deliberately provider-shaped rather than provider-specific: `provider` names the driver
- * so the client can pick the right SDK adapter, and everything else is the small set of
- * facts every SFU needs — where to connect, which room, and proof you're allowed in.
+ * Deliberately provider-shaped rather than provider-specific: `driver` names the client-side
+ * adapter, and the rest is the small set of facts an SFU needs — where to connect, which room,
+ * and proof you're allowed in.
+ *
+ * Two of those are nullable, because the providers genuinely differ on them. LiveKit hands the
+ * browser a URL and a signed token and gets out of the way. Cloudflare Realtime has neither: its
+ * API is authenticated with an app secret that must never reach a browser, so the client talks
+ * to *us* and we talk to Cloudflare (see SfuController). Forcing a token into that shape would
+ * mean inventing one nobody checks.
  */
 final class SfuCredentials
 {
     public function __construct(
-        /** The driver that minted this — 'livekit' today. The client keys its adapter off it. */
+        /** The driver that minted this — 'livekit' or 'cloudflare'. The client keys its adapter off it. */
         public readonly string $driver,
         /** Which entry in config('sfu.providers') this came from, for logs and debugging. */
         public readonly string $provider,
-        /** Where the browser connects. A wss:// URL for LiveKit. */
-        public readonly string $url,
-        /** The room name, derived from the channel — see SfuProvider::roomFor. */
+        /** The room name, derived from the channel. Meaningful to every provider. */
         public readonly string $room,
-        /** Short-lived proof of admission, scoped to one person and one room. */
-        public readonly string $token,
+        /** Where the browser connects directly, for providers it connects to directly. */
+        public readonly ?string $url = null,
+        /** Short-lived proof of admission, for providers that use one. */
+        public readonly ?string $token = null,
     ) {}
 
     /** @return array<string, mixed> */
@@ -30,8 +36,8 @@ final class SfuCredentials
         return [
             'driver' => $this->driver,
             'provider' => $this->provider,
-            'url' => $this->url,
             'room' => $this->room,
+            'url' => $this->url,
             'token' => $this->token,
         ];
     }

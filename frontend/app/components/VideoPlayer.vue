@@ -3,6 +3,7 @@ import { useLocalStorage } from '@vueuse/core'
 import { ArrowDown, ArrowUp, FastForward, Film, FolderOpen, Maximize2, Pause, Play, Repeat, Repeat1, Rewind, Search, Shuffle, SkipBack, SkipForward, Square, Trash2, TriangleAlert, Upload, Volume2, VolumeX, X } from 'lucide-vue-next'
 import type { VideoSource, VideoState, Widget } from '~/types'
 import { Button } from '~/components/ui/button'
+import { watchAlongPosition } from '~/lib/watchAlong'
 
 /**
  * The watch-along video card — one screen a whole channel sits in front of.
@@ -107,13 +108,14 @@ let ticker: ReturnType<typeof setInterval> | null = null
 const displayTime = ref(0)
 const duration = ref(0)
 
-/** Where the current video should be *right now*, extrapolating from the server snapshot. */
+/**
+ * Where the current video should be *right now*, extrapolating from the server snapshot.
+ *
+ * Shared with the Side Space screens, which are a second player of the same transport — see
+ * {@link watchAlongPosition}. Two players computing "now" two different ways drift apart.
+ */
 function targetPosition(): number {
-  const s = state.value
-  const base = s.position ?? 0
-  if (s.status !== 'playing') return base
-  const elapsed = (Date.now() - Date.parse(s.updated_at)) / 1000
-  return Math.max(0, base + elapsed * (s.speed ?? 1))
+  return watchAlongPosition(state.value)
 }
 
 // ---- reconcile: point the *active* player at the shared state, idle the others ----

@@ -30,6 +30,7 @@ final class SfuManager
      */
     private const DRIVERS = [
         'livekit' => LiveKitProvider::class,
+        'cloudflare' => CloudflareSfuProvider::class,
     ];
 
     /**
@@ -50,6 +51,24 @@ final class SfuManager
                     'driver' => $provider->driver(),
                     'message' => $e->getMessage(),
                 ]);
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * The provider a session belongs to, by driver name.
+     *
+     * Only the relaying providers need this: Cloudflare's SDP exchange goes through us, so the
+     * controller handling it has to get back to the same configured entry — with the same app
+     * credentials — that issued the credential in the first place.
+     */
+    public function driver(string $driver): ?SfuProvider
+    {
+        foreach ($this->providers() as $provider) {
+            if ($provider->driver() === $driver) {
+                return $provider;
             }
         }
 

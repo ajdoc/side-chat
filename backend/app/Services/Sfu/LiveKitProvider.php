@@ -50,8 +50,8 @@ final class LiveKitProvider implements SfuProvider
         return new SfuCredentials(
             driver: $this->driver(),
             provider: $this->name,
-            url: $this->url(),
             room: $room,
+            url: $this->url(),
             token: $this->mint($room, $user),
         );
     }

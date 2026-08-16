@@ -39,6 +39,19 @@ return [
             'secret' => env('SFU_LIVEKIT_API_SECRET'),
         ],
 
+        /*
+         * Cloudflare Realtime. Priced per GB of egress with a large monthly allowance, and the
+         * odd one out in shape: it has no client SDK and no join token, so the browser
+         * negotiates through this server rather than connecting to Cloudflare itself. Create a
+         * Realtime *SFU app* in the dashboard — that is a different thing from the TURN key in
+         * config/webrtc.php, though both live on the same account and share one free tier.
+         */
+        'cloudflare' => [
+            'driver' => 'cloudflare',
+            'app_id' => env('SFU_CLOUDFLARE_APP_ID'),
+            'app_secret' => env('SFU_CLOUDFLARE_APP_SECRET'),
+        ],
+
         'livekit_backup' => [
             'driver' => 'livekit',
             'url' => env('SFU_LIVEKIT2_URL'),
@@ -55,7 +68,7 @@ return [
     */
     'order' => array_values(array_filter(array_map(
         'trim',
-        explode(',', (string) env('SFU_ORDER', 'livekit,livekit_backup'))
+        explode(',', (string) env('SFU_ORDER', 'cloudflare,livekit,livekit_backup'))
     ))),
 
     /*
