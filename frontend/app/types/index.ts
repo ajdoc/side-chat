@@ -58,8 +58,20 @@ export interface User {
   notify_dm_default?: NotifyLevel
   /** The master switch for push specifically, independent of the levels above. */
   push_enabled?: boolean
+  /**
+   * Your site-wide role, and yours alone — like the notification defaults above, the API
+   * sends this only on your own record. It's what the admin nav hangs off; "who runs this
+   * instance" is not a list to hand out with every message author.
+   */
+  role?: SiteRole | null
   created_at: string
 }
+
+/**
+ * Standing on the instance itself, as opposed to inside one server (that's the member role
+ * on `server_user`). One value for now. Mirrors App\Models\User::ROLES.
+ */
+export type SiteRole = 'super_admin'
 
 /** How loud a place is allowed to be. Mirrors App\Support\Notifications\NotifyLevel. */
 export type NotifyLevel = 'all' | 'mentions' | 'none'
@@ -1936,4 +1948,121 @@ export interface AppSticker {
   rotation: number
   user?: User
   created_at: string
+}
+
+/*
+ * ── The admin panel ──────────────────────────────────────────────────────────────────────
+ *
+ * These mirror the App\Http\Resources\Admin\* resources, and they're deliberately their own
+ * types rather than extensions of `User`, `Server` and so on. The admin resources carry
+ * fields the ordinary ones must never grow — an account's ban reason, a server's every
+ * channel — and typing them as the same thing is how such a field ends up rendered into a
+ * timeline by accident.
+ */
+
+/** A page of results, as Laravel's paginator serialises it. */
+export interface Paginated<T> {
+  data: T[]
+  meta: { current_page: number, last_page: number, per_page: number, total: number }
+}
+
+export interface AdminUser {
+  id: number
+  name: string
+  email: string
+  avatar: string | null
+  is_bot: boolean
+  role: SiteRole | null
+  provider: string | null
+  email_verified_at: string | null
+  /** Blocked from the site. `ban_reason` is the sentence they're shown at the login screen. */
+  banned: boolean
+  banned_at: string | null
+  ban_reason: string | null
+  banned_by?: { id: number, name: string } | null
+  servers_count?: number
+  owned_servers_count?: number
+  messages_count?: number
+  created_at: string
+}
+
+export interface AdminChannel {
+  id: number
+  server_id: number | null
+  conversation_id: number | null
+  /** Set on a discussion, null on a container — the table indents by this. */
+  parent_id: number | null
+  name: string
+  type: ChannelType
+  position: number
+  is_private: boolean
+  encrypted: boolean
+  messages_count?: number
+  created_at: string
+}
+
+export interface AdminServer {
+  id: number
+  name: string
+  invite_code: string | null
+  discussion_creation: 'everyone' | 'staff'
+  sfu_enabled: boolean
+  owner?: { id: number, name: string, email: string, avatar: string | null } | null
+  members_count?: number
+  channels_count?: number
+  /** Detail view only; the list carries `channels_count` instead. */
+  channels?: AdminChannel[]
+  created_at: string
+}
+
+export interface AdminConversation {
+  id: number
+  type: 'dm' | 'group'
+  /** Groups are named. A DM isn't — the client titles it from `members`. */
+  name: string | null
+  owner?: { id: number, name: string, avatar: string | null } | null
+  members?: { id: number, name: string, email: string, avatar: string | null }[]
+  members_count?: number
+  channel?: { id: number, encrypted: boolean, messages_count: number } | null
+  created_at: string
+}
+
+export interface AdminMessage {
+  id: number
+  channel_id: number
+  thread_id: number | null
+  type: string | null
+  /** True means the server holds ciphertext and no key — `body` is null and stays null. */
+  encrypted: boolean
+  body: string | null
+  author?: { id: number, name: string, email: string, avatar: string | null, is_bot: boolean } | null
+  channel?: {
+    id: number
+    name: string
+    type: ChannelType
+    server_id: number | null
+    server_name: string | null
+    conversation_id: number | null
+  } | null
+  attachments_count?: number
+  edited_at: string | null
+  pinned_at: string | null
+  created_at: string
+}
+
+/** The panel's front page: instance counts, plus who is currently blocked. */
+export interface AdminOverview {
+  counts: {
+    users: number
+    bots: number
+    admins: number
+    banned: number
+    servers: number
+    channels: number
+    dms: number
+    groups: number
+    messages: number
+    new_users_this_week: number
+  }
+  banned_users: AdminUser[]
 }

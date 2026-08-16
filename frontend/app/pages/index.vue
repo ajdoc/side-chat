@@ -8,6 +8,8 @@ definePageMeta({ middleware: 'auth' })
 const { servers, fetchServers } = useServers()
 const { conversations, fetchConversations } = useConversations()
 const { skipped } = useOnboarding()
+const { isSuperAdmin } = useAdmin()
+const { side } = usePanelSide()
 
 // Four destinations, and which one applies isn't known until the lists land: straight into
 // your first server, into your chats if you have those but no servers, the
@@ -41,6 +43,17 @@ function openInvite() {
 }
 
 onMounted(async () => {
+  /*
+   * An admin's home is the panel — unless they've stepped over into the app, in which case
+   * this is exactly where they asked to be. Checked before the fetches below, because for
+   * somebody heading to /admin the sidebar's servers and chats are two requests nobody
+   * needs. See usePanelSide for why this is a remembered side rather than the role alone.
+   */
+  if (isSuperAdmin.value && side.value === 'admin') {
+    await navigateTo('/admin')
+    return
+  }
+
   await Promise.all([fetchServers(), fetchConversations()])
 
   if (servers.value.length) {

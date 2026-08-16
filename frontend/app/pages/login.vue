@@ -10,7 +10,16 @@ const route = useRoute()
 const { login } = useAuth()
 
 const form = reactive({ email: '', password: '' })
-const error = ref('')
+
+/**
+ * Blocked accounts land here with the admin's reason already in hand.
+ *
+ * Two roads to the same sentence. Signing in when you're blocked fails validation with it
+ * (LoginUserAction), and being blocked *while* signed in bounces you here with `?blocked=`
+ * (useApi). Both end up in this one slot, so there's a single place that explains it and a
+ * single thing to read.
+ */
+const error = ref(typeof route.query.blocked === 'string' ? route.query.blocked : '')
 const loading = ref(false)
 const showPassword = ref(false)
 

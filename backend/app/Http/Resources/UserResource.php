@@ -29,6 +29,10 @@ class UserResource extends JsonResource
             // somebody chose to be notified about is nobody else's business — and this
             // resource serialises every message author in the room.
             $this->mergeWhen($request->user()?->getKey() === $this->id, fn () => [
+                // Your own site role, and only your own. It's what the client hangs the admin
+                // nav off — and the reason it isn't public is that "who runs this instance"
+                // is a list an attacker would otherwise get for free off any message author.
+                'role' => $this->role,
                 'notify_channel_default' => $this->notify_channel_default,
                 'notify_dm_default' => $this->notify_dm_default,
                 'push_enabled' => (bool) $this->push_enabled,

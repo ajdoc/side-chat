@@ -8,6 +8,7 @@ use Database\Factories\UserFactory;
 use Illuminate\Database\Eloquent\Attributes\Fillable;
 use Illuminate\Database\Eloquent\Attributes\Hidden;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
+use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\BelongsToMany;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Database\Eloquent\Relations\HasOne;
@@ -15,7 +16,7 @@ use Illuminate\Foundation\Auth\User as Authenticatable;
 use Illuminate\Notifications\Notifiable;
 use Laravel\Passport\HasApiTokens;
 
-#[Fillable(['name', 'email', 'password', 'is_bot', 'avatar', 'provider', 'provider_id', 'theme_mode', 'theme_color', 'space_avatar', 'space_pet', 'space_shout', 'spotify_id', 'spotify_access_token', 'spotify_refresh_token', 'spotify_token_expires_at', 'spotify_product', 'notify_channel_default', 'notify_dm_default', 'push_enabled'])]
+#[Fillable(['name', 'email', 'password', 'is_bot', 'role', 'avatar', 'provider', 'provider_id', 'theme_mode', 'theme_color', 'space_avatar', 'space_pet', 'space_shout', 'spotify_id', 'spotify_access_token', 'spotify_refresh_token', 'spotify_token_expires_at', 'spotify_product', 'notify_channel_default', 'notify_dm_default', 'push_enabled'])]
 #[Hidden(['password', 'remember_token'])]
 class User extends Authenticatable
 {
@@ -48,6 +49,7 @@ class User extends Authenticatable
             'email_verified_at' => 'datetime',
             'password' => 'hashed',
             'is_bot' => 'boolean',
+            'banned_at' => 'datetime',
             'push_enabled' => 'boolean',
             // How you're drawn in a Side Space — see App\Support\SideSpace\Avatars. One setting
             // with five parts, never queried by, so it rides as JSON rather than five columns.
@@ -57,6 +59,41 @@ class User extends Authenticatable
             'spotify_refresh_token' => 'encrypted',
             'spotify_token_expires_at' => 'datetime',
         ];
+    }
+
+    /**
+     * The only site-wide role there is, for now.
+     *
+     * Everyone else has `role` null. A list of one looks like a constant waiting to become an
+     * enum, and it is — but the admin panel already reads {@see self::ROLES} to render its
+     * picker, so adding the second role is a one-line change there rather than a new screen.
+     */
+    public const SUPER_ADMIN = 'super_admin';
+
+    /** @var list<string> */
+    public const ROLES = [self::SUPER_ADMIN];
+
+    /** May reach the admin panel and everything behind it. */
+    public function isSuperAdmin(): bool
+    {
+        return $this->role === self::SUPER_ADMIN;
+    }
+
+    /**
+     * Blocked from the site.
+     *
+     * Asked at login *and* on every authenticated request — see EnsureNotBanned — because a
+     * ban has to bite the tokens somebody is already holding, not just their next sign-in.
+     */
+    public function isBanned(): bool
+    {
+        return $this->banned_at !== null;
+    }
+
+    /** The admin who issued the ban, or null if they've since been deleted. */
+    public function bannedBy(): BelongsTo
+    {
+        return $this->belongsTo(self::class, 'banned_by');
     }
 
     /** Whether this user has linked Spotify and can drive the Web Playback SDK. */
@@ -119,6 +156,18 @@ class User extends Authenticatable
     public function badges(): BelongsToMany
     {
         return $this->belongsToMany(Badge::class)->withTimestamps();
+    }
+
+    /**
+     * Everything this user has posted, across every channel.
+     *
+     * Only the admin panel asks — the app always reads messages the other way round, from a
+     * channel. It's here for the counts and for the audit view, both of which start from a
+     * person rather than from a room.
+     */
+    public function messages(): HasMany
+    {
+        return $this->hasMany(Message::class);
     }
 
     /** DMs and group chats this user is in. */

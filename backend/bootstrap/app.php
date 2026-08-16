@@ -56,7 +56,15 @@ return Application::configure(basePath: dirname(__DIR__))
 
         // Bots authenticate with their own long-lived token rather than a Passport one —
         // see App\Http\Middleware\AuthenticateBot.
-        $middleware->alias(['auth.bot' => \App\Http\Middleware\AuthenticateBot::class]);
+        $middleware->alias([
+            'auth.bot' => \App\Http\Middleware\AuthenticateBot::class,
+            // The admin panel's door. See EnsureSuperAdmin for why it 404s rather than 403s.
+            'admin' => \App\Http\Middleware\EnsureSuperAdmin::class,
+        ]);
+
+        // A ban has to bite tokens that were already issued, so it's checked on every API
+        // request rather than only at login.
+        $middleware->appendToGroup('api', \App\Http\Middleware\EnsureNotBanned::class);
     })
     ->withExceptions(function (Exceptions $exceptions): void {
         $exceptions->shouldRenderJsonWhen(

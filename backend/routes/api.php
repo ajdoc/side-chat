@@ -1,5 +1,10 @@
 <?php
 
+use App\Http\Controllers\Admin\AdminConversationController;
+use App\Http\Controllers\Admin\AdminMessageController;
+use App\Http\Controllers\Admin\AdminOverviewController;
+use App\Http\Controllers\Admin\AdminServerController;
+use App\Http\Controllers\Admin\AdminUserController;
 use App\Http\Controllers\AppCatalogueController;
 use App\Http\Controllers\AppCommentController;
 use App\Http\Controllers\AppPollController;
@@ -818,6 +823,55 @@ Route::middleware('auth:api')->group(function () {
     Route::delete('side-chats/{sideChat}/documents/{document}', [DocumentController::class, 'destroy']);
     // Record a message as a decision (the ✅ on a side chat's card), or take it back.
     Route::post('messages/{message}/decision', [DecisionController::class, 'toggle']);
+});
+
+/*
+ * The admin panel.
+ *
+ * Everything under here is gated twice: `auth:api` for a token, then `admin` for a site
+ * role (App\Http\Middleware\EnsureSuperAdmin, which 404s rather than 403s so the panel's
+ * existence isn't confirmed to accounts that can't use it).
+ *
+ * These endpoints deliberately do *not* reuse the app's own ownership checks — a super
+ * admin is not a member of the servers they administer, and a DM has no room for a third
+ * party at all. What they do reuse is the app's delete *actions*, so a server removed from
+ * here purges its files and leaves everyone's sidebar the same way the owner's own button
+ * would. See the controllers for the guards each one adds on top.
+ */
+Route::middleware(['auth:api', 'admin'])->prefix('admin')->group(function () {
+    // The front page: instance counts, and who's currently blocked.
+    Route::get('overview', AdminOverviewController::class);
+
+    /*
+     * Accounts. Three separate verbs on purpose — edit, block, delete — because they mean
+     * three very different things and only the middle one is reversible.
+     */
+    Route::get('users', [AdminUserController::class, 'index']);
+    Route::get('users/{user}', [AdminUserController::class, 'show']);
+    Route::patch('users/{user}', [AdminUserController::class, 'update']);
+    // Site roles. Super Admin is the only one there is today; the picker reads User::ROLES.
+    Route::put('users/{user}/role', [AdminUserController::class, 'updateRole']);
+    // Blocking carries the sentence the person is shown at the login screen.
+    Route::post('users/{user}/ban', [AdminUserController::class, 'ban']);
+    Route::delete('users/{user}/ban', [AdminUserController::class, 'unban']);
+    Route::delete('users/{user}', [AdminUserController::class, 'destroy']);
+
+    // Servers, and the channels inside them.
+    Route::get('servers', [AdminServerController::class, 'index']);
+    Route::get('servers/{server}', [AdminServerController::class, 'show']);
+    Route::patch('servers/{server}', [AdminServerController::class, 'update']);
+    Route::delete('servers/{server}', [AdminServerController::class, 'destroy']);
+    Route::patch('channels/{channel}', [AdminServerController::class, 'updateChannel']);
+    Route::delete('channels/{channel}', [AdminServerController::class, 'destroyChannel']);
+
+    // DMs and group chats: see them and remove them, but never join or rename them.
+    Route::get('conversations', [AdminConversationController::class, 'index']);
+    Route::get('conversations/{conversation}', [AdminConversationController::class, 'show']);
+    Route::delete('conversations/{conversation}', [AdminConversationController::class, 'destroy']);
+
+    // The audit view. Always filtered, never a firehose — see AdminMessageController.
+    Route::get('messages', [AdminMessageController::class, 'index']);
+    Route::delete('messages/{message}', [AdminMessageController::class, 'destroy']);
 });
 
 /*

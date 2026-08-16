@@ -7,7 +7,7 @@ import {
   KeyRound,
   LayoutList,
   Map as MapIcon,
-  MessageSquarePlus, MessagesSquare, MicOff, Monitor, Moon, Pencil, Phone, Plus, ScreenShare, Search, Shield, Sun, Trash2,
+  MessageSquarePlus, MessagesSquare, MicOff, Monitor, Moon, Pencil, Phone, Plus, ScreenShare, Search, Shield, ShieldCheck, Sun, Trash2,
   User, UserPlus, Users, Volume2, Zap,
 } from 'lucide-vue-next'
 import { useLocalStorage } from '@vueuse/core'
@@ -63,6 +63,10 @@ const { conversations, hasMore: hasMoreChats, fetchConversations, loadMore: load
 // Only the incoming half is a badge — a request you sent is not news you need chasing.
 const { incoming: incomingFriends, load: loadFriends } = useFriends()
 const { user, logout, updateProfile } = useAuth()
+// Whether to offer the admin panel in the account menu. See useAdmin for why this is the
+// only piece of admin state the app layout knows about.
+const { isSuperAdmin } = useAdmin()
+const { goToAdmin } = usePanelSide()
 const { hasDraft } = useDrafts()
 // People in a voice channel show under whatever they're called in this server.
 const { nameFor } = useNicknames()
@@ -1412,6 +1416,25 @@ onBeforeUnmount(() => { userStream.unsubscribe(); stopPresence() })
            doesn't leave the call. -->
       <VoiceBar />
 
+      <!--
+        The way back to the panel, for the handful of people who have one.
+
+        A standing row rather than only the menu item below it: an operator crosses between
+        the two sides all day — read a report here, act on it there — and a switch you have
+        to open a menu to find is one you stop using. It sets the remembered side too, so `/`
+        goes back to leading with the panel. See usePanelSide.
+      -->
+      <div v-if="isSuperAdmin" class="shrink-0 border-t p-2">
+        <button
+          type="button"
+          class="flex w-full items-center gap-2 rounded px-2 py-1.5 text-sm text-muted-foreground transition hover:bg-muted hover:text-foreground"
+          @click="goToAdmin"
+        >
+          <ShieldCheck class="h-4 w-4 shrink-0" />
+          Admin panel
+        </button>
+      </div>
+
       <!-- You. -->
       <div class="shrink-0 border-t p-2">
         <DropdownMenu>
@@ -1484,6 +1507,18 @@ onBeforeUnmount(() => { userStream.unsubscribe(); stopPresence() })
             <DropdownMenuItem @select="showNotifyDefaults = true">
               <Bell class="mr-2 h-4 w-4" /> Notifications
             </DropdownMenuItem>
+            <!-- Instance administration. Only rendered for a site role, which the API sends
+                 on your own record and nobody else's — and the panel's own middleware and
+                 every endpoint behind it check it again, so this is a door rather than a
+                 lock. Its own layout, deliberately: administering rooms you aren't in should
+                 not look like being in them. -->
+            <template v-if="isSuperAdmin">
+              <DropdownMenuSeparator />
+              <DropdownMenuItem @select="goToAdmin">
+                <ShieldCheck class="mr-2 h-4 w-4" /> Admin panel
+              </DropdownMenuItem>
+            </template>
+            <DropdownMenuSeparator />
             <DropdownMenuItem class="text-destructive focus:text-destructive" @select="logout">
               <LogOut class="mr-2 h-4 w-4" /> Sign out
             </DropdownMenuItem>
