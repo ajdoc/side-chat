@@ -56,6 +56,11 @@ export const BACKDROPS: Record<string, Backdrop> = {
     src: 'backdrops/met-museum.png',
     tiles: { w: 44, h: 24 },
   },
+  'brooklyn-bridge': {
+    label: 'Outdoor cinema',
+    src: 'backdrops/brooklyn-bridge.jpg',
+    tiles: { w: 44, h: 24 },
+  },
   'nyc-street': {
     label: 'NYC street',
     src: 'backdrops/nyc-street.png',

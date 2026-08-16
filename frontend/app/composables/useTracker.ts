@@ -235,8 +235,21 @@ export function useTracker(basePath: string, streamName: string) {
         // Comments are routed by the open task's own listener, not here — see useTrackerTask.
       })
 
+      /*
+       * An import dropped a pile of content into this channel.
+       *
+       * One event for the whole import, carrying only an app id and a count — never the rows,
+       * which are unbounded (see AppContentImported, and the board broadcast that taught us).
+       * So the answer is to re-read, which is the one thing this composable already knows how
+       * to do.
+       */
+      channel.listen('.AppContentImported', (e: { app: string }) => {
+        if (e.app === 'tracker') void load()
+      })
+
+
       return () => {
-        channel.stopListening('.TrackerChanged')
+        channel.stopListening('.TrackerChanged').stopListening('.AppContentImported')
         release(streamName)
       }
     })

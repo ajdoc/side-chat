@@ -91,6 +91,23 @@ final class Backdrops
                 'tiles' => ['w' => 44, 'h' => 24],
             ],
 
+            /*
+             * A rooftop screening under the Brooklyn Bridge, at sunset.
+             *
+             * A *perspective* view rather than the isometric the others are drawn in, which is
+             * why its screen needs a shear and its deck is a trapezoid — see the `outdoor-cinema`
+             * preset. Kept as the JPEG it arrived as: it is a full-bleed scene with nothing
+             * transparent about it, so there is no alpha to preserve and no reason to pay for a
+             * lossless re-encode of an image that was already lossy.
+             */
+            'brooklyn-bridge' => [
+                'label' => 'Outdoor cinema',
+                'description' => 'A rooftop screening under the Brooklyn Bridge, the city going pink behind it',
+                'src' => 'backdrops/brooklyn-bridge.jpg',
+                // 1408x768 at 32px a tile, exactly — no resampling.
+                'tiles' => ['w' => 44, 'h' => 24],
+            ],
+
             'nyc-street' => [
                 'label' => 'NYC street',
                 'description' => 'Four blocks around a fountain square: the bakery, the bookshop, the deli and the cinema',

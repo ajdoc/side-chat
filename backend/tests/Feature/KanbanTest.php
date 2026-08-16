@@ -1,8 +1,11 @@
 <?php
 
+use App\Events\AppContentImported;
+use App\Events\TrackerChanged;
 use App\Models\Channel;
 use App\Models\KanbanCard;
 use App\Models\User;
+use Illuminate\Support\Facades\Event;
 use Laravel\Passport\Passport;
 
 /**
@@ -172,4 +175,80 @@ it('refuses to import from a channel the caller cannot see', function () {
     $this->postJson("/api/channels/{$mine->id}/apps/import", [
         'app' => 'kanban', 'source_channel_id' => $hidden->id,
     ])->assertNotFound();
+});
+
+it('never puts the cards on the websocket', function () {
+    [$owner, $server, $source] = ownerWithChannel();
+    $target = Channel::factory()->create(['server_id' => $server->id]);
+    Passport::actingAs($owner);
+
+    foreach (range(1, 40) as $n) {
+        $this->postJson("/api/channels/{$source->id}/kanban/cards", ['text' => "card {$n}"])->assertCreated();
+    }
+
+    Event::fake([TrackerChanged::class]);
+
+    $this->postJson("/api/channels/{$target->id}/apps/import", [
+        'app' => 'kanban', 'source_channel_id' => $source->id,
+    ])->assertOk();
+
+    /*
+     * The board event is a *reference*, never the board.
+     *
+     * A websocket message has a size ceiling that an app can't raise from the inside, and a
+     * board is unbounded — an import of eighty-four cards is what found this. The columns are
+     * bounded and ride along; the cards are re-read over HTTP.
+     */
+    Event::assertDispatched(TrackerChanged::class, function (TrackerChanged $event) {
+        if ($event->subject !== 'kanban_board') {
+            return false;
+        }
+
+        expect($event->payload)->not->toHaveKey('cards')
+            ->and($event->payload['cards_stale'])->toBeTrue()
+            ->and(strlen(json_encode($event->payload)))->toBeLessThan(2_000);
+
+        return true;
+    });
+});
+
+it('announces an import as one small event, whatever came across', function () {
+    [$owner, $server, $source] = ownerWithChannel();
+    $target = Channel::factory()->create(['server_id' => $server->id]);
+    Passport::actingAs($owner);
+
+    foreach (range(1, 30) as $n) {
+        $source->calendarEvents()->create(['title' => "event {$n}", 'starts_at' => now(), 'user_id' => $owner->id]);
+    }
+
+    Event::fake([AppContentImported::class]);
+
+    $this->postJson("/api/channels/{$target->id}/apps/import", [
+        'app' => 'calendar', 'source_channel_id' => $source->id,
+    ])->assertOk()->assertJson(['imported' => 30]);
+
+    // One event for thirty rows, and it carries none of them — thirty CalendarEventSaved
+    // broadcasts would be the same too-much-on-the-wire problem arriving as a flood instead of
+    // as one oversized message.
+    Event::assertDispatchedTimes(AppContentImported::class, 1);
+    Event::assertDispatched(AppContentImported::class, function (AppContentImported $event) use ($target) {
+        return $event->app === 'calendar'
+            && $event->count === 30
+            && $event->streamName === 'channel.'.$target->id;
+    });
+});
+
+it('says nothing when an import brought nothing', function () {
+    [$owner, $server, $source] = ownerWithChannel();
+    $target = Channel::factory()->create(['server_id' => $server->id]);
+    Passport::actingAs($owner);
+
+    Event::fake([AppContentImported::class]);
+
+    $this->postJson("/api/channels/{$target->id}/apps/import", [
+        'app' => 'calendar', 'source_channel_id' => $source->id,
+    ])->assertOk()->assertJson(['imported' => 0]);
+
+    // Telling every open client to re-read for nothing is a request per viewer for no change.
+    Event::assertNotDispatched(AppContentImported::class);
 });

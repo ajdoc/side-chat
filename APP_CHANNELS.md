@@ -169,6 +169,15 @@ of one row — which is what they always were, back when they were four views of
 Enter commits a card and **Shift+Enter starts a new line**, in the quick-add and the inline
 editor alike.
 
+**The board broadcast is a reference, not a state.** A websocket message has a size ceiling no
+app can raise from the inside, and a board is unbounded — importing 84 cards built one payload of
+all of them and the broker refused it, so the change reached nobody. `kanban_board` now carries
+the columns (bounded by `MAX_COLUMNS`) plus `cards_stale`, and clients re-read the cards over
+HTTP, where a big response is only a big response. Single-card events still carry their card:
+one card is bounded, a board is not. This is the same shape `WidgetUpdated` has always had, for
+the same reason — a broadcast that can outgrow the wire fails on precisely the busiest board on
+the server.
+
 ## @mentions in the Notes app
 
 Typing `@` in the shared note offers the channel roster, the preview renders the names as chips,
@@ -281,6 +290,17 @@ two shelf rows sharing one stored path would make deleting either file delete bo
 Authorisation is two questions, asked by different things: `TrackerRequest` settles the
 destination, and `Channel::visibleTo` settles the source. Without the second, an import would be
 a way to read a private channel by copying it into your own.
+
+**One event, whatever arrived.** An import broadcasts `AppContentImported` — an app id and a
+count, and none of the rows — and open clients re-read the app they already know how to read.
+Firing each app's own per-row event instead would send eighty-four broadcasts for one gesture,
+each carrying a full resource: the same too-much-on-the-wire failure as the old board broadcast,
+arriving as a flood rather than as one oversized message. It fires after the transaction commits
+(nobody is told to re-read a state that then rolls back) and not at all when nothing came across.
+
+Notes are the exception: their import broadcasts `SpaceNoteUpdated` instead, because an open
+editor *merges* a remote body against what's being typed, and a blunt "re-read" would discard
+the paragraph somebody is mid-sentence in.
 
 ## Polls
 

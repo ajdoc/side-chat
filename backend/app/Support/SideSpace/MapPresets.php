@@ -62,6 +62,7 @@ final class MapPresets
             // The first preset built to be walked *into* rather than opened — see its docblock.
             'movie-theatre' => self::movieTheatre(),
             'met-museum' => self::metMuseum(),
+            'outdoor-cinema' => self::outdoorCinema(),
             // The gyms: an arena crossed with an office, one per badge. See gym().
             'gym-cinnabar' => self::gymCinnabar(),
             'gym-celadon' => self::gymCeladon(),
@@ -89,7 +90,7 @@ final class MapPresets
      */
     public const GROUPS = [
         'Rooms' => ['office', 'lounge', 'park', 'campfire', 'blank'],
-        'Themed' => ['throne-room', 'green-hall', 'sleep-temple', 'espurr-den', 'new-york', 'gather-town', 'nyc-street', 'nyc-skyline', 'nyc-island', 'movie-theatre', 'met-museum'],
+        'Themed' => ['throne-room', 'green-hall', 'sleep-temple', 'espurr-den', 'new-york', 'gather-town', 'nyc-street', 'nyc-skyline', 'nyc-island', 'movie-theatre', 'met-museum', 'outdoor-cinema'],
         'Gyms' => ['gym-cinnabar', 'gym-celadon', 'gym-vermilion', 'gym-azalea', 'gym-olivine', 'gym-blackthorn'],
     ];
 
@@ -1470,6 +1471,113 @@ final class MapPresets
             'objects' => [],
             // The plaza, at the front.
             'spawn' => ['x' => 22, 'y' => 22],
+        ];
+    }
+
+    /**
+     * A rooftop screening under the Brooklyn Bridge. 44x24.
+     *
+     * The third drawn room, and the first in *perspective* rather than isometric — which changes
+     * two things and nothing else.
+     *
+     * **The deck is a trapezoid, not a diamond.** So it is derived by brightness rather than by
+     * shape: the asphalt and grass of the roof sit well under the sunset behind them, and the
+     * largest dark region below the skyline is the roof. The bright patches left inside it — the
+     * screen's footings, the lit railings — stay solid, which is what they are.
+     *
+     * **The screen is sheared the other way.** An isometric screen rises to the right; this one
+     * is a billboard seen from below and to the left, so its top edge *falls* — hence a positive
+     * `skew` where the cinema's is negative. It is a trapezoid in the artwork and a parallelogram
+     * here, since a shear is what `skew` can express; the mismatch is a few pixels at the far
+     * corner and the fields in the editor are there to nudge it.
+     *
+     * The seats are read off the picture like the cinema's: the deckchairs are vivid against a
+     * roof that is deliberately not, so a saturation test finds them where a colour test would
+     * not. They are invisible `seat` decorations — the chairs are already drawn.
+     */
+    private static function outdoorCinema(): array
+    {
+        return [
+            'label' => 'Outdoor Cinema',
+            'description' => 'A rooftop screening under the Brooklyn Bridge — deckchairs, and a screen that plays what the room shares',
+            'name' => 'Outdoor Cinema',
+            'width' => 44,
+            'height' => 24,
+            'tiles' => [
+                '############################################',
+                '############################################',
+                '############################################',
+                '############################################',
+                '############################################',
+                '############################################',
+                '############################################',
+                '############################################',
+                '############################################',
+                '############################################',
+                '#...........########..........#######......#',
+                '#....##.....######..............#####......#',
+                '#..###......###...................###......#',
+                '#...........#..............................#',
+                '#.......#.............#....................#',
+                '#..........................................#',
+                '#..........................................#',
+                '#..........................................#',
+                '#..........................................#',
+                '#..........................................#',
+                '#..........................................#',
+                '#..........................................#',
+                '#..........................................#',
+                '############################################',
+            ],
+            'backdrops' => [
+                ['key' => 'brooklyn-bridge', 'x' => 0, 'y' => 0, 'w' => 44, 'h' => 24],
+            ],
+            /*
+             * The big screen, over the painted one.
+             *
+             * Positive skew: a billboard seen from below on the left has a top edge that falls to
+             * the right, where an isometric room's screen rises. Measured off the artwork — the
+             * panel drops about 105 pixels across its 294, which is a shade over three tiles in
+             * nine.
+             */
+            'screens' => [
+                ['id' => 'the-screen', 'name' => 'The big screen', 'x' => 27, 'y' => 3, 'w' => 9, 'h' => 6, 'skew' => 3],
+            ],
+            /*
+             * The front rows, as a stage.
+             *
+             * Whoever stands between the seating and the screen is introducing the film, and is
+             * carried to the whole roof; everybody in the deckchairs talks to the people beside
+             * them. The same arrangement the indoor cinema uses, for the same reason.
+             */
+            'zones' => [
+                ['id' => 'down-front', 'name' => 'Down the front', 'kind' => 'stage', 'x' => 20, 'y' => 10, 'w' => 10, 'h' => 3],
+            ],
+            /*
+             * The deckchairs — invisible, because they are already drawn.
+             *
+             * Read off the artwork by saturation: the chairs are vivid red, blue and green
+             * against asphalt and dusk-lit grass that are deliberately not, so where the indoor
+             * cinema needed a *colour* test this needs only a *vividness* one. The neighbour pass
+             * that follows removes single tiles that happened to catch a lamp or a flower bed.
+             */
+            'objects' => self::objects([
+                ['seat', 25, 10], ['seat', 26, 10],
+                ['seat', 25, 11], ['seat', 26, 11], ['seat', 27, 11], ['seat', 28, 11],
+                ['seat', 7, 12], ['seat', 8, 12], ['seat', 9, 12], ['seat', 10, 12], ['seat', 21, 12], ['seat', 22, 12], ['seat', 23, 12], ['seat', 24, 12], ['seat', 27, 12], ['seat', 28, 12], ['seat', 29, 12], ['seat', 30, 12],
+                ['seat', 6, 13], ['seat', 7, 13], ['seat', 8, 13], ['seat', 9, 13], ['seat', 10, 13], ['seat', 21, 13], ['seat', 22, 13], ['seat', 23, 13], ['seat', 24, 13], ['seat', 25, 13], ['seat', 26, 13], ['seat', 29, 13], ['seat', 30, 13], ['seat', 31, 13], ['seat', 32, 13],
+                ['seat', 6, 14], ['seat', 7, 14], ['seat', 9, 14], ['seat', 10, 14], ['seat', 17, 14], ['seat', 18, 14], ['seat', 19, 14], ['seat', 20, 14], ['seat', 21, 14], ['seat', 23, 14], ['seat', 24, 14], ['seat', 25, 14], ['seat', 26, 14], ['seat', 31, 14], ['seat', 32, 14], ['seat', 33, 14], ['seat', 34, 14],
+                ['seat', 7, 15], ['seat', 8, 15], ['seat', 9, 15], ['seat', 17, 15], ['seat', 18, 15], ['seat', 19, 15], ['seat', 21, 15], ['seat', 22, 15], ['seat', 23, 15], ['seat', 24, 15], ['seat', 25, 15], ['seat', 28, 15], ['seat', 29, 15], ['seat', 30, 15], ['seat', 33, 15], ['seat', 34, 15], ['seat', 35, 15], ['seat', 36, 15],
+                ['seat', 4, 16], ['seat', 5, 16], ['seat', 13, 16], ['seat', 14, 16], ['seat', 15, 16], ['seat', 16, 16], ['seat', 17, 16], ['seat', 19, 16], ['seat', 20, 16], ['seat', 21, 16], ['seat', 22, 16], ['seat', 23, 16], ['seat', 26, 16], ['seat', 27, 16], ['seat', 28, 16], ['seat', 29, 16], ['seat', 30, 16], ['seat', 31, 16], ['seat', 32, 16], ['seat', 35, 16], ['seat', 36, 16], ['seat', 37, 16],
+                ['seat', 1, 17], ['seat', 2, 17], ['seat', 3, 17], ['seat', 4, 17], ['seat', 5, 17], ['seat', 11, 17], ['seat', 12, 17], ['seat', 13, 17], ['seat', 14, 17], ['seat', 15, 17], ['seat', 17, 17], ['seat', 18, 17], ['seat', 19, 17], ['seat', 20, 17], ['seat', 21, 17], ['seat', 24, 17], ['seat', 25, 17], ['seat', 26, 17], ['seat', 27, 17], ['seat', 28, 17], ['seat', 29, 17], ['seat', 30, 17], ['seat', 31, 17], ['seat', 32, 17], ['seat', 33, 17], ['seat', 34, 17],
+                ['seat', 1, 18], ['seat', 2, 18], ['seat', 3, 18], ['seat', 9, 18], ['seat', 10, 18], ['seat', 11, 18], ['seat', 12, 18], ['seat', 13, 18], ['seat', 14, 18], ['seat', 15, 18], ['seat', 16, 18], ['seat', 17, 18], ['seat', 18, 18], ['seat', 22, 18], ['seat', 23, 18], ['seat', 24, 18], ['seat', 26, 18], ['seat', 27, 18], ['seat', 28, 18], ['seat', 29, 18], ['seat', 30, 18], ['seat', 31, 18], ['seat', 32, 18], ['seat', 33, 18], ['seat', 34, 18],
+                ['seat', 7, 19], ['seat', 8, 19], ['seat', 9, 19], ['seat', 10, 19], ['seat', 11, 19], ['seat', 12, 19], ['seat', 13, 19], ['seat', 14, 19], ['seat', 21, 19], ['seat', 22, 19], ['seat', 23, 19], ['seat', 24, 19], ['seat', 25, 19], ['seat', 26, 19], ['seat', 28, 19], ['seat', 29, 19], ['seat', 30, 19], ['seat', 31, 19], ['seat', 32, 19],
+                ['seat', 5, 20], ['seat', 6, 20], ['seat', 7, 20], ['seat', 8, 20], ['seat', 9, 20], ['seat', 10, 20], ['seat', 11, 20], ['seat', 12, 20], ['seat', 13, 20], ['seat', 14, 20], ['seat', 19, 20], ['seat', 20, 20], ['seat', 21, 20], ['seat', 22, 20], ['seat', 23, 20], ['seat', 24, 20], ['seat', 25, 20], ['seat', 26, 20], ['seat', 27, 20], ['seat', 28, 20], ['seat', 29, 20], ['seat', 30, 20], ['seat', 31, 20],
+                ['seat', 4, 21], ['seat', 5, 21], ['seat', 6, 21], ['seat', 7, 21], ['seat', 8, 21], ['seat', 9, 21], ['seat', 10, 21], ['seat', 11, 21], ['seat', 12, 21], ['seat', 17, 21], ['seat', 18, 21], ['seat', 19, 21], ['seat', 20, 21], ['seat', 21, 21], ['seat', 22, 21], ['seat', 23, 21], ['seat', 24, 21], ['seat', 25, 21], ['seat', 26, 21], ['seat', 28, 21], ['seat', 29, 21],
+                ['seat', 4, 22], ['seat', 5, 22], ['seat', 6, 22], ['seat', 7, 22], ['seat', 8, 22], ['seat', 9, 22], ['seat', 10, 22], ['seat', 16, 22], ['seat', 17, 22], ['seat', 18, 22], ['seat', 19, 22], ['seat', 20, 22], ['seat', 22, 22], ['seat', 23, 22], ['seat', 24, 22], ['seat', 25, 22], ['seat', 26, 22],
+            ]),
+            // The back of the roof, where the stairs come up.
+            'spawn' => ['x' => 22, 'y' => 21],
         ];
     }
 

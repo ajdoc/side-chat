@@ -2,6 +2,7 @@
 
 namespace App\Support\Apps;
 
+use App\Events\SpaceNoteUpdated;
 use App\Models\Channel;
 use App\Models\KanbanCard;
 use App\Models\Message;
@@ -130,6 +131,10 @@ final class MessageToApp
             $existing === '' ? $entry : $existing."\n\n---\n\n".$entry,
             $actor->getKey(),
         );
+
+        // Anyone with the note open converges on the new body — through the note's own event,
+        // which their editor merges rather than overwrites.
+        broadcast(new SpaceNoteUpdated($note))->toOthers();
 
         return 'Added to the notes.';
     }

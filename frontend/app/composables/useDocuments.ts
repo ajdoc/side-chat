@@ -78,12 +78,24 @@ export function useDocuments(basePath: string, streamName: string) {
       .listen('.SpaceDocumentRemoved', (p: { id: number }) => {
         documents.value = documents.value.filter(d => !(d.source === 'shelf' && d.id === p.id))
       })
+
+      /*
+       * An import dropped a pile of content into this channel.
+       *
+       * One event for the whole import, carrying only an app id and a count — never the rows,
+       * which are unbounded (see AppContentImported, and the board broadcast that taught us).
+       * So the answer is to re-read, which this already knows how to do.
+       */
+    channel.listen('.AppContentImported', (e: { app: string }) => {
+      if (e.app === 'docs') void load()
+    })
   }
 
   function unsubscribe() {
     channel
       ?.stopListening('.SpaceDocumentAdded')
       .stopListening('.SpaceDocumentRemoved')
+      .stopListening('.AppContentImported')
     channel = null
     release(streamName)
   }

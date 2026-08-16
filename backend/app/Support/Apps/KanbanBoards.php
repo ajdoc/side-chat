@@ -3,7 +3,6 @@
 namespace App\Support\Apps;
 
 use App\Events\TrackerChanged;
-use App\Http\Resources\KanbanBoardResource;
 use App\Http\Resources\KanbanCardResource;
 use App\Models\Channel;
 use App\Models\KanbanBoard;
@@ -69,15 +68,36 @@ final class KanbanBoards
     }
 
     /**
-     * The columns changed.
+     * The board's shape changed — a column added, renamed, moved, emptied or removed, or a pile
+     * of cards arriving at once from an import.
      *
-     * The whole board goes out rather than the one column, because every column edit that isn't
-     * a rename moves cards — removing one rehomes its cards, and a client applying "column
-     * gone" on its own would draw a board those cards had fallen off. One payload, one state.
+     * ## Why the cards are *not* in here
+     *
+     * They were, and it broke in production. A websocket message has a size ceiling — Reverb's,
+     * Pusher's, and any managed broker's — and a board is unbounded: importing eighty-four cards
+     * built one payload of all of them and the broker refused it, so the change reached nobody
+     * and there was no way to raise the limit from inside the app.
+     *
+     * So this is a **reference, not a state**: the columns (a dozen short strings, bounded by
+     * MAX_COLUMNS) plus the fact that the cards moved. Clients re-read the board over HTTP,
+     * where a big response is only a big response. That is exactly what `WidgetUpdated` already
+     * does and for the same reason — a broadcast that can outgrow the wire is a broadcast that
+     * fails on precisely the busiest board in the server.
+     *
+     * The columns ride along rather than being fetched too, because they're what the *layout*
+     * needs: a client can redraw the columns immediately and fill the cards in when the read
+     * lands, instead of blanking the board for a round trip.
      */
     public static function boardSaved(KanbanBoard $board): void
     {
-        self::emit($board->channel_id, 'kanban_board', 'saved', (new KanbanBoardResource(self::loaded($board)))->resolve());
+        self::emit($board->channel_id, 'kanban_board', 'saved', [
+            'id' => $board->id,
+            'channel_id' => $board->channel_id,
+            'columns' => array_values($board->columns ?? []),
+            // "Re-read the cards." Named rather than implied, so a later payload that *can*
+            // carry them wouldn't have to change what this event means.
+            'cards_stale' => true,
+        ]);
     }
 
     /** @param  array<string, mixed>  $payload */

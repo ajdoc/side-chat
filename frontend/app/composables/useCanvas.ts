@@ -132,12 +132,24 @@ export function useCanvas(basePath: string, streamName: string) {
       .listen('.CanvasItemRemoved', (p: { id: number }) => {
         items.value = items.value.filter(x => x.id !== p.id)
       })
+
+      /*
+       * An import dropped a pile of content into this channel.
+       *
+       * One event for the whole import, carrying only an app id and a count — never the rows,
+       * which are unbounded (see AppContentImported, and the board broadcast that taught us).
+       * So the answer is to re-read, which this already knows how to do.
+       */
+    channel.listen('.AppContentImported', (e: { app: string }) => {
+      if (e.app === 'canvas') void load()
+    })
   }
 
   function unsubscribe() {
     channel
       ?.stopListening('.CanvasItemSaved')
       .stopListening('.CanvasItemRemoved')
+      .stopListening('.AppContentImported')
     channel = null
     release(streamName)
     // Drop only our WidgetUpdated handler from each channel — the timeline still listens there.

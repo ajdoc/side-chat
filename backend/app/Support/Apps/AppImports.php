@@ -2,6 +2,8 @@
 
 namespace App\Support\Apps;
 
+use App\Events\AppContentImported;
+use App\Events\SpaceNoteUpdated;
 use App\Models\AppPoll;
 use App\Models\Channel;
 use App\Models\KanbanCard;
@@ -103,7 +105,20 @@ final class AppImports
             return 0;
         }
 
-        return DB::transaction(fn () => ($importer['copy'])($from, $to, $actor));
+        $count = DB::transaction(fn () => ($importer['copy'])($from, $to, $actor));
+
+        if ($count > 0) {
+            /*
+             * One event saying *that* it happened — never the rows.
+             *
+             * Broadcast after the transaction, so nobody is told to re-read a state that then
+             * rolls back. See AppContentImported for why this isn't the apps' own per-row
+             * events, and KanbanBoards::boardSaved for the production failure that taught it.
+             */
+            broadcast(new AppContentImported('channel.'.$to->getKey(), $app, $count))->toOthers();
+        }
+
+        return $count;
     }
 
     // --- kanban ------------------------------------------------------------------------------
@@ -444,6 +459,11 @@ final class AppImports
             'updated_by' => $actor->getKey(),
             'version' => $note->version + 1,
         ]);
+
+        // The note's *own* event rather than the generic import one: an open editor merges a
+        // remote body against what's being typed (see SideDeskNotes), and a blunt "re-read the
+        // app" would throw away the paragraph somebody is mid-sentence in.
+        broadcast(new SpaceNoteUpdated($note))->toOthers();
 
         return 1;
     }

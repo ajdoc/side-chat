@@ -1668,8 +1668,8 @@ it('keeps a map\'s screens through an ordinary save', function () {
         ->assertJsonPath('data.screens.0.w', 4);
 });
 
-it('gives the drawn cinema seats you can actually sit in', function () {
-    $preset = MapPresets::find('movie-theatre');
+it('gives the drawn rooms seats you can actually sit in', function (string $key) {
+    $preset = MapPresets::find($key);
 
     /*
      * A backdrop map has no furniture on it — the room *is* the picture — so a cinema's seats are
@@ -1686,9 +1686,13 @@ it('gives the drawn cinema seats you can actually sit in', function () {
 
     foreach ($preset['objects'] as $seat) {
         expect(Tiles::isWalkable($preset['tiles'][$seat['y']][$seat['x']]))
-            ->toBeTrue("The seat at {$seat['x']},{$seat['y']} is on a tile nobody can walk onto.");
+            ->toBeTrue("The '$key' seat at {$seat['x']},{$seat['y']} is on a tile nobody can walk onto.");
     }
-});
+})->with([
+    // Both drawn cinemas, whose seats are painted into the artwork and read back out of it.
+    'movie-theatre',
+    'outdoor-cinema',
+]);
 
 // --- the gallery: frames, and the pictures hung in them ---
 

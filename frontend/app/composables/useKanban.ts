@@ -38,7 +38,11 @@ export function useKanban(basePath: string, streamName: string) {
   const { board, loading, error } = state
 
   const columns = computed<KanbanColumn[]>(() => board.value?.columns ?? [])
+
   const cards = computed<KanbanCard[]>(() => board.value?.cards ?? [])
+
+  /** The in-flight read, so concurrent callers await one request rather than firing several. */
+  let loadingBoard: Promise<void> | null = null
 
   function socketHeaders() {
     return { 'X-Socket-ID': echo?.socketId() ?? '' }
@@ -58,18 +62,32 @@ export function useKanban(basePath: string, streamName: string) {
     else board.value.cards[i] = { ...board.value.cards[i], ...card }
   }
 
+  /**
+   * Read the whole board.
+   *
+   * Also the recovery path for a `cards_stale` broadcast — see the listener. Guarded against
+   * overlapping: a column removal that rehomes forty cards is one event, but several views of
+   * one surface share this store, and a burst of edits shouldn't queue a read per edit.
+   */
   async function load() {
-    try {
-      const res = await api<{ data: KanbanBoard }>(`${basePath}/kanban`)
-      board.value = res.data
-      error.value = ''
-    }
-    catch (e: any) {
-      error.value = e?.data?.message ?? 'Could not open this board.'
-    }
-    finally {
-      loading.value = false
-    }
+    if (loadingBoard) return loadingBoard
+
+    loadingBoard = (async () => {
+      try {
+        const res = await api<{ data: KanbanBoard }>(`${basePath}/kanban`)
+        board.value = res.data
+        error.value = ''
+      }
+      catch (e: any) {
+        error.value = e?.data?.message ?? 'Could not open this board.'
+      }
+      finally {
+        loading.value = false
+        loadingBoard = null
+      }
+    })()
+
+    return loadingBoard
   }
 
   // --- cards ---------------------------------------------------------------------------------
@@ -156,7 +174,19 @@ export function useKanban(basePath: string, streamName: string) {
 
       // The same one-event-for-the-whole-app stream the tracker rides — see TrackerChanged.
       channel.listen('.TrackerChanged', (e: { subject: string, action: string, payload: any }) => {
-        if (e.subject === 'kanban_board') board.value = e.payload
+        if (e.subject === 'kanban_board') {
+          /*
+           * A reference, not the board.
+           *
+           * The event carries the columns and `cards_stale` — never the cards themselves, which
+           * are unbounded and blew past the websocket's message ceiling on a real import of 84.
+           * See KanbanBoards::boardSaved. So: redraw the layout from what arrived, and re-read
+           * the cards over HTTP, where a big response is only a big response.
+           */
+          if (board.value) board.value.columns = e.payload.columns ?? board.value.columns
+          if (e.payload.cards_stale) void load()
+          else if (!board.value) void load()
+        }
         else if (e.subject === 'kanban_card') {
           if (e.action === 'removed') {
             if (board.value) board.value.cards = board.value.cards.filter(c => c.id !== e.payload.id)

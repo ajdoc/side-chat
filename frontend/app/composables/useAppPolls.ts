@@ -127,9 +127,20 @@ export function useAppPolls(basePath: string, streamName: string) {
         if (e.action === 'removed') polls.value = polls.value.filter((p: AppPoll) => p.id !== e.payload.id)
         else upsert(e.payload)
       })
+      /*
+       * An import dropped a pile of content into this channel.
+       *
+       * One event for the whole import, carrying only an app id and a count — never the rows,
+       * which are unbounded (see AppContentImported, and the board broadcast that taught us).
+       * So the answer is to re-read, which is the one thing this composable already knows how
+       * to do.
+       */
+      channel.listen('.AppContentImported', (e: { app: string }) => {
+        if (e.app === 'polls') void load()
+      })
 
       return () => {
-        channel.stopListening('.TrackerChanged')
+        channel.stopListening('.TrackerChanged').stopListening('.AppContentImported')
         release(streamName)
       }
     })
