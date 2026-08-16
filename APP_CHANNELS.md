@@ -103,6 +103,7 @@ routes are generic — `channels/{channel}/apps/{type}/{id}/comments`, `.../reac
 | Canvas | card | a panel beside the board |
 | Docs | shelf file | under the viewer |
 | Notes | the note | under the editor |
+| Kanban | card | a panel beside the board |
 
 One test walks the whole set — posting a comment, a reaction and a tag to each — so an app
 added without a resolver fails there rather than as a 404 somebody finds in the UI.
@@ -118,10 +119,13 @@ in a postage stamp. A **chat-sourced** file in Docs gets nothing: it's an attach
 message that already has its own timeline thread, and a second discussion here would split one
 conversation across two places.
 
-The ones that *can't* are the widget-backed apps — **Kanban, Music, Video**. Their items aren't
-rows: a kanban card is an entry in the widget's JSON blob with an id from a counter, so there is
-nothing for `commentable_id` to point at. Giving them comments means promoting their items to
-tables first, which for tasks is a thing that already exists and is called the Tracker.
+The ones that still *can't* are **Music and Video**. Their items aren't rows — a queue entry is
+a position in the widget's JSON blob — so there is nothing for `commentable_id` to point at.
+
+The Kanban board used to be in that list, and got out of it the only way there is: **its cards
+were promoted to tables** (see [The kanban board](#the-kanban-board) below). That is the general
+answer for a widget-backed app that wants a discussion — not a special case in the comments
+layer.
 
 Three deliberate choices:
 
@@ -137,6 +141,146 @@ Deleting cascades **in PHP, not in the database** — `commentable_id` points at
 owns the row, so there's no key to cascade along. Model events cover deleting one item;
 anything deleting a *parent* whose children go in the database must call
 `purgeAppActivityFor()` first. `TrackerProjectController::destroy` does.
+
+## The kanban board
+
+Three columns of cards in a widget's JSON blob, until two asks arrived that a blob can't hold:
+**editable columns** and **a discussion on a card**. Both are now in, and the board is tables —
+`kanban_boards` (one per channel, its columns as an ordered JSON list) and `kanban_cards`.
+
+This is the same promotion the Poll widget made, and the widget did the same thing with it: the
+`k!` widget's whole state is now `{"board_id": 7}`. There is one board per channel, so the
+timeline card, the Side Desk tab, the Open Canvas card and a kanban app channel are four views
+of one row — which is what they always were, back when they were four views of one blob.
+
+- **A card's id is the number people type.** `k!done 12` names the row minted as 12. Row ids are
+  never reused, so the guarantee the old `seq` counter kept by hand now comes from the database.
+- **A column's `key` is minted once from its label and never rewritten.** Renaming "Doing" to
+  "In Progress" is a label edit; a key that tracked the label would orphan every card in it.
+- **Removing a column rehomes its cards** to the column beside it rather than deleting them.
+  Deleting twenty cards because somebody tidied a column is the one destructive thing this app
+  could do by accident, and there's no undo for it.
+- **Columns stay JSON; cards do not.** The columns are a small list read and written as a whole
+  and referenced only by their own cards' `column` string. Cards are addressed one at a time, by
+  other tables — which is exactly what a blob can't be.
+- `k!col` is the new command family: `k!col`, `k!col add <name>`, `k!col rename <column> <name>`,
+  `k!col rm <column>`. Every other `k!` command is unchanged.
+
+Enter commits a card and **Shift+Enter starts a new line**, in the quick-add and the inline
+editor alike.
+
+## @mentions in the Notes app
+
+Typing `@` in the shared note offers the channel roster, the preview renders the names as chips,
+and whoever was named is told. The note is the first app outside chat to carry mentions, and all
+three halves reuse what messages already had.
+
+- **The picker is `useMentionPicker`**, not the composer's menu. The composer fuses its `@` menu
+  with its slash-command menu and its Enter-sends handling — in a document Enter is a newline,
+  which is why Notes was never a `MarkdownEditor` in the first place. The composable owns the
+  token, the list and the insertion; the caller decides who owns Enter, and the menu only claims
+  it while it is open.
+- **Chips come from the same roster the timeline uses.** `SideDeskNotes` provides
+  `mentionNamesKey` itself rather than inheriting it, because a note in a floating window or an
+  app channel has no timeline above it — without that, `@Ada` renders as plain text in exactly
+  the places the note gets read.
+- **The notification is a system message** in the surface's own timeline
+  (`AnnounceNoteMentionsAction`), which then rides the badge, the mention highlight and the push
+  that already exist. A notification inbox built for one app would be a second delivery path to
+  keep in step with the first — and the first is the one people's mute settings are written
+  against.
+
+The trigger is **"named now, and not in the body this save replaced"**, not "the body contains
+the name". A note saves every ~700ms while somebody types, so anything less specific would
+announce a paragraph one keystroke at a time. Deleting a name and typing it again announces
+again; that is a person being named twice. A save the server refuses as stale announces nothing,
+since its body was never stored.
+
+A side chat's note announces into the side chat, where the badge is `SideChatActivity` — which
+carries no mention flag, so it lands as an ordinary unread with the naming message in it rather
+than a faked highlight.
+
+## Chat → app: "Add to app"
+
+The apps and the timeline were two places, and the thing being tracked is nearly always *said
+first*. Every message's overflow menu now has **Add to app**, which files it as a card, a task, a
+poll, a calendar entry, a canvas card, a line in the notes, or a file on the Docs shelf.
+
+**Any channel is a target.** The dialog groups them — this chat, app channels running that app,
+every other channel — but the server has no such concept: every app's storage is scoped to a
+channel, so all three are one `target_channel_id`. A text channel, a DM, a voice room and a Side
+Space all carry a Side Desk, and their board is the same storage an app channel's is. (The first
+version listed only app channels, which quietly made "file it on this team's board" the one thing
+you couldn't do.)
+
+**Filing into a conversation surfaces the widget.** A board somebody can't see is not a place
+they'll look, so filing onto a *conversation* channel's board drops the widget card in its
+timeline — once, when that channel has no card yet, since a widget card renders the live state
+wherever it already sits. An app channel is skipped: it already *is* the board, full window.
+
+**The message is read, not re-typed.** `App\Support\Apps\MessageParts` holds the whole rule:
+the first line is the title (markdown decoration stripped — somebody who typed `## Retro` meant
+the words), the rest is the description. The client previews from that same class through
+`app-targets`, so the dialog can't promise a shape the create path then disagrees with.
+
+**Polls read a markdown list**, because that is already what people type when they mean one:
+
+```
+Where are we eating?
+- Thai
+- Pizza
+- Somewhere with chairs
+```
+
+The first non-list line is the question and the items are the options. A message with a question
+and *no* list becomes a `yes_no` poll — that is what a bare question is, and it saves making
+somebody pick a type they didn't know they were picking.
+
+Per-app, only what a message genuinely can't answer is asked: which project a task goes under (or
+"as a project" instead), which column a card lands in, when a calendar entry starts. **No date is
+guessed out of prose** — "Tuesday" doesn't say which one, and on a calendar a confident wrong
+answer is a meeting nobody attends; empty means the time the message was sent.
+
+Two apps are deliberately absent and say why: a **sticker** is a drawing, and the **board** holds
+strokes. Docs takes the message's *files* rather than its text, copied on the disk (a shared path
+would make deleting either delete both) and refused for encrypted attachments, whose bytes the
+server can't read.
+
+Nothing is moved, quoted or deleted: the message stays exactly where it is, and the target
+channel is never created — an app channel you meant to file into is one you make on purpose.
+Authorisation is the same two-question split as the import: the request class settles the
+message, `Channel::visibleTo` settles the target.
+
+## Importing from another channel
+
+Every app whose content is scoped to a surface can be **copied in from another channel** —
+`channels/{channel}/apps/import`, with `apps/import/sources` listing the channels you can see
+that hold anything. One controller and one dialog for all of them, because import means the same
+thing everywhere; the per-app difference lives in `App\Support\Apps\AppImports`, where adding
+an importer is a row.
+
+The rules are the same for every app, which is why they can be stated once in the dialog:
+
+- **Copy, never move.** The source keeps everything.
+- **Additive at the destination.** Nothing already there is replaced, so importing twice
+  duplicates rather than destroys. The one app that can't be additive in the obvious way is
+  Notes — a surface has exactly one note — so its import *appends* under a rule instead.
+- **The discussion stays behind.** Comments, reactions, tags and history are a conversation that
+  happened in the source channel, often by people who aren't members here.
+- **An assignee comes across only if they're a member here.** Otherwise the card arrives
+  unassigned, with its author's name kept as text.
+- **Votes never come across.** An imported poll arrives open with no votes: a vote is a person's
+  answer in the room they answered in, and on an anonymous poll copying it would move the one
+  record the anonymity existed for.
+
+Two importers do more than copy rows. A **canvas** card that places a widget is re-pointed at
+*this* channel's widget of that type (minting it if needed) — a copied `widget_id` would put
+another channel's music player on your canvas. A **docs** import copies the file on the disk;
+two shelf rows sharing one stored path would make deleting either file delete both.
+
+Authorisation is two questions, asked by different things: `TrackerRequest` settles the
+destination, and `Channel::visibleTo` settles the source. Without the second, an import would be
+a way to read a private channel by copying it into your own.
 
 ## Polls
 
@@ -267,7 +411,11 @@ code sits in a room whose promise is that the server can't read it.
 | Client state | `useTracker`, `useTrackerTask`, `useAppItem` |
 | Client UI | `AppChannel.vue`, `TrackerApp.vue`, `TrackerBoard.vue`, `TrackerTaskDetail.vue`, `TrackerHome.vue`, `AppItemDiscussion.vue` |
 | Presentation rules | `frontend/app/lib/tracker.ts` |
-| Tests | `tests/Feature/AppChannelTest.php`, `tests/Feature/TrackerTest.php` |
+| Kanban | `KanbanController`, `KanbanBoards`, `KanbanWidget`, `useKanban`, `KanbanBoard.vue` |
+| Import | `AppImportController`, `App\Support\Apps\AppImports`, `AppImportDialog.vue` |
+| Note mentions | `AnnounceNoteMentionsAction`, `useMentionPicker`, `SideDeskNotes.vue` |
+| Chat to app | `MessageToAppController`, `MessageToApp`, `MessageParts`, `MessageToAppDialog.vue` |
+| Tests | `tests/Feature/AppChannelTest.php`, `tests/Feature/TrackerTest.php`, `tests/Feature/KanbanTest.php`, `tests/Feature/NoteMentionTest.php`, `tests/Feature/MessageToAppTest.php` |
 
 ## Known gaps
 

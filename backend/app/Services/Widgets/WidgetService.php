@@ -207,6 +207,31 @@ final class WidgetService
         return $this->latestCard($widget) ?? $this->createCard($widget, $user);
     }
 
+    /**
+     * Put this channel's widget of a type in its timeline, if it isn't there already.
+     *
+     * For things that happen *to* a channel from outside its own command line — filing a chat
+     * message onto a board in another channel, say. A widget that exists but has never had a
+     * card is invisible to anyone who doesn't already know to open the Side Desk, and "it's on
+     * the board" is not a useful thing to be told about a board you can't see.
+     *
+     * Only when there is no card at all. A widget card renders the live state wherever it sits,
+     * so a second one adds nothing but noise — and this can be called once per message somebody
+     * files. `k!list` is still how you bring the board back to the bottom on purpose.
+     *
+     * @return Message|null the card, when this call is what created it
+     */
+    public function surface(Channel $channel, User $user, string $type): ?Message
+    {
+        $widget = $this->ensure($channel, $user, $type);
+
+        if ($widget === null || $this->latestCard($widget) !== null) {
+            return null;
+        }
+
+        return $this->createCard($widget, $user);
+    }
+
     /** Drop a fresh widget card at the bottom of the timeline and announce it. */
     private function createCard(Widget $widget, User $user): Message
     {

@@ -7,6 +7,7 @@ use App\Http\Controllers\Admin\AdminServerController;
 use App\Http\Controllers\Admin\AdminUserController;
 use App\Http\Controllers\AppCatalogueController;
 use App\Http\Controllers\AppCommentController;
+use App\Http\Controllers\AppImportController;
 use App\Http\Controllers\AppPollController;
 use App\Http\Controllers\AppReactionController;
 use App\Http\Controllers\AppStickerController;
@@ -51,9 +52,11 @@ use App\Http\Controllers\GifController;
 use App\Http\Controllers\GiveawayController;
 use App\Http\Controllers\InviteController;
 use App\Http\Controllers\JoinRequestController;
+use App\Http\Controllers\KanbanController;
 use App\Http\Controllers\LyricsController;
 use App\Http\Controllers\MessageController;
 use App\Http\Controllers\MessageInfoController;
+use App\Http\Controllers\MessageToAppController;
 use App\Http\Controllers\NicknameController;
 use App\Http\Controllers\NotificationSettingController;
 use App\Http\Controllers\PinController;
@@ -373,6 +376,14 @@ Route::middleware('auth:api')->group(function () {
     Route::post('messages/{message}/comments', [CommentController::class, 'store']);
     Route::delete('comments/{comment}', [CommentController::class, 'destroy']);
 
+    /*
+     * "Add this message to an app" — a card on a board, a task, a poll, a line in the notes.
+     * `targets` says where it could go (this chat's own apps, or an app channel) and what the
+     * message parses to; the post does it. See App\Support\Apps\MessageToApp.
+     */
+    Route::get('messages/{message}/app-targets', [MessageToAppController::class, 'targets']);
+    Route::post('messages/{message}/app-items', [MessageToAppController::class, 'store']);
+
     // "Message info": who saw it, who hasn't, who reacted.
     Route::get('messages/{message}/info', [MessageInfoController::class, 'show']);
 
@@ -466,6 +477,13 @@ Route::middleware('auth:api')->group(function () {
     // one catalogue rather than two lists.
     Route::get('apps/catalogue', AppCatalogueController::class);
 
+    /*
+     * Importing an app's content from another channel — one pair of routes for every app, the
+     * same way the comments routes are one pair for every commentable thing. See AppImports.
+     */
+    Route::get('channels/{channel}/apps/import/sources', [AppImportController::class, 'sources']);
+    Route::post('channels/{channel}/apps/import', [AppImportController::class, 'store']);
+
     Route::get('channels/{channel}/tracker/fields', [TrackerProjectController::class, 'fields']);
     Route::get('channels/{channel}/tracker/projects', [TrackerProjectController::class, 'index']);
     Route::post('channels/{channel}/tracker/projects', [TrackerProjectController::class, 'store']);
@@ -508,6 +526,24 @@ Route::middleware('auth:api')->group(function () {
     Route::delete('channels/{channel}/polls/{poll}', [AppPollController::class, 'destroy']);
     // The body is the set of options you now stand behind, not a delta — see the controller.
     Route::put('channels/{channel}/polls/{poll}/vote', [AppPollController::class, 'vote']);
+
+    /*
+     * The kanban board — columns and cards.
+     *
+     * The `k!` commands still exist and reach the same rows through KanbanWidget; these are
+     * what the board itself writes. Cards are addressed by id because that id is the number
+     * people already type (`k!done 12`), and columns by their key for the same reason.
+     */
+    Route::get('channels/{channel}/kanban', [KanbanController::class, 'show']);
+    Route::post('channels/{channel}/kanban/columns', [KanbanController::class, 'storeColumn']);
+    Route::patch('channels/{channel}/kanban/columns/{key}', [KanbanController::class, 'updateColumn']);
+    // Rehomes its cards rather than deleting them — see the controller.
+    Route::delete('channels/{channel}/kanban/columns/{key}', [KanbanController::class, 'destroyColumn']);
+    Route::delete('channels/{channel}/kanban/columns/{key}/cards', [KanbanController::class, 'clearColumn']);
+    Route::post('channels/{channel}/kanban/cards', [KanbanController::class, 'storeCard']);
+    // One endpoint for text, column, position and assignee: a drag is two of those at once.
+    Route::patch('channels/{channel}/kanban/cards/{card}', [KanbanController::class, 'updateCard']);
+    Route::delete('channels/{channel}/kanban/cards/{card}', [KanbanController::class, 'destroyCard']);
 
     // The Sticker Wall — a shared collage. Editing and deleting are yours-or-staff, unlike the
     // rest of the desk apps; see the controller.

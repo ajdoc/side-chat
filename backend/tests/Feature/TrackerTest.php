@@ -296,6 +296,11 @@ it('serves comments and reactions for every row-backed app', function () {
             'name' => 'x.pdf', 'mime_type' => 'application/pdf', 'extension' => 'pdf', 'size' => 1,
         ])->id,
         'space_note' => $channel->spaceNote()->create(['content' => 'note'])->id,
+        // The one that used to be impossible: a kanban card was an entry in a widget's JSON
+        // blob until it got a row, which is the only thing `commentable_id` can point at.
+        'kanban_card' => \App\Support\Apps\KanbanBoards::for($channel)->cards()->create([
+            'channel_id' => $channel->id, 'column' => 'todo', 'text' => 'C',
+        ])->id,
     ];
 
     foreach ($subjects as $type => $id) {

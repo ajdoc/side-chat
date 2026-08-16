@@ -175,6 +175,7 @@ function popOut() {
       :stream-name="streamName"
       :can-edit="canEdit"
       :readonly-hint="readonlyHint"
+      :channel-id="channelId"
     />
 
     <!-- Calendar — the surface's shared schedule. -->

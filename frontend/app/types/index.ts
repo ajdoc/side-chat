@@ -577,17 +577,56 @@ export interface VideoState {
   pendingSearch: VideoSearch | null
 }
 
+/**
+ * One card on a kanban board.
+ *
+ * A database row since the board was promoted out of the widget's JSON state — which is what
+ * lets it carry comments, tags and reactions like any other app item. Its `id` is the number
+ * people type: `k!done 12`.
+ */
 export interface KanbanCard {
   id: number
   text: string
-  column: 'todo' | 'doing' | 'done'
-  assignee: { id: number, name: string } | null
-  addedBy: string
+  /** The `key` of one of the board's columns, not a fixed enum — columns are editable. */
+  column: string
+  position: number
+  assignee: User | null
+  /** Whoever added it, as a name: you read an author, you point at an assignee. */
+  added_by: string | null
+  /** Counts rather than the things themselves — a board of forty cards doesn't load forty threads. */
+  comment_count?: number
+  reaction_count?: number
+  tags?: AppTag[]
+  created_at?: string
 }
 
-export interface KanbanState {
-  seq: number
+/**
+ * A column. `key` is minted once from the label and never rewritten, so renaming "Doing" to
+ * "In Progress" doesn't orphan the cards pointing at it.
+ */
+export interface KanbanColumn {
+  key: string
+  label: string
+}
+
+export interface KanbanBoard {
+  id: number
+  channel_id: number
+  columns: KanbanColumn[]
   cards: KanbanCard[]
+}
+
+/** The kanban widget's whole state: a pointer at the board, exactly as the poll's is. */
+export interface KanbanState {
+  board_id: number | null
+}
+
+/** A channel offered as the source of an app import, with how much it holds. */
+export interface AppImportSource {
+  id: number
+  name: string
+  server: string | null
+  count: number
 }
 
 export interface PollOption {

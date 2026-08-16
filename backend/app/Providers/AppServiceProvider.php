@@ -9,6 +9,7 @@ use App\Models\AppPoll;
 use App\Models\AppSticker;
 use App\Models\CalendarEvent;
 use App\Models\CanvasItem;
+use App\Models\KanbanCard;
 use App\Models\SpaceDocument;
 use App\Models\SpaceNote;
 use App\Models\TrackerTask;
@@ -79,6 +80,9 @@ class AppServiceProvider extends ServiceProvider
             'app_sticker' => AppSticker::class,
             'space_document' => SpaceDocument::class,
             'space_note' => SpaceNote::class,
+            // The kanban card. It only became mappable when it stopped being an entry in a
+            // widget's JSON blob and got a row of its own — see the kanban tables migration.
+            'kanban_card' => KanbanCard::class,
         ]);
 
         // Bot webhooks ride on the message event rather than on the send path — see

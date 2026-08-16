@@ -1,5 +1,6 @@
 <?php
 
+use App\Models\KanbanCard;
 use App\Models\Message;
 use App\Models\User;
 use App\Models\Widget;
@@ -272,16 +273,19 @@ it('builds a kanban board with `k!add` and moves a card with `k!done`', function
 
     $this->postJson("/api/channels/{$channel->id}/messages", ['body' => 'k!add buy milk'])->assertCreated();
 
+    // The board is rows now, and the widget only points at it — see KanbanWidget.
     $widget = Widget::where('type', 'kanban')->sole();
-    $cardId = $widget->state['cards'][0]['id'];
-    expect($widget->state['cards'][0]['text'])->toBe('buy milk')
-        ->and($widget->state['cards'][0]['column'])->toBe('todo');
+    $card = KanbanCard::sole();
 
-    // A control command mutates state but must NOT drop a second card in the timeline.
-    $this->postJson("/api/channels/{$channel->id}/messages", ['body' => "k!done {$cardId}"])->assertCreated();
+    expect($widget->state['board_id'])->toBe($card->board_id)
+        ->and($card->text)->toBe('buy milk')
+        ->and($card->column)->toBe('todo');
+
+    // A control command mutates the board but must NOT drop a second card in the timeline.
+    $this->postJson("/api/channels/{$channel->id}/messages", ['body' => "k!done {$card->id}"])->assertCreated();
 
     expect(Message::where('type', 'widget')->count())->toBe(1)
-        ->and(Widget::where('type', 'kanban')->sole()->state['cards'][0]['column'])->toBe('done');
+        ->and($card->fresh()->column)->toBe('done');
 });
 
 it('answers `k!help` with an ephemeral note that is never persisted', function () {
@@ -301,14 +305,14 @@ it('applies a card action through the widget endpoint', function () {
 
     $this->postJson("/api/channels/{$channel->id}/messages", ['body' => 'k!add ship it'])->assertCreated();
     $widget = Widget::where('type', 'kanban')->sole();
-    $cardId = $widget->state['cards'][0]['id'];
+    $card = KanbanCard::sole();
 
     $this->postJson("/api/widgets/{$widget->id}/action", [
         'action' => 'move',
-        'payload' => ['id' => $cardId, 'column' => 'doing'],
+        'payload' => ['id' => $card->id, 'column' => 'doing'],
     ])->assertNoContent();
 
-    expect($widget->fresh()->state['cards'][0]['column'])->toBe('doing');
+    expect($card->fresh()->column)->toBe('doing');
 });
 
 it('forbids a non-member from driving a channel\'s widget', function () {

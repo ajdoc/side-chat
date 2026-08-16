@@ -62,7 +62,9 @@ function popOut() {
   </div>
   <MusicPlayer v-else-if="widget.type === 'music'" :widget="widget" />
   <VideoPlayer v-else-if="widget.type === 'video'" :widget="widget" />
-  <KanbanBoard v-else-if="widget.type === 'kanban'" :widget="widget" />
+  <!-- The board is rows now, addressed by channel — the widget is only the pointer that put
+       this card here. See KanbanWidget.php. -->
+  <KanbanBoard v-else-if="widget.type === 'kanban'" :channel-id="widget.channel_id" />
   <PollWidget v-else-if="widget.type === 'poll'" :widget="widget" />
   <CoopShooter v-else-if="widget.type === 'shooter'" :widget="widget" />
   <CoopRacer v-else-if="widget.type === 'racing'" :widget="widget" />

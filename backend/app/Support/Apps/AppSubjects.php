@@ -7,6 +7,7 @@ use App\Models\AppSticker;
 use App\Models\CalendarEvent;
 use App\Models\CanvasItem;
 use App\Models\Channel;
+use App\Models\KanbanCard;
 use App\Models\SpaceDocument;
 use App\Models\SpaceNote;
 use App\Models\TrackerTask;
@@ -40,6 +41,7 @@ final class AppSubjects
         'app_sticker' => [self::class, 'sticker'],
         'space_document' => [self::class, 'document'],
         'space_note' => [self::class, 'note'],
+        'kanban_card' => [self::class, 'kanbanCard'],
     ];
 
     public static function types(): array
@@ -111,6 +113,18 @@ final class AppSubjects
     private static function note(Channel $channel, int $id): ?SpaceNote
     {
         return SpaceNote::query()->where('channel_id', $channel->getKey())->whereKey($id)->first();
+    }
+
+    /**
+     * A card on the channel's kanban board.
+     *
+     * Scoped by the card's own `channel_id` rather than through its board: the column is
+     * denormalised onto the card precisely so these paths don't have to join, and a board never
+     * moves between channels.
+     */
+    private static function kanbanCard(Channel $channel, int $id): ?KanbanCard
+    {
+        return KanbanCard::query()->where('channel_id', $channel->getKey())->find($id);
     }
 
     /** An entry on the shared Calendar. Channel-owned only, same as the canvas card above. */

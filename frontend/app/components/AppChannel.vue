@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { Download } from 'lucide-vue-next'
 import type { Channel } from '~/types'
 import { deskApp, isWidgetApp } from '~/composables/useDeskApps'
 
@@ -35,6 +36,16 @@ const basePath = computed(() => `/api/channels/${props.channel.id}`)
 const streamName = computed(() => `channel.${props.channel.id}`)
 
 const app = computed(() => (props.channel.app_id ? deskApp(props.channel.app_id) : undefined))
+
+/**
+ * "Import from another channel", offered on every app channel.
+ *
+ * Here rather than inside each app for the same reason AppChannel is a dispatcher at all: an
+ * import means one thing everywhere, the server decides per app whether there's anything to
+ * bring, and an app that can't be imported simply says so when the dialog opens. Adding an
+ * importer server-side lights this up with no client change.
+ */
+const importing = ref(false)
 </script>
 
 <template>
@@ -47,6 +58,24 @@ const app = computed(() => (props.channel.app_id ? deskApp(props.channel.app_id)
     <!-- The way back to the conversation — the same pill a Side Space uses, so "show chat"
          is in one place whichever kind of channel has taken the window. -->
     <ChatTogglePill v-model="chatHidden" />
+
+    <AppImportDialog
+      v-model:open="importing"
+      :base-path="basePath"
+      :label="app.label"
+    />
+
+    <!-- Sits beside the chat pill, out of the app's own chrome: every app channel has it, and
+         no app should have to make room for it in its own header. -->
+    <button
+      v-if="canEdit"
+      type="button"
+      class="absolute right-2 top-2 z-20 flex items-center gap-1 rounded-md border bg-background/80 px-2 py-1 text-xs text-muted-foreground backdrop-blur transition-colors hover:bg-muted hover:text-foreground"
+      title="Import this app's content from another channel"
+      @click="importing = true"
+    >
+      <Download class="h-3.5 w-3.5" /> Import
+    </button>
 
     <TrackerApp
       v-if="channel.app_id === 'tracker'"
@@ -89,6 +118,7 @@ const app = computed(() => (props.channel.app_id ? deskApp(props.channel.app_id)
       :base-path="basePath"
       :stream-name="streamName"
       :can-edit="canEdit"
+      :channel-id="channel.id"
     />
 
     <SideDeskCalendar
@@ -102,6 +132,15 @@ const app = computed(() => (props.channel.app_id ? deskApp(props.channel.app_id)
       v-else-if="channel.app_id === 'docs'"
       :base-path="basePath"
       :stream-name="streamName"
+      :can-edit="canEdit"
+    />
+
+    <!-- The kanban board gets the window rather than going through the widget card: it has
+         columns to reshape and a discussion panel per card, neither of which fits a card. -->
+    <KanbanBoard
+      v-else-if="channel.app_id === 'kanban'"
+      :channel-id="channel.id"
+      variant="full"
       :can-edit="canEdit"
     />
 

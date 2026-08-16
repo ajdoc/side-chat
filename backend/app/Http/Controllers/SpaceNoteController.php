@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers;
 
+use App\Actions\Space\AnnounceNoteMentionsAction;
 use App\Events\SpaceNoteUpdated;
 use App\Http\Requests\SideChat\ViewSideChatRequest;
 use App\Http\Requests\Space\UpdateSpaceNoteRequest;
@@ -31,9 +32,13 @@ class SpaceNoteController extends Controller
      * — comes back 409 with the note as it now stands, which the client merges its own text
      * into and re-sends, so neither person's paragraph vanishes.
      */
-    public function update(UpdateSpaceNoteRequest $request, SideChat $sideChat): JsonResponse
+    public function update(UpdateSpaceNoteRequest $request, SideChat $sideChat, AnnounceNoteMentionsAction $mentions): JsonResponse
     {
         $note = $sideChat->spaceNote()->firstOrCreate([], ['content' => '']);
+
+        // Captured before the write: the announcement is about what this save *added*.
+        // See AnnounceNoteMentionsAction.
+        $before = (string) $note->content;
 
         $saved = $note->applyEdit(
             $request->validated('content') ?? '',
@@ -49,6 +54,10 @@ class SpaceNoteController extends Controller
 
         // Everyone else's Notes tab converges on the new body; the saver skips the echo.
         broadcast(new SpaceNoteUpdated($note))->toOthers();
+
+        // Anybody newly named in the body is told, once. A no-op for a save that added
+        // none, which is almost every save - a note is written a keystroke at a time.
+        $mentions->handle($note, $request->user(), $before);
 
         return response()->json($payload);
     }

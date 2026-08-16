@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers;
 
+use App\Actions\Space\AnnounceNoteMentionsAction;
 use App\Events\SpaceNoteUpdated;
 use App\Http\Requests\Space\ChannelSpaceRequest;
 use App\Http\Requests\Space\UpdateChannelSpaceNoteRequest;
@@ -24,9 +25,13 @@ class ChannelSpaceNoteController extends Controller
     }
 
     /** Same optimistic-concurrency save as {@see SpaceNoteController::update()}: 409 on a stale base. */
-    public function update(UpdateChannelSpaceNoteRequest $request, Channel $channel): JsonResponse
+    public function update(UpdateChannelSpaceNoteRequest $request, Channel $channel, AnnounceNoteMentionsAction $mentions): JsonResponse
     {
         $note = $channel->spaceNote()->firstOrCreate([], ['content' => '']);
+
+        // Captured before the write: the announcement is about what this save *added*.
+        // See AnnounceNoteMentionsAction.
+        $before = (string) $note->content;
 
         $saved = $note->applyEdit(
             $request->validated('content') ?? '',
@@ -41,6 +46,10 @@ class ChannelSpaceNoteController extends Controller
         }
 
         broadcast(new SpaceNoteUpdated($note))->toOthers();
+
+        // Anybody newly named in the body is told, once. A no-op for a save that added
+        // none, which is almost every save - a note is written a keystroke at a time.
+        $mentions->handle($note, $request->user(), $before);
 
         return response()->json($payload);
     }

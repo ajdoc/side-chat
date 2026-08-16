@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { Check, CheckCircle2, Copy, CornerUpLeft, Forward, Info, LockKeyhole, MessagesSquare, MoreHorizontal, Paperclip, Pencil, Pin, PinOff, Rocket, Trash2, X } from 'lucide-vue-next'
+import { Check, CheckCircle2, Copy, CornerUpLeft, Forward, Info, LayoutGrid, LockKeyhole, MessagesSquare, MoreHorizontal, Paperclip, Pencil, Pin, PinOff, Rocket, Trash2, X } from 'lucide-vue-next'
 import type { Attachment, Message, User } from '~/types'
 import { memberBadgesKey } from '~/composables/useChannelMembers'
 import { emoteOnly } from '~/lib/spaceEmotes'
@@ -151,6 +151,9 @@ const editFileInput = ref<HTMLInputElement | null>(null)
 const showDelete = ref(false)
 const showInfo = ref(false)
 const showComments = ref(false)
+/** The "Add to app" dialog — mounted with v-if, like the others, so a virtualised list of
+    hundreds of messages doesn't hold hundreds of dialogs open. */
+const showAddToApp = ref(false)
 // Any of the toolbar's own menus being open pins the hover bar in place — otherwise moving
 // the mouse into a menu un-hovers the message and the bar (with the button you just clicked)
 // vanishes out from under it.
@@ -532,6 +535,17 @@ onBeforeUnmount(() => clearTimeout(copiedTimer))
           <DropdownMenuItem v-if="forwardable && !isWidget" @select="emit('forward', message)">
             <Forward class="h-4 w-4" /> Forward
           </DropdownMenuItem>
+          <!--
+            File this message into a productivity app — a card, a task, a poll, a line in the
+            notes. Sits next to Forward because it is the same gesture aimed somewhere else:
+            forwarding sends it to people, this sends it to the thing you're going to do about it.
+
+            Withheld for a message this device can't read: what would be filed is the base64
+            envelope, and the apps are not encrypted.
+          -->
+          <DropdownMenuItem v-if="!isWidget && !unreadable && (message.body || attachments.length)" @select="showAddToApp = true">
+            <LayoutGrid class="h-4 w-4" /> Add to app
+          </DropdownMenuItem>
           <!-- Copy the message text. Only where there's text to copy. -->
           <!-- `!unreadable`, or "copy" would put a base64 envelope on the clipboard. -->
           <DropdownMenuItem v-if="message.body && !unreadable" @select="copyMessage">
@@ -564,6 +578,8 @@ onBeforeUnmount(() => clearTimeout(copiedTimer))
     </div>
 
     <MessageInfoDialog v-if="showInfo" v-model:open="showInfo" :message="message" />
+
+    <MessageToAppDialog v-if="showAddToApp" v-model:open="showAddToApp" :message="message" />
 
     <CommentDialog v-if="showComments" v-model:open="showComments" :subject="{ kind: 'message', id: message.id }" />
 
