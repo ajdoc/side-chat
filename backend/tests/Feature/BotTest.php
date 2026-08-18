@@ -206,3 +206,76 @@ it('renames a bot through the account it posts as', function () {
 
     expect($bot->user->fresh()->name)->toBe('Renamed');
 });
+
+/*
+ * A bot as an app actor.
+ *
+ * The routes are the *same controllers* people use, so what's worth testing is the extra gate
+ * (the token's server) and that a bot's writes look like a bot's — not the app logic, which
+ * KanbanTest and TrackerTest already cover.
+ */
+
+it('lets a bot read a board and file a card on it', function () {
+    [, $server, $channel] = ownerWithChannel();
+    [$bot, $token] = botOn($server);
+
+    $board = $this->withToken($token)
+        ->getJson("/api/bot/channels/{$channel->id}/kanban")
+        ->assertOk()->json('data');
+
+    expect(array_column($board['columns'], 'key'))->toBe(['todo', 'doing', 'done']);
+
+    $card = $this->withToken($token)
+        ->postJson("/api/bot/channels/{$channel->id}/kanban/cards", [
+            'text' => 'build #431 failed', 'column' => 'doing',
+        ])->assertCreated()->json('data');
+
+    // Authored by the bot, so the board says who filed it — the same as any member.
+    expect($card['added_by'])->toBe($bot->user->name)
+        ->and($card['column'])->toBe('doing');
+
+    // And it can advance one, which is the other half of filing: a bot that can only add is a
+    // bot that only ever makes work.
+    $this->withToken($token)
+        ->patchJson("/api/bot/channels/{$channel->id}/kanban/cards/{$card['id']}", ['column' => 'done'])
+        ->assertOk()->assertJsonPath('data.column', 'done');
+});
+
+it('lets a bot open a tracker task', function () {
+    [$owner, $server, $channel] = ownerWithChannel();
+    $project = $channel->trackerProjects()->create(['key' => 'CI', 'name' => 'CI', 'created_by' => $owner->id]);
+    [, $token] = botOn($server);
+
+    $this->withToken($token)
+        ->postJson("/api/bot/channels/{$channel->id}/tracker/tasks", [
+            'project_id' => $project->id, 'title' => 'Nightly build is red',
+        ])->assertCreated()->assertJsonPath('data.key', 'CI-1');
+
+    expect($this->withToken($token)
+        ->getJson("/api/bot/channels/{$channel->id}/tracker/tasks?project={$project->id}")
+        ->assertOk()->json('data'))->toHaveCount(1);
+});
+
+it('stops a bot token from reaching an app in another server', function () {
+    [, $server] = ownerWithServer();
+    [, $token] = botOn($server);
+
+    // A channel in a server the bot's *account* is a member of — the case a membership check
+    // alone waves through, which is why EnsureBotChannel exists.
+    [, $elsewhere, $farChannel] = ownerWithChannel();
+    $bot = App\Models\Bot::where('server_id', $server->id)->sole();
+    $elsewhere->members()->attach($bot->user_id);
+
+    $this->withToken($token)
+        ->postJson("/api/bot/channels/{$farChannel->id}/kanban/cards", ['text' => 'trespassing'])
+        ->assertForbidden();
+
+    expect(App\Models\KanbanCard::count())->toBe(0);
+});
+
+it('refuses an app call with no bot token at all', function () {
+    [, , $channel] = ownerWithChannel();
+
+    $this->postJson("/api/bot/channels/{$channel->id}/kanban/cards", ['text' => 'anonymous'])
+        ->assertUnauthorized();
+});

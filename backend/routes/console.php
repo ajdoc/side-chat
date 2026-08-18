@@ -21,9 +21,25 @@ Schedule::command('uploads:prune')->hourly();
  */
 Schedule::command('bot:run-schedules')->everyMinute()->withoutOverlapping();
 
+/*
+ * Calendar reminders — "the standup starts in 10 minutes".
+ *
+ * Every minute for the same reason the schedules are: a notice set for ten minutes before nine
+ * is worthless at five past. The command stamps each row before it posts, so an overlap or a
+ * crash can lose a reminder and can never repeat one — see PostCalendarReminders.
+ */
+Schedule::command('calendar:post-reminders')->everyMinute()->withoutOverlapping();
+
 // Giveaways whose time is up. Every minute for the same reason: a draw announced at 8:04
 // for a giveaway that closed at 8:00 reads as broken.
 Schedule::command('bot:draw-giveaways')->everyMinute()->withoutOverlapping();
+
+/*
+ * Guest accounts, once their meeting is long over. Hourly rather than nightly: a guest is a
+ * live credential, and one that lingers a day past its use is a day of somebody being able to
+ * walk back into a room they visited once. See PruneGuests.
+ */
+Schedule::command('guests:prune')->hourly();
 
 /*
  * The audit log is written on every action of every rule, so it is the fastest-growing

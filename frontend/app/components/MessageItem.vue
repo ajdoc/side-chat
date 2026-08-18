@@ -338,6 +338,8 @@ onBeforeUnmount(() => clearTimeout(copiedTimer))
       <div class="flex items-baseline gap-2">
         <span class="text-sm font-semibold">{{ nameFor(message.user) }}</span>
         <BotBadge v-if="message.user.is_bot" />
+        <!-- Self-chosen and unverified — see GuestBadge. -->
+        <GuestBadge v-else-if="message.user.is_guest" />
         <!-- Read off the channel roster rather than the message: badges are per-server and
              the roster is already fetched and scoped to this one. See useChannelMembers. -->
         <MemberBadges v-if="authorBadges.length" :badges="authorBadges" :max="2" />
@@ -540,10 +542,14 @@ onBeforeUnmount(() => clearTimeout(copiedTimer))
             notes. Sits next to Forward because it is the same gesture aimed somewhere else:
             forwarding sends it to people, this sends it to the thing you're going to do about it.
 
-            Withheld for a message this device can't read: what would be filed is the base64
-            envelope, and the apps are not encrypted.
+            Withheld for an *encrypted* message, not merely an unreadable one. You can read your
+            own channel's ciphertext — your client decrypted it — but the server holds only the
+            envelope, so what it would file is base64 wearing a card's clothes. And the apps
+            aren't encrypted, so even given the plaintext this would move a message out of the
+            room whose promise is that the server can't read it. Refused server-side too; this
+            is so the option isn't offered where it can only fail.
           -->
-          <DropdownMenuItem v-if="!isWidget && !unreadable && (message.body || attachments.length)" @select="showAddToApp = true">
+          <DropdownMenuItem v-if="!isWidget && !unreadable && !message.encrypted && (message.body || attachments.length)" @select="showAddToApp = true">
             <LayoutGrid class="h-4 w-4" /> Add to app
           </DropdownMenuItem>
           <!-- Copy the message text. Only where there's text to copy. -->

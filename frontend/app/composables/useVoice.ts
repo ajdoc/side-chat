@@ -236,6 +236,14 @@ interface PeerHandle {
    * anything needs to know what the call sounds like from outside. See openReferenceMix.
    */
   refTaps: { voice: GainNode, screen: GainNode } | null
+  /**
+   * This peer's two audio streams, tapped into the recording mix.
+   *
+   * Separate from `refTaps` on purpose: the reference mix follows what *you* hear (a peer you
+   * muted locally contributes silence to it), and a recording of the meeting must not. Somebody
+   * turning one person down in their own ears is not an edit to the record of the call.
+   */
+  recTaps: { voice: MediaStreamAudioSourceNode, screen: MediaStreamAudioSourceNode } | null
   speakingUntil: number
 }
 
@@ -1112,6 +1120,77 @@ export function useVoice() {
     applyAudio(id) // push the levels they're currently being heard at
   }
 
+  /* ----------------------------------------------------------------- recording the call */
+
+  /**
+   * The mixed audio of the call, for a recording.
+   *
+   * Lives here because this composable owns the audio graph: the peers' streams, the microphone
+   * after its effect chain, and the AudioContext they all run in. A recorder outside it could
+   * only reach the `<audio>` elements, and `createMediaElementSource` *redirects* an element's
+   * output into the graph — it would take the call out of the speakers and hand the recorder
+   * responsibility for putting it back, sink selection and all. Stream sources are second
+   * readers of the same streams and change nothing anybody hears.
+   *
+   * It stays live for the whole recording: {@link tapRecording} is called for peers who arrive
+   * *after* it starts, so somebody joining mid-meeting is on the tape. A snapshot taken at start
+   * would silently omit exactly the people who turn up when the meeting actually begins.
+   *
+   * Deliberately **not** routed through per-peer volume or local mute — see `recTaps`.
+   */
+  let recordingMix: MediaStreamAudioDestinationNode | null = null
+  let recordingLocal: MediaStreamAudioSourceNode | null = null
+
+  function tapRecording(id: number) {
+    const handle = handles.get(id)
+    if (!handle || handle.recTaps || !recordingMix || !audioCtx) return
+
+    const voice = audioCtx.createMediaStreamSource(handle.audioStream)
+    const screen = audioCtx.createMediaStreamSource(handle.screenAudioStream)
+    voice.connect(recordingMix)
+    screen.connect(recordingMix)
+
+    handle.recTaps = { voice, screen }
+  }
+
+  /**
+   * Start mixing, and hand back the stream to encode.
+   *
+   * Null when there is no audio graph yet — you are not in a call, and there is nothing to
+   * record. The caller treats that as "can't", not as an error.
+   */
+  function startRecordingMix(): MediaStream | null {
+    if (!audioCtx) return null
+    if (recordingMix) return recordingMix.stream
+
+    recordingMix = audioCtx.createMediaStreamDestination()
+
+    // Your own microphone, taken *after* the effect chain, so the recording contains what the
+    // room actually heard rather than what your mic picked up.
+    if (localStream) {
+      recordingLocal = audioCtx.createMediaStreamSource(localStream)
+      recordingLocal.connect(recordingMix)
+    }
+
+    for (const id of handles.keys()) tapRecording(id)
+
+    return recordingMix.stream
+  }
+
+  function stopRecordingMix() {
+    recordingLocal?.disconnect()
+    recordingLocal = null
+
+    handles.forEach((handle) => {
+      handle.recTaps?.voice.disconnect()
+      handle.recTaps?.screen.disconnect()
+      handle.recTaps = null
+    })
+
+    recordingMix?.disconnect()
+    recordingMix = null
+  }
+
   /**
    * Apply a peer's audio settings to their audio element.
    *
@@ -1510,6 +1589,7 @@ export function useVoice() {
       analyser: null,
       spatial: null,
       refTaps: null,
+      recTaps: null,
       speakingUntil: 0,
     }
 
@@ -1573,6 +1653,8 @@ export function useVoice() {
     // If a share is currently having the call subtracted out of it, this person has to be part
     // of what's subtracted — they're about to be coming out of the speakers like everyone else.
     tapPeer(id)
+    // And if the call is being recorded, somebody arriving mid-meeting belongs on the tape.
+    tapRecording(id)
 
     // A new arrival changes how the room divides up, and may already have audio (a peer
     // re-created in a Side Space adopts a stream that's still running). Both are cheap no-ops
@@ -3513,6 +3595,9 @@ export function useVoice() {
     setPeerScreenVolume,
     togglePeerScreenMute,
     setWatchedScreens,
+    // The mixed audio of the call, for a recording — see startRecordingMix.
+    startRecordingMix,
+    stopRecordingMix,
     // Proximity — a Side Space's distance rules, driven from the stage each frame.
     setProximityMode,
     setPeerProximity,

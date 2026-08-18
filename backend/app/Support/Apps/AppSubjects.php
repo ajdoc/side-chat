@@ -50,6 +50,72 @@ final class AppSubjects
     }
 
     /**
+     * What kind of thing this is, in words — "Kanban card", "Task".
+     *
+     * For the places that name an item to somebody who didn't open it from the app: the side
+     * chat header, the anchor message. A morph name is an identifier, and "kanban_card" in a
+     * sentence reads as a leak.
+     *
+     * @var array<string, array{label: string, app: string}>
+     */
+    private const KINDS = [
+        'tracker_task' => ['label' => 'Task', 'app' => 'tracker'],
+        'kanban_card' => ['label' => 'Kanban card', 'app' => 'kanban'],
+        'calendar_event' => ['label' => 'Calendar entry', 'app' => 'calendar'],
+        'app_poll' => ['label' => 'Poll', 'app' => 'polls'],
+        'app_sticker' => ['label' => 'Sticker', 'app' => 'stickers'],
+        'space_document' => ['label' => 'File', 'app' => 'docs'],
+        'space_note' => ['label' => 'Note', 'app' => 'notes'],
+        'canvas_item' => ['label' => 'Canvas card', 'app' => 'canvas'],
+    ];
+
+    public static function kindLabel(string $type): string
+    {
+        return self::KINDS[$type]['label'] ?? 'Item';
+    }
+
+    /** Which app a kind belongs to, so a client can name (or open) the right tab. */
+    public static function appFor(string $type): ?string
+    {
+        return self::KINDS[$type]['app'] ?? null;
+    }
+
+    /**
+     * What to call an item, and what it says — for the chat started about it.
+     *
+     * Every app names its items differently (a task has a title and a key, a card is its text, a
+     * poll is its question), and a side chat needs one name and one excerpt whichever kind it
+     * was opened from. Kept here beside the resolvers rather than as a method on eight models:
+     * this is a *presentation* of an item for one feature, and putting it on the models would
+     * make each of them know about side chats.
+     *
+     * @return array{title: string, excerpt: ?string}
+     */
+    public static function label(Model $subject): array
+    {
+        [$title, $excerpt] = match (true) {
+            $subject instanceof TrackerTask => [trim(($subject->project?->key ? $subject->project->key.'-'.$subject->number.' ' : '').$subject->title), $subject->description],
+            $subject instanceof KanbanCard => [$subject->text, null],
+            $subject instanceof CalendarEvent => [$subject->title, $subject->description],
+            $subject instanceof AppPoll => [$subject->question, $subject->description],
+            $subject instanceof AppSticker => [$subject->name ?: 'Sticker', null],
+            $subject instanceof SpaceDocument => [$subject->name, null],
+            $subject instanceof SpaceNote => ['The shared note', null],
+            $subject instanceof CanvasItem => [(string) ($subject->content['text'] ?? $subject->content['title'] ?? 'Canvas card'), null],
+            default => ['Discussion', null],
+        };
+
+        $title = trim(preg_replace('/\s+/u', ' ', (string) $title) ?? '');
+
+        return [
+            // A side chat's name is capped at 100 by its own rules; anything longer is the
+            // excerpt's job.
+            'title' => mb_substr($title === '' ? 'Discussion' : $title, 0, 100),
+            'excerpt' => $excerpt === null || trim((string) $excerpt) === '' ? null : mb_substr(trim((string) $excerpt), 0, 280),
+        ];
+    }
+
+    /**
      * The model named by a type/id pair, or null if it isn't one or doesn't live here.
      *
      * Callers turn null into a 404 rather than a 403: "this task isn't in this channel" and

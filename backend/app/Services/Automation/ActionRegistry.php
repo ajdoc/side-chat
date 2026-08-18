@@ -3,6 +3,8 @@
 namespace App\Services\Automation;
 
 use App\Services\Automation\Actions\AddReactionAction;
+use App\Services\Automation\Actions\CreateKanbanCardAction;
+use App\Services\Automation\Actions\CreateTrackerTaskAction;
 use App\Services\Automation\Actions\DirectMessageAction;
 use App\Services\Automation\Actions\EnterGiveawayAction;
 use App\Services\Automation\Actions\GrantBadgeAction;
@@ -36,6 +38,11 @@ final class ActionRegistry
         RevokeBadgeAction::class,
         SetRoleAction::class,
         AddReactionAction::class,
+        // The productivity apps. Until these, every action a rule could take was a thing said
+        // in chat — so the half of the product where work is tracked could be talked about and
+        // never written to.
+        CreateKanbanCardAction::class,
+        CreateTrackerTaskAction::class,
         // The two that make the built-in features compose rather than sit in silos.
         RunCommandAction::class,
         RunScheduleAction::class,

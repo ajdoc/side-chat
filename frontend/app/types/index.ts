@@ -34,6 +34,13 @@ export interface User {
    * flag has to be rendered — see BotBadge.
    */
   is_bot: boolean
+  /**
+   * An account minted by a meeting link — see the guests migration.
+   *
+   * Rendered as a **Guest** marker wherever the name appears, so nobody in a room has to work
+   * out that the new arrival is a stranger who typed a name a minute ago.
+   */
+  is_guest?: boolean
   theme_mode: ThemeMode
   theme_color: ThemeColor
   /**
@@ -621,6 +628,21 @@ export interface KanbanState {
   board_id: number | null
 }
 
+/**
+ * The side chat opened about one app item — the return trip for "Add to app".
+ *
+ * Carries routing *ids* rather than a path: building the URL is the client's job (the same
+ * `/servers/{s}/channels/{c}?sidechat={n}` the search panel builds), and a server that emitted
+ * paths would be a second place the frontend's routes are written down.
+ */
+export interface AppItemDiscussionLink {
+  side_chat_id: number
+  name: string | null
+  channel_id: number
+  server_id: number | null
+  conversation_id: number | null
+}
+
 /** A channel offered as the source of an app import, with how much it holds. */
 export interface AppImportSource {
   id: number
@@ -933,8 +955,83 @@ export interface CalendarEvent {
   ends_at: string | null
   all_day: boolean
   color: CalendarEventColor
+  /**
+   * Post a notice in the channel this many minutes before it starts. Null is no reminder; 0 is
+   * "when it starts", which is a different answer.
+   */
+  remind_minutes?: number | null
+  /** When the notice went out. Cleared when the entry is rescheduled — see the controller. */
+  reminded_at?: string | null
+  /** The voice room or Side Space it happens in, when it happens in one. */
+  room_channel_id?: number | null
+  room?: { id: number, name: string, type: string, server_id: number | null } | null
   user?: User
   created_at?: string
+}
+
+/**
+ * A meeting: a room, a link to it, and optionally a time.
+ *
+ * The row is the *link and its policy*; "when" stays the calendar's, which is what
+ * `scheduled_at` is read from. See the meetings migration.
+ */
+export interface Meeting {
+  id: number
+  title: string
+  /** The link is `{origin}/meet/{token}` — composed by the client, never by the API. */
+  token: string
+  channel_id: number
+  room?: {
+    id: number
+    name: string
+    type: string
+    server_id: number | null
+    conversation_id: number | null
+  }
+  /** How far open the door is: 'members' | 'account' | 'guest'. */
+  access: string
+  /** True only where a link *can* admit an outsider — a group meeting. */
+  admits_outsiders: boolean
+  /** True where somebody with no account at all may walk in. Never a server or encrypted room. */
+  admits_guests: boolean
+  scheduled_at?: string | null
+  expires_at?: string | null
+  creator?: User
+  joins_count?: number
+  created_at?: string
+}
+
+/** What a link leads to, shown before anybody commits to following it. */
+export interface MeetingPreview {
+  title: string
+  creator: string | null
+  room_type: string | null
+  scheduled_at: string | null
+  open: boolean
+  /** Can *this* person get in? False for a server meeting they're not a member of. */
+  can_join: boolean
+  /** Already in the room — the link was how they got the address, not what let them in. */
+  member: boolean
+  /** Whether somebody with no account may walk in. What turns the page into a name field. */
+  guests: boolean
+}
+
+/** One line of a meeting's audit — who was admitted, and how. */
+export interface MeetingJoin {
+  id: number
+  user?: User
+  via: 'link' | 'member'
+  external: boolean
+  joined_at: string
+}
+
+/** A room an entry may say it happens in — a voice channel or a Side Space. */
+export interface CalendarRoom {
+  id: number
+  name: string
+  type: string
+  /** The client builds the link to the room, so it needs the server in the path. */
+  server_id: number | null
 }
 
 /**
@@ -1049,6 +1146,21 @@ export interface SideChat {
   /** Frozen snapshot of the origin message, so "Started from" survives its deletion. */
   origin_author?: string | null
   origin_excerpt?: string | null
+  /**
+   * The app item this room was opened about, for a side chat started from one.
+   *
+   * The *live* item, not a snapshot: a card gets renamed, and a header still showing the old
+   * words is the confusion this exists to remove. See AppDiscussion.
+   */
+  about?: {
+    type: string
+    /** In words — "Kanban card", "Task". A morph name in a sentence reads as a leak. */
+    label: string
+    /** Which app it lives in, so the header can say where to find it. */
+    app: string | null
+    title: string
+    channel_id: number
+  } | null
   participants?: User[]
   participant_ids?: number[]
   participants_count?: number
@@ -1083,6 +1195,13 @@ export interface SideChatForum {
  * speakers — it is nobody else's business and never leaves your browser. See `Peer`.
  */
 export interface VoiceParticipant {
+  /**
+   * Somebody in the room is recording the call.
+   *
+   * Per participant, not per room: two people can record the same call and one can stop while
+   * the other continues. Shipped to everybody deliberately — see the migration.
+   */
+  recording?: boolean
   channel_id: number
   user: User
   muted: boolean

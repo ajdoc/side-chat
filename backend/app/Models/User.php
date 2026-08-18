@@ -16,7 +16,7 @@ use Illuminate\Foundation\Auth\User as Authenticatable;
 use Illuminate\Notifications\Notifiable;
 use Laravel\Passport\HasApiTokens;
 
-#[Fillable(['name', 'email', 'password', 'is_bot', 'role', 'avatar', 'provider', 'provider_id', 'theme_mode', 'theme_color', 'space_avatar', 'space_pet', 'space_shout', 'spotify_id', 'spotify_access_token', 'spotify_refresh_token', 'spotify_token_expires_at', 'spotify_product', 'notify_channel_default', 'notify_dm_default', 'push_enabled'])]
+#[Fillable(['name', 'email', 'password', 'is_bot', 'is_guest', 'guest_expires_at', 'role', 'avatar', 'provider', 'provider_id', 'theme_mode', 'theme_color', 'space_avatar', 'space_pet', 'space_shout', 'spotify_id', 'spotify_access_token', 'spotify_refresh_token', 'spotify_token_expires_at', 'spotify_product', 'notify_channel_default', 'notify_dm_default', 'push_enabled'])]
 #[Hidden(['password', 'remember_token'])]
 class User extends Authenticatable
 {
@@ -49,6 +49,8 @@ class User extends Authenticatable
             'email_verified_at' => 'datetime',
             'password' => 'hashed',
             'is_bot' => 'boolean',
+            'is_guest' => 'boolean',
+            'guest_expires_at' => 'datetime',
             'banned_at' => 'datetime',
             'push_enabled' => 'boolean',
             // How you're drawn in a Side Space — see App\Support\SideSpace\Avatars. One setting

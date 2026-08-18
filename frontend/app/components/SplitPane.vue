@@ -1,4 +1,5 @@
 <script setup lang="ts">
+// The Side Desk's apps are refused for a guest — see useGuest.
 import { ExternalLink, Hash, Info, LayoutPanelLeft, Map as MapIcon, MessagesSquare, Volume2, X } from 'lucide-vue-next'
 import type { SplitPane } from '~/composables/useSplitView'
 import { Button } from '~/components/ui/button'
@@ -104,6 +105,9 @@ const channel = computed(() => {
  */
 const isSpace = computed(() => props.pane.type === 'space')
 const isVoice = computed(() => props.pane.type === 'voice')
+
+/** A guest has no Side Desk: every one of its endpoints refuses them. See useGuest. */
+const { isGuest } = useGuest()
 </script>
 
 <template>
@@ -151,18 +155,25 @@ const isVoice = computed(() => props.pane.type === 'voice')
           buttons plus a title doesn't fit in it even on a wide monitor — which is what the
           launchers' `icon-only` says, since the *viewport* here isn't narrow.
         -->
-        <SideChatsButton :channel-id="channel.id" />
-        <FavoriteAppButton :channel-id="channel.id" icon-only />
-        <AppsButton :channel-id="channel.id" icon-only />
-        <Button variant="ghost" size="sm" class="gap-2 px-2 text-muted-foreground" title="Threads" @click="openThreads">
-          <MessagesSquare class="h-4 w-4" />
-        </Button>
-        <Button variant="ghost" size="sm" class="gap-2 px-2 text-muted-foreground" title="Side Desk" @click="openDesk">
-          <LayoutPanelLeft class="h-4 w-4" />
-        </Button>
-        <Button variant="ghost" size="sm" class="gap-2 px-2 text-muted-foreground" title="Info" @click="openInfo">
-          <Info class="h-4 w-4" />
-        </Button>
+        <!--
+          Everything from here to Info is withheld from a guest: side chats, the app launcher,
+          the favourite-app shortcut, threads, the Side Desk and the info panel all read
+          endpoints ConfineGuests refuses them. They're here for one call — see useGuest.
+        -->
+        <template v-if="!isGuest">
+          <SideChatsButton :channel-id="channel.id" />
+          <FavoriteAppButton :channel-id="channel.id" icon-only />
+          <AppsButton :channel-id="channel.id" icon-only />
+          <Button variant="ghost" size="sm" class="gap-2 px-2 text-muted-foreground" title="Threads" @click="openThreads">
+            <MessagesSquare class="h-4 w-4" />
+          </Button>
+          <Button variant="ghost" size="sm" class="gap-2 px-2 text-muted-foreground" title="Side Desk" @click="openDesk">
+            <LayoutPanelLeft class="h-4 w-4" />
+          </Button>
+          <Button variant="ghost" size="sm" class="gap-2 px-2 text-muted-foreground" title="Info" @click="openInfo">
+            <Info class="h-4 w-4" />
+          </Button>
+        </template>
       </template>
 
       <!-- The room / the call, replaced by the door to it. Occupies the same slot the real

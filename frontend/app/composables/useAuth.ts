@@ -87,6 +87,22 @@ export function useAuth() {
   }
 
   /**
+   * Adopt a session that was minted somewhere other than the login form — a guest walking in
+   * through a meeting link.
+   *
+   * **Sets the user from the response rather than re-fetching it**, which is not an optimisation:
+   * `useApi()` captures its own cookie ref when it is created, so a `/auth/me` fired in the same
+   * tick as the token being written goes out with no Authorization header at all, 401s, and
+   * `fetchUser` dutifully clears the token it was given. That is exactly what login has always
+   * avoided by taking the user from its own response — this is the same move, named.
+   */
+  function setSession(value: string, account: User) {
+    token.value = value
+    user.value = account
+    useTheme().hydrate(account)
+  }
+
+  /**
    * Change your display name — the one everyone else sees you by.
    *
    * Only the sidebar and your own menu update on the spot; names already stamped on
@@ -111,5 +127,5 @@ export function useAuth() {
     return res.data
   }
 
-  return { user, token, isLoggedIn, register, login, logout, fetchUser, setToken, updateProfile, updatePreferences }
+  return { user, token, isLoggedIn, register, login, logout, fetchUser, setToken, setSession, updateProfile, updatePreferences }
 }

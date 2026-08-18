@@ -245,3 +245,28 @@ it('refuses to file a message the caller cannot read', function () {
         'app' => 'kanban', 'target_channel_id' => $channel->id,
     ])->assertForbidden();
 });
+
+it('refuses an encrypted message, and says so before offering apps', function () {
+    [$owner, , $channel] = ownerWithChannel();
+    Passport::actingAs($owner);
+
+    // What the server holds for an E2EE message: the envelope. The *reader* sees words because
+    // their client decrypted them; nothing on this side can.
+    $message = $channel->messages()->create([
+        'user_id' => $owner->id,
+        'body' => 'eyJjaXBoZXJ0ZXh0IjoiLi4uIn0=',
+        'encrypted' => true,
+    ]);
+
+    $res = $this->getJson("/api/messages/{$message->id}/app-targets")->assertOk()->json();
+
+    // No preview built out of ciphertext — a title of base64 is worse than no title.
+    expect($res['encrypted'])->toBeTrue()
+        ->and($res['preview'])->toBeNull();
+
+    $this->postJson("/api/messages/{$message->id}/app-items", [
+        'app' => 'kanban', 'target_channel_id' => $channel->id,
+    ])->assertStatus(422);
+
+    expect(KanbanCard::count())->toBe(0);
+});

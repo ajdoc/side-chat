@@ -10,6 +10,7 @@ use App\Http\Resources\TrackerTaskResource;
 use App\Models\Channel;
 use App\Models\TrackerProject;
 use App\Models\TrackerTask;
+use App\Support\Apps\AppAutomations;
 use App\Support\Apps\AppSubjects;
 use Illuminate\Http\Resources\Json\AnonymousResourceCollection;
 use Illuminate\Http\Response;
@@ -113,6 +114,7 @@ class TrackerTaskController extends Controller
             }
 
             $task->recordActivity('created', $request->user());
+            AppAutomations::taskCreated($task, $request->user());
 
             return $task;
         });
@@ -151,6 +153,10 @@ class TrackerTaskController extends Controller
                     'from' => $before['status'],
                     'to' => $task->status,
                 ]);
+
+                // "When a task reaches Done, tell the channel" — the rule this trigger exists
+                // for. Fired here rather than from a model event so a bulk import stays silent.
+                AppAutomations::taskStatusChanged($task, (string) $before['status'], $actor);
             }
 
             foreach (['priority', 'assignee_id', 'due_date', 'title'] as $field) {

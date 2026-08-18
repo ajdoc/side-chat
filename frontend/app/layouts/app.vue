@@ -7,8 +7,8 @@ import {
   KeyRound,
   LayoutList,
   Map as MapIcon,
-  MessageSquarePlus, MessagesSquare, MicOff, Monitor, Moon, Pencil, Phone, Plus, ScreenShare, Search, Shield, ShieldCheck, Sun, Trash2,
-  User, UserPlus, Users, Volume2, Zap,
+  MessageSquarePlus, MessagesSquare, MicOff, Monitor, Moon, Pencil, Phone, Plus, ScreenShare, Search, Shield, ShieldCheck, Shuffle, Sun, Trash2,
+  User, UserPlus, Users, Video, Volume2, Zap,
 } from 'lucide-vue-next'
 import { useLocalStorage } from '@vueuse/core'
 import type { Channel, Conversation, Server, ThemeColor, ThemeMode } from '~/types'
@@ -303,6 +303,10 @@ useHead({ title: computed(() => server.value?.name ?? '') })
 const chatsOpen = useLocalStorage('sidebar:chatsOpen', true)
 const serversOpen = useLocalStorage('sidebar:serversOpen', true)
 const showNewChat = ref(false)
+/** "New meeting" — a room, a link to it, and optionally a time. See NewMeetingDialog. */
+const showNewMeeting = ref(false)
+/** The channel whose *kind* is being changed — text, voice or Side Space. */
+const typeChannel = ref<Channel | null>(null)
 
 /**
  * Unfolding, decoupled from where you're standing.
@@ -364,12 +368,24 @@ const pendingCount = computed(() => joinRequests.value.length)
 const rows = computed(() => {
   const list: any[] = []
 
+  /*
+   * A guest sees the meeting they walked into, and nothing else.
+   *
+   * Every one of these is already refused server-side (see ConfineGuests) — this is not the
+   * boundary, it is manners. Offering somebody "Add a server" that answers 403 teaches them the
+   * app is broken; a guest is the one visitor with no way to know it isn't.
+   *
+   * So the sidebar for a guest is their chat list: no friends, no servers, no new chat, no new
+   * meeting. Leaving is signing out, which the account menu still offers.
+   */
+  const guest = !!user.value?.is_guest
+
   // --- Friends ---
   //
   // Above the sections rather than inside one: it isn't a place you can open, it's the
   // roster the places are made of, and it's where a pending request has to be visible from
   // wherever you happen to be standing.
-  list.push({ id: 'friends', kind: 'friends' })
+  if (!guest) list.push({ id: 'friends', kind: 'friends' })
 
   // --- Chats ---
   list.push({ id: 'h-chats', kind: 'section', label: 'Chats', section: 'chats', open: chatsOpen.value })
@@ -381,10 +397,16 @@ const rows = computed(() => {
     for (const c of conversations.value) {
       list.push({ id: `chat-${c.id}`, kind: 'chat', conversation: c })
     }
-    list.push({ id: 'new-chat', kind: 'new-chat' })
+    if (!guest) list.push({ id: 'new-chat', kind: 'new-chat' })
   }
 
   // --- Servers ---
+  //
+  // Absent entirely for a guest: `/api/servers` refuses them, so the section would be a heading
+  // over a permanent "you're not in any servers", which reads as a broken app rather than a
+  // deliberate boundary.
+  if (guest) return list
+
   list.push({ id: 'h-servers', kind: 'section', label: 'Servers', section: 'servers', open: serversOpen.value })
 
   if (serversOpen.value) {
@@ -963,15 +985,30 @@ onBeforeUnmount(() => { userStream.unsubscribe(); stopPresence() })
                   >{{ incomingFriends.length > 99 ? '99+' : incomingFriends.length }}</span>
                 </NuxtLink>
 
-                <button
-                  v-else-if="item.kind === 'new-chat'"
-                  type="button"
-                  class="mx-2 flex w-[calc(100%-1rem)] items-center gap-2 rounded px-2 py-1.5 text-sm text-muted-foreground transition hover:bg-muted hover:text-foreground"
-                  @click="showNewChat = true"
-                >
-                  <MessageSquarePlus class="h-4 w-4 shrink-0" />
-                  New chat
-                </button>
+                <template v-else-if="item.kind === 'new-chat'">
+                  <button
+                    type="button"
+                    class="mx-2 flex w-[calc(100%-1rem)] items-center gap-2 rounded px-2 py-1.5 text-sm text-muted-foreground transition hover:bg-muted hover:text-foreground"
+                    @click="showNewChat = true"
+                  >
+                    <MessageSquarePlus class="h-4 w-4 shrink-0" />
+                    New chat
+                  </button>
+
+                  <!--
+                    Beside "New chat" because that is the same shelf: both make a place with
+                    people in it. A meeting differs in that what you get back is a *link*, which
+                    is why it can also serve somebody who isn't in any of your servers.
+                  -->
+                  <button
+                    type="button"
+                    class="mx-2 flex w-[calc(100%-1rem)] items-center gap-2 rounded px-2 py-1.5 text-sm text-muted-foreground transition hover:bg-muted hover:text-foreground"
+                    @click="showNewMeeting = true"
+                  >
+                    <Video class="h-4 w-4 shrink-0" />
+                    New meeting
+                  </button>
+                </template>
 
                 <!-- A server. Its chevron folds it open/shut on its own; several can stand
                      open at once and selecting another leaves these alone. -->
@@ -1227,6 +1264,17 @@ onBeforeUnmount(() => { userStream.unsubscribe(); stopPresence() })
                         @click.prevent="askChannelAccess(item.channel)"
                       >
                         <component :is="item.channel.is_private ? Lock : Users" class="h-3.5 w-3.5" />
+                      </button>
+                      <!-- What kind of channel this is. A conversion moves the lid, not the
+                           contents — the timeline, apps and desk are the channel's either way. -->
+                      <button
+                        v-if="item.isOwner && item.channel.type !== 'app'"
+                        class="rounded text-muted-foreground hover:text-foreground"
+                        :class="coarse ? 'p-2' : 'p-1'"
+                        :title="`Change what kind of channel ${item.channel.name} is`"
+                        @click.prevent="typeChannel = item.channel"
+                      >
+                        <Shuffle class="h-3.5 w-3.5" />
                       </button>
                       <button
                         v-if="item.isOwner"
@@ -1649,6 +1697,8 @@ onBeforeUnmount(() => { userStream.unsubscribe(); stopPresence() })
     />
 
     <NewChatDialog v-model:open="showNewChat" />
+    <NewMeetingDialog v-model:open="showNewMeeting" />
+    <ChannelTypeDialog v-if="typeChannel" :channel="typeChannel" @close="typeChannel = null" />
 
     <!-- Your own nickname in a server, reached from that server's menu. -->
     <NicknameDialog

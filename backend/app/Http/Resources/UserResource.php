@@ -22,6 +22,9 @@ class UserResource extends JsonResource
             // only for bots: the client branches on it, and an absent key would read as false
             // in some places and as "not loaded" in others.
             'is_bot' => (bool) $this->is_bot,
+            // Shipped for the same reason `is_bot` is: the client marks them, so nobody in a
+            // room has to work out that the new arrival is a stranger with a throwaway account.
+            'is_guest' => (bool) $this->is_guest,
             'provider' => $this->provider,
             'theme_mode' => $this->theme_mode,
             'theme_color' => $this->theme_color,

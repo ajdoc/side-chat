@@ -84,7 +84,10 @@ final class SideChatService
     public function loadForDisplay(SideChat $sideChat): SideChat
     {
         return $sideChat
-            ->load(['creator', 'parentMessage.user', 'participants:id,name,avatar', 'reactions.user', 'comments.user'])
+            // `appDiscussion.subject` is the app item this room is about, when it was opened
+            // from one — loaded here rather than fetched by the panel so the header can say
+            // what the conversation is about in the same payload that names it.
+            ->load(['creator', 'parentMessage.user', 'participants:id,name,avatar', 'reactions.user', 'comments.user', 'appDiscussion.subject'])
             ->loadCount($this->countDefinitions())
             ->loadMax('messages', 'created_at');
     }

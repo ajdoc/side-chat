@@ -1,4 +1,4 @@
-import type { AppComment, AppReactionSummary, AppTag } from '~/types'
+import type { AppComment, AppItemDiscussionLink, AppReactionSummary, AppTag } from '~/types'
 
 /**
  * Comments and tags for one item in any app — a calendar entry, a canvas card, a tracker task.
@@ -27,6 +27,8 @@ export function useAppItem(
   const reactions = ref<AppReactionSummary[]>([])
   /** The tags this item wears. Not on the host app's model, so it's fetched here. */
   const itemTags = ref<AppTag[]>([])
+  /** The side chat opened about this item, if anyone has opened one. */
+  const discussion = ref<AppItemDiscussionLink | null>(null)
   const loading = ref(false)
 
   function socketHeaders() {
@@ -39,14 +41,19 @@ export function useAppItem(
       comments.value = []
       reactions.value = []
       itemTags.value = []
+      discussion.value = null
       return
     }
     loading.value = true
     try {
-      const [thread, chips, worn] = await Promise.all([
+      const [thread, chips, worn, room] = await Promise.all([
         api<{ data: AppComment[] }>(`${basePath}/apps/${subject}/${id}/comments`),
         api<{ reactions: AppReactionSummary[] }>(`${basePath}/apps/${subject}/${id}/reactions`),
         api<{ data: AppTag[] }>(`${basePath}/apps/${subject}/${id}/tags`),
+        // A fourth parallel request rather than a lazy one: the button's *label* depends on
+        // whether a room exists ("Discuss in chat" or "Open discussion"), so it has to be known
+        // before the panel draws, not after somebody presses it.
+        api<{ data: AppItemDiscussionLink | null }>(`${basePath}/apps/${subject}/${id}/discussion`),
       ])
       // The response for an item you've since navigated away from must not land on the one
       // you're now looking at.
@@ -54,6 +61,7 @@ export function useAppItem(
         comments.value = thread.data
         reactions.value = chips.reactions
         itemTags.value = worn.data
+        discussion.value = room.data
       }
     }
     finally {
@@ -135,10 +143,27 @@ export function useAppItem(
     })
   }
 
+  /**
+   * Open the item's side chat, starting one if it doesn't exist.
+   *
+   * One call for both, because the server is idempotent — the second person to press the button
+   * joins the first one's room rather than opening a second. See AppDiscussionController.
+   */
+  async function startDiscussion() {
+    const id = itemId.value
+    if (id == null) return null
+    const res = await api<{ data: AppItemDiscussionLink }>(
+      `${basePath}/apps/${subject}/${id}/discussion`,
+      { method: 'POST', headers: socketHeaders() },
+    )
+    discussion.value = res.data
+    return res.data
+  }
+
   watch(itemId, () => void load(), { immediate: true })
 
   return {
-    comments, tags, itemTags, reactions, loading,
-    load, loadTags, addComment, removeComment, attachTag, detachTag, react,
+    comments, tags, itemTags, reactions, loading, discussion,
+    load, loadTags, addComment, removeComment, attachTag, detachTag, react, startDiscussion,
   }
 }

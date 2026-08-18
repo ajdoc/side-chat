@@ -523,3 +523,144 @@ it('passes an unfiltered rule and fails an unreadable one', function () {
     expect($evaluator->passes([['field' => 'nope', 'operator' => 'equals', 'value' => 'x']], $context))->toBeFalse();
     expect($evaluator->passes([['field' => 'a']], $context))->toBeFalse();
 });
+
+/*
+ * The productivity apps: the triggers a board and a tracker fire, and the two actions that
+ * write back into them. Until these, a rule could only ever see and say things in chat.
+ */
+
+it('fires a trigger when a card is added, and again when it moves', function () {
+    Queue::fake();
+    [$owner, $server, $channel] = ownerWithChannel();
+    Passport::actingAs($owner);
+
+    $card = $this->postJson("/api/channels/{$channel->id}/kanban/cards", ['text' => 'ship the thing'])
+        ->assertCreated()->json('data');
+
+    Queue::assertNothingPushed(); // no rule listens yet
+
+    automationOn($server, TriggerRegistry::KANBAN_CARD_CREATED, [['post_message', ['body' => 'x']]]);
+    automationOn($server, TriggerRegistry::KANBAN_CARD_MOVED, [['post_message', ['body' => 'x']]]);
+
+    $this->postJson("/api/channels/{$channel->id}/kanban/cards", ['text' => 'and another'])->assertCreated();
+    $this->patchJson("/api/channels/{$channel->id}/kanban/cards/{$card['id']}", ['column' => 'done'])->assertOk();
+
+    Queue::assertPushed(RunAutomation::class, 2);
+    Queue::assertPushed(RunAutomation::class, function (RunAutomation $job) {
+        $data = $job->context['data'] ?? [];
+
+        // Both ends of the move, because "announce it when something reaches Done" is the rule
+        // this exists for and `to = done` is how somebody writes it.
+        return ($job->context['trigger'] ?? '') !== TriggerRegistry::KANBAN_CARD_MOVED
+            || ($data['from'] === 'todo' && $data['to'] === 'done' && $data['to_label'] === 'Done');
+    });
+});
+
+it('says nothing when a card only changes its text', function () {
+    Queue::fake();
+    [$owner, $server, $channel] = ownerWithChannel();
+    automationOn($server, TriggerRegistry::KANBAN_CARD_MOVED, [['post_message', ['body' => 'x']]]);
+    Passport::actingAs($owner);
+
+    $card = $this->postJson("/api/channels/{$channel->id}/kanban/cards", ['text' => 'one'])->json('data');
+    $this->patchJson("/api/channels/{$channel->id}/kanban/cards/{$card['id']}", ['text' => 'one, edited'])->assertOk();
+
+    // A rename is not a move, and a rule that announced one would cry wolf all day.
+    Queue::assertNothingPushed();
+});
+
+it('stays silent through an import, however much arrives', function () {
+    Queue::fake();
+    [$owner, $server, $source] = ownerWithChannel();
+    $target = Channel::factory()->create(['server_id' => $server->id]);
+    automationOn($server, TriggerRegistry::KANBAN_CARD_CREATED, [['post_message', ['body' => 'x']]]);
+    Passport::actingAs($owner);
+
+    $board = \App\Support\Apps\KanbanBoards::for($source, $owner);
+    foreach (range(1, 5) as $n) {
+        $board->cards()->create(['channel_id' => $source->id, 'column' => 'todo', 'text' => "card {$n}"]);
+    }
+
+    $this->postJson("/api/channels/{$target->id}/apps/import", [
+        'app' => 'kanban', 'source_channel_id' => $source->id,
+    ])->assertOk();
+
+    // One rule × eighty-four cards is a channel nobody can read. A bulk arrival is not a
+    // person adding a card, and the import announces itself once in its own way.
+    Queue::assertNotPushed(RunAutomation::class);
+});
+
+it('fires when a task is opened and when its status changes', function () {
+    Queue::fake();
+    [$owner, $server, $channel] = ownerWithChannel();
+    $project = $channel->trackerProjects()->create(['key' => 'ONB', 'name' => 'Onboarding', 'created_by' => $owner->id]);
+    automationOn($server, TriggerRegistry::TRACKER_TASK_STATUS_CHANGED, [['post_message', ['body' => 'x']]]);
+    Passport::actingAs($owner);
+
+    $task = $this->postJson("/api/channels/{$channel->id}/tracker/tasks", [
+        'project_id' => $project->id, 'title' => 'Rewrite the welcome email',
+    ])->assertCreated()->json('data');
+
+    $this->patchJson("/api/channels/{$channel->id}/tracker/tasks/{$task['id']}", ['status' => 'done'])->assertOk();
+
+    Queue::assertPushed(RunAutomation::class, 1);
+    Queue::assertPushed(RunAutomation::class, function (RunAutomation $job) {
+        $data = $job->context['data'] ?? [];
+
+        // The key, because ONB-1 is how the task is referred to in whatever message the rule
+        // is about to post.
+        return $data['task_key'] === 'ONB-1' && $data['to'] === 'done';
+    });
+});
+
+it('adds a kanban card as an action, in the column the rule names', function () {
+    [$owner, $server, $channel] = ownerWithChannel();
+    serverWithAutomationBot($server);
+
+    $automation = automationOn($server, TriggerRegistry::REACTION_ADDED, [
+        ['create_kanban_card', ['channel_id' => $channel->id, 'column' => 'Doing', 'text' => 'Follow up with {user}']],
+    ]);
+
+    app(AutomationEngine::class)->run($automation, new AutomationContext(
+        $server->id,
+        TriggerRegistry::REACTION_ADDED,
+        ['user_id' => $owner->id, 'user_name' => $owner->name, 'channel_id' => $channel->id],
+    ));
+
+    $card = \App\Models\KanbanCard::sole();
+
+    expect($card->text)->toBe("Follow up with {$owner->name}")
+        // Named by *label*, because that's what somebody types in the dashboard.
+        ->and($card->column)->toBe('doing')
+        ->and($card->channel_id)->toBe($channel->id);
+});
+
+it('opens a tracker task as an action, and skips a project key that isn’t there', function () {
+    [$owner, $server, $channel] = ownerWithChannel();
+    serverWithAutomationBot($server);
+    $project = $channel->trackerProjects()->create(['key' => 'ONB', 'name' => 'Onboarding', 'created_by' => $owner->id]);
+
+    $context = fn () => new AutomationContext(
+        $server->id,
+        TriggerRegistry::COMMAND_INVOKED,
+        ['user_id' => $owner->id, 'user_name' => $owner->name, 'channel_id' => $channel->id],
+    );
+
+    app(AutomationEngine::class)->run(automationOn($server, TriggerRegistry::COMMAND_INVOKED, [
+        ['create_tracker_task', ['channel_id' => $channel->id, 'project_key' => 'onb', 'title' => 'Triage from {user}']],
+    ]), $context());
+
+    // Keyed case-insensitively: `ONB` is a name people type, not an identifier they copy.
+    expect($project->tasks()->sole()->title)->toBe("Triage from {$owner->name}");
+
+    $missing = automationOn($server, TriggerRegistry::COMMAND_INVOKED, [
+        ['create_tracker_task', ['channel_id' => $channel->id, 'project_key' => 'NOPE', 'title' => 'x']],
+    ]);
+    app(AutomationEngine::class)->run($missing, $context());
+
+    // A skip, not a failure: a mistyped key is a configuration problem, and the dashboard line
+    // is the only place anybody will find out.
+    $line = BotAuditLog::where('automation_id', $missing->id)->latest('id')->first();
+    expect($line->outcome)->toBe(BotAuditLog::SKIPPED)
+        ->and($line->message)->toContain('NOPE');
+});

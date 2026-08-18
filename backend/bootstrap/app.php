@@ -70,8 +70,21 @@ return Application::configure(basePath: dirname(__DIR__))
 
         // Bots authenticate with their own long-lived token rather than a Passport one —
         // see App\Http\Middleware\AuthenticateBot.
+        /*
+         * A guest — an account minted by a meeting link — may take part in that meeting and
+         * nothing else. Applied to the whole API rather than to a list of routes, because the
+         * point of it is to cover the routes nobody remembered. See ConfineGuests.
+         */
+        $middleware->api(append: [
+            \App\Http\Middleware\ConfineGuests::class,
+        ]);
+
         $middleware->alias([
             'auth.bot' => \App\Http\Middleware\AuthenticateBot::class,
+            // "...and is this channel in the server that issued the token?" — the app routes a
+            // bot may reach are the *same* controllers people use, gated by this. See
+            // App\Http\Middleware\EnsureBotChannel.
+            'bot.channel' => \App\Http\Middleware\EnsureBotChannel::class,
             // The admin panel's door. See EnsureSuperAdmin for why it 404s rather than 403s.
             'admin' => \App\Http\Middleware\EnsureSuperAdmin::class,
         ]);

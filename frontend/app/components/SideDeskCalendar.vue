@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import { CalendarPlus, ChevronLeft, ChevronRight, Trash2, X } from 'lucide-vue-next'
-import type { CalendarEvent, CalendarEventColor } from '~/types'
+import { BellRing, CalendarPlus, Check, ChevronLeft, ChevronRight, Link as LinkIcon, Trash2, X } from 'lucide-vue-next'
+import type { CalendarEvent, CalendarEventColor, CalendarRoom } from '~/types'
 
 /**
  * The Calendar app — a surface's shared schedule.
@@ -22,11 +22,22 @@ const props = withDefaults(defineProps<{
   canEdit: boolean
   readonlyHint?: string
   compact?: boolean
+  /**
+   * An editor to open as soon as this mounts — from a room's "Schedule" button, which reaches
+   * here through the URL and SideDeskPanel. Absent in a floating window or on the canvas, which
+   * shouldn't react to the page's query at all.
+   */
+  compose?: { meeting: boolean, eventId: number | null }
 }>(), { compact: false })
+
+const emit = defineEmits<{ composed: [] }>()
 
 const { events, loaded, open, add, patch, remove } = useCalendar(props.basePath, props.streamName)
 
 open()
+// The room list is small, static and needed the moment somebody opens the editor, so it's
+// fetched once with the calendar rather than on each compose. The compose shortcut waits on it.
+void loadRooms()
 
 // --- the month being looked at ------------------------------------------------------------
 
@@ -149,9 +160,81 @@ const draft = reactive({
   endTime: '',
   allDay: false,
   color: 'primary' as CalendarEventColor,
+  /** Minutes before the start to post a notice in the channel. Empty string is "no reminder". */
+  remind: '' as string,
+  /** The room it happens in. Empty string is "nowhere in particular". */
+  room: '' as string,
 })
 const saving = ref(false)
 const error = ref('')
+
+/**
+ * What "remind me" may be set to.
+ *
+ * A fixed list, mirroring CalendarEvent::REMIND_CHOICES — a dropdown rather than a number field,
+ * because "7 minutes before" is a thing nobody wants and every list of reminders would then have
+ * to render.
+ */
+const REMIND_CHOICES: { value: string, label: string }[] = [
+  { value: '', label: 'No reminder' },
+  { value: '0', label: 'When it starts' },
+  { value: '5', label: '5 minutes before' },
+  { value: '10', label: '10 minutes before' },
+  { value: '15', label: '15 minutes before' },
+  { value: '30', label: '30 minutes before' },
+  { value: '60', label: '1 hour before' },
+  { value: '120', label: '2 hours before' },
+  { value: '1440', label: 'A day before' },
+]
+
+/**
+ * The rooms this surface may point an entry at.
+ *
+ * Fetched from the endpoint that answers with exactly what the save validates against, and only
+ * on a channel surface: a side chat's calendar has no server to draw rooms from, and the picker
+ * is simply absent there rather than empty.
+ */
+const rooms = ref<CalendarRoom[]>([])
+
+/**
+ * The link to the meeting — the room, with the entry named in the query.
+ *
+ * Built here rather than served by the API for the same reason the side chat's link is: the path
+ * is the frontend's, and a server emitting `/servers/3/channels/9?meeting=12` would be a second
+ * place the routes are written down. Deliberately *not* an auto-join link: arriving in a room
+ * with your microphone already live is not something a pasted URL should be able to do.
+ */
+const meetingLink = computed(() => {
+  const room = rooms.value.find(r => String(r.id) === draft.room)
+  if (!room?.server_id || !editing.value) return null
+  return `${window.location.origin}/servers/${room.server_id}/channels/${room.id}?meeting=${editing.value.id}`
+})
+
+const linkCopied = ref(false)
+
+async function copyMeetingLink() {
+  if (!meetingLink.value) return
+  try {
+    await navigator.clipboard.writeText(meetingLink.value)
+    linkCopied.value = true
+    setTimeout(() => { linkCopied.value = false }, 1500)
+  }
+  catch {
+    // Clipboard refused (insecure context, or a browser that asks). The field below is
+    // selectable, so there is still a way to get the link.
+  }
+}
+
+async function loadRooms() {
+  if (!/\/api\/channels\/\d+$/.test(props.basePath)) return
+  try {
+    const res = await useApi()<{ data: CalendarRoom[] }>(`${props.basePath}/calendar/rooms`)
+    rooms.value = res.data
+  }
+  catch {
+    // No rooms offered is a working editor; an entry without one is the common case anyway.
+  }
+}
 
 /** `<input type="date">` wants local `YYYY-MM-DD`; toISOString would shift it by the offset. */
 function toDateInput(d: Date) {
@@ -175,6 +258,8 @@ function startCompose(day?: Date) {
     endTime: '',
     allDay: false,
     color: 'primary' as CalendarEventColor,
+    remind: '',
+    room: '',
   })
   composing.value = true
 }
@@ -193,6 +278,8 @@ function startEdit(e: CalendarEvent) {
     endTime: end ? toTimeInput(end) : '',
     allDay: e.all_day,
     color: e.color,
+    remind: e.remind_minutes == null ? '' : String(e.remind_minutes),
+    room: e.room_channel_id == null ? '' : String(e.room_channel_id),
   })
   composing.value = true
 }
@@ -227,6 +314,10 @@ async function save() {
     ends_at: ends?.toISOString() ?? null,
     all_day: draft.allDay,
     color: draft.color,
+    // Empty string is "none" for both — sent as null so clearing one actually clears it, which
+    // an omitted key would not (the API patches only what it's given).
+    remind_minutes: draft.remind === '' ? null : Number(draft.remind),
+    room_channel_id: draft.room === '' ? null : Number(draft.room),
   }
 
   try {
@@ -354,8 +445,14 @@ function dayLabel(e: CalendarEvent) {
             <span class="mt-1 h-2.5 w-2.5 flex-none rounded-full" :class="SWATCH[e.color]" />
             <div class="min-w-0 flex-1">
               <p class="truncate text-sm font-medium">{{ e.title }}</p>
-              <p class="text-[11px] text-muted-foreground">
+              <p class="flex flex-wrap items-center gap-x-1.5 text-[11px] text-muted-foreground">
                 <span v-if="compact">{{ dayLabel(e) }} · </span>{{ timeLabel(e) }}
+                <!-- Both facts belong on the row: an entry that will announce itself and an
+                     entry that won't are different things to have on a shared calendar. -->
+                <span v-if="e.room" class="rounded-full bg-muted px-1.5">
+                  {{ e.room.type === 'space' ? '🗺️' : '🔊' }} {{ e.room.name }}
+                </span>
+                <BellRing v-if="e.remind_minutes != null" class="h-3 w-3" :title="`Reminds the channel`" />
               </p>
               <p v-if="e.description" class="mt-0.5 line-clamp-2 text-xs text-muted-foreground">{{ e.description }}</p>
             </div>
@@ -423,6 +520,50 @@ function dayLabel(e: CalendarEvent) {
             @click="draft.color = c"
           />
         </div>
+
+        <!--
+          Reminder and room: the two fields that make an entry *happen* rather than merely be
+          recorded. Both optional, and both default to off — most calendar rows are records, and
+          a channel that announced all of them is a channel people mute.
+        -->
+        <label class="block space-y-1">
+          <span class="text-xs text-muted-foreground">Remind the channel</span>
+          <select
+            v-model="draft.remind"
+            class="w-full rounded border bg-background px-2 py-1.5 text-sm outline-none focus:ring-1 focus:ring-ring"
+          >
+            <option v-for="choice in REMIND_CHOICES" :key="choice.value" :value="choice.value">{{ choice.label }}</option>
+          </select>
+        </label>
+
+        <label v-if="rooms.length" class="block space-y-1">
+          <span class="text-xs text-muted-foreground">Where it happens</span>
+          <select
+            v-model="draft.room"
+            class="w-full rounded border bg-background px-2 py-1.5 text-sm outline-none focus:ring-1 focus:ring-ring"
+          >
+            <option value="">Nowhere in particular</option>
+            <option v-for="room in rooms" :key="room.id" :value="String(room.id)">
+              {{ room.type === 'space' ? '🗺️' : '🔊' }} {{ room.name }}
+            </option>
+          </select>
+          <!-- The room is what turns the reminder into a way in rather than a fact. -->
+          <span class="text-[11px] text-muted-foreground">Named in the reminder, so people know where to go.</span>
+        </label>
+
+        <!--
+          The meeting link. Only for a saved entry, because the link names it — a new entry has no
+          id yet, and offering a button that produced a broken URL would be worse than waiting.
+        -->
+        <button
+          v-if="meetingLink"
+          type="button"
+          class="flex w-full items-center gap-1.5 rounded border px-2 py-1.5 text-xs text-muted-foreground transition hover:bg-muted hover:text-foreground"
+          @click="copyMeetingLink"
+        >
+          <component :is="linkCopied ? Check : LinkIcon" class="h-3.5 w-3.5" />
+          {{ linkCopied ? 'Link copied' : 'Copy meeting link' }}
+        </button>
 
         <p v-if="error" class="text-xs text-destructive">{{ error }}</p>
 

@@ -8,6 +8,8 @@ definePageMeta({ middleware: 'auth', layout: 'app' })
 const { conversations, fetchConversations } = useConversations()
 
 const showNewChat = ref(false)
+/** A guest can't start chats — the endpoint refuses them, so the button isn't drawn. */
+const { isGuest } = useGuest()
 
 onMounted(() => fetchConversations())
 
@@ -32,7 +34,7 @@ useHead({ title: 'Chats' })
         </p>
       </div>
 
-      <Button class="gap-2" @click="showNewChat = true">
+      <Button v-if="!isGuest" class="gap-2" @click="showNewChat = true">
         <MessageSquarePlus class="h-4 w-4" /> New chat
       </Button>
     </div>

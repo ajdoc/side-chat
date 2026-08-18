@@ -85,6 +85,18 @@ class SideChat extends Model
         return $this->hasMany(Message::class);
     }
 
+    /**
+     * The app item this room was opened about, if it was opened from one.
+     *
+     * The back-half of "Discuss in chat". Without it a side chat started from a card is a room
+     * whose title is the card's text and which says nothing about where that came from — you
+     * arrive knowing the words and not the thing. See AppDiscussion.
+     */
+    public function appDiscussion(): HasOne
+    {
+        return $this->hasOne(AppDiscussion::class);
+    }
+
     /** Threads spun off this side chat's messages — its own, kept out of the channel's list. */
     public function threads(): HasMany
     {

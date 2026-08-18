@@ -4,6 +4,7 @@ namespace App\Models\Concerns;
 
 use App\Models\AppActivity;
 use App\Models\AppComment;
+use App\Models\AppDiscussion;
 use App\Models\AppReaction;
 use App\Models\AppTag;
 use App\Models\User;
@@ -67,6 +68,9 @@ trait HasAppActivity
         $type = (new static)->getMorphClass();
 
         AppComment::where('commentable_type', $type)->whereIn('commentable_id', $ids)->delete();
+        // The pointer to the item's side chat, not the side chat itself — the conversation
+        // happened, and the people in it didn't consent to losing it because a card was tidied.
+        AppDiscussion::where('subject_type', $type)->whereIn('subject_id', $ids)->delete();
         AppActivity::where('subject_type', $type)->whereIn('subject_id', $ids)->delete();
         AppReaction::where('reactable_type', $type)->whereIn('reactable_id', $ids)->delete();
         DB::table('app_taggables')

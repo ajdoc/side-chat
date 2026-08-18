@@ -22,7 +22,11 @@ class CalendarEvent extends Model
     protected $fillable = [
         'side_chat_id', 'channel_id', 'user_id',
         'title', 'description', 'starts_at', 'ends_at', 'all_day', 'color',
+        'remind_minutes', 'reminded_at', 'room_channel_id',
     ];
+
+    /** How long before the start a reminder may be set for — what the editor offers. */
+    public const REMIND_CHOICES = [0, 5, 10, 15, 30, 60, 120, 1440];
 
     /**
      * Defaults on the *model*, not only on the column.
@@ -44,6 +48,8 @@ class CalendarEvent extends Model
             'starts_at' => 'datetime',
             'ends_at' => 'datetime',
             'all_day' => 'boolean',
+            'remind_minutes' => 'integer',
+            'reminded_at' => 'datetime',
         ];
     }
 
@@ -55,6 +61,32 @@ class CalendarEvent extends Model
     public function channel(): BelongsTo
     {
         return $this->belongsTo(Channel::class);
+    }
+
+    /**
+     * The voice room or Side Space this happens in, when it happens in one.
+     *
+     * Separate from `channel`, which is where the entry is *written down*. A team's calendar
+     * usually lives on a text channel and its standup happens in a voice room, so collapsing
+     * the two would make "where is this" unanswerable for the common case.
+     */
+    public function roomChannel(): BelongsTo
+    {
+        return $this->belongsTo(Channel::class, 'room_channel_id');
+    }
+
+    /** Is a reminder still owed on this entry? */
+    public function awaitsReminder(): bool
+    {
+        return $this->remind_minutes !== null && $this->reminded_at === null;
+    }
+
+    /** When its reminder should go out. */
+    public function remindAt(): ?\Illuminate\Support\Carbon
+    {
+        return $this->remind_minutes === null || $this->starts_at === null
+            ? null
+            : $this->starts_at->copy()->subMinutes($this->remind_minutes);
     }
 
     /** Who put it in the calendar. */

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { CheckCircle2, ChevronDown, ChevronLeft, ChevronRight, ChevronUp, FolderTree, Info, LayoutPanelLeft, Loader2, MessageSquare, MessageSquareText, MessagesSquare, Pencil, Pin, Plus, Reply, Rocket, Smile, Tag, Trash2, UserPlus, Users, X } from 'lucide-vue-next'
+import { CheckCircle2, ChevronDown, ChevronLeft, ChevronRight, ChevronUp, FolderTree, Info, LayoutGrid, LayoutPanelLeft, Loader2, MessageSquare, MessageSquareText, MessagesSquare, Pencil, Pin, Plus, Reply, Rocket, Smile, Tag, Trash2, UserPlus, Users, X } from 'lucide-vue-next'
 import type { GifResult, Message, SideChat, SideDeskAppId } from '~/types'
 // Aliased on import: this file already has a `deskApp` of its own (the active tab), and the
 // auto-imported registry lookup of the same name would be shadowed by it.
@@ -1028,6 +1028,27 @@ function relTime(iso: string) {
               <span class="font-medium">{{ nameFor(p.user) }}:</span> {{ excerpt(p.body) }}
             </button>
           </div>
+        </div>
+
+        <!--
+          What this room is about, when it was opened from an app item.
+
+          Above "Started from" because it answers the question people arrive with. A side chat
+          opened from a card is titled with the card's *words*, which reads as an ordinary post
+          until something says which board it came off — landing here without that was the
+          confusing half of "Discuss in chat".
+        -->
+        <div
+          v-if="sideChat?.about"
+          class="m-3 mb-0 shrink-0 rounded-lg border border-primary/30 bg-primary/5 p-3 text-sm"
+        >
+          <div class="mb-1 flex items-center gap-1.5 text-xs font-semibold uppercase text-primary">
+            <LayoutGrid class="h-3.5 w-3.5" /> About this {{ sideChat.about.label.toLowerCase() }}
+          </div>
+          <p class="font-medium">{{ sideChat.about.title }}</p>
+          <p v-if="sideChat.about.app" class="mt-0.5 text-xs text-muted-foreground">
+            In the {{ sideChat.about.app }} app, in this channel.
+          </p>
         </div>
 
         <div v-if="sideChat?.parent_message" class="m-3 mb-0 shrink-0 rounded-lg border bg-muted/40 p-3 text-sm">

@@ -1,7 +1,12 @@
 <script setup lang="ts">
 import {
   AudioLines,
+  CalendarClock,
+  CalendarPlus,
+  Check,
   ChevronDown,
+  Circle,
+  Link as LinkIcon,
   ChevronUp,
   Headphones,
   HeadphoneOff,
@@ -130,6 +135,156 @@ const connecting = computed(() => here.value && status.value === 'connecting')
 
 /** Before you join, who's already in there — straight from the sidebar's roster. */
 const waiting = computed(() => participantsIn(props.channel.id))
+
+/* ------------------------------------------------------------------- recording the call */
+
+/**
+ * Recording is offered to everybody and refused by the API for anyone who may not — staff in a
+ * server's room, the owner of a group, either person in a DM (see RecordCallRequest).
+ *
+ * Offered-then-refused rather than hidden, because the client has no reliable idea of the
+ * viewer's role here (the roster carries badges, not powers) and a button that quietly isn't
+ * there is indistinguishable from a feature that doesn't exist. The refusal says why.
+ */
+const recorder = useCallRecorder()
+
+/**
+ * A guest is in the meeting, not in charge of it: no scheduling, and no handing the link on.
+ * Both are refused server-side; this is what keeps the room from offering them.
+ */
+const { isGuest } = useGuest()
+
+async function toggleRecording() {
+  if (recorder.recording.value) await recorder.stop()
+  else await recorder.start(props.channel.id)
+}
+
+/**
+ * Is anybody in this room recording?
+ *
+ * Read off the *roster*, not off our own recorder — the badge has to be true for everyone in the
+ * room, including the people who didn't press the button. That's the whole reason the flag lives
+ * on the participant row.
+ */
+const recordedBy = computed(() => waiting.value.filter((p: VoiceParticipant) => p.recording))
+
+/**
+ * What's scheduled in this room — see useRoomMeetings.
+ *
+ * Only for a room that can hold one: a DM's call is a call between two people, and "the next
+ * meeting in here" is not a thing anybody schedules.
+ */
+/*
+ * Any room that can hold a meeting — a voice channel, a Side Space, or the channel of a group
+ * chat (which is what a group meeting's room *is*). Originally this was voice-only, which meant
+ * the rooms created by "New meeting" were the ones that couldn't show their own meeting.
+ *
+ * A DM is excluded: two people don't schedule meetings with each other, and a strip saying
+ * "nothing scheduled in here" over every DM would be furniture nobody asked for.
+ */
+const meetingChannelId = computed(() => {
+  // Nothing in this strip is for a guest: they can't schedule, can't pass the link on, and
+  // "nothing scheduled in here" is furniture to somebody who is here for one call.
+  if (isGuest.value) return null
+
+  const c = props.channel
+  // A group chat's channel is a meeting room; a DM's is two people talking, where a strip
+  // saying "nothing scheduled in here" would be furniture nobody asked for.
+  const group = c.conversation_id != null
+    && conversation.value?.channel_id === c.id
+    && conversation.value?.type === 'group'
+
+  const room = c.type === 'voice' || c.type === 'space' || group
+  return room ? c.id : null
+})
+const { current: meetingNow, next: meetingNext, until } = useRoomMeetings(meetingChannelId)
+
+/**
+ * The way *in* to scheduling one.
+ *
+ * A meeting has always been "a calendar entry with a room", and until this the only route to it
+ * was: open the desk, find Calendar, make an entry, then find this room in a dropdown. Four steps
+ * none of which mention meetings. This opens the same editor with the room already chosen — the
+ * intent rides in the URL, which is how every other panel here is addressed (see useSurfaceRoute).
+ */
+const surface = useSurfaceRoute()
+
+function scheduleMeeting() {
+  surface.patch({ desk: 'calendar', meet: '1', event: null })
+}
+
+/** Open an existing entry in the same editor — what the banner's title does. */
+function openMeeting(id: number) {
+  surface.patch({ desk: 'calendar', event: String(id), meet: null })
+}
+
+/* ------------------------------------------------------------------ the meeting link */
+
+/**
+ * "Get the link to this room."
+ *
+ * The gap this fills: a link was only ever visible in the dialog that created it, so closing that
+ * dialog lost it. Any member may copy one — a link is exactly the thing they're entitled to pass
+ * on — and a room that has never had one gets one made for it here, because from the asker's side
+ * "get the link" is one question whether or not somebody has asked it before.
+ */
+const { ensureFor, linkFor } = useMeetings()
+
+const linking = ref(false)
+const linkCopied = ref(false)
+
+async function copyMeetingLink() {
+  if (!meetingChannelId.value || linking.value) return
+  linking.value = true
+
+  try {
+    const meeting = await ensureFor(meetingChannelId.value, props.channel.name || 'Meeting')
+    await navigator.clipboard.writeText(linkFor(meeting.token))
+    linkCopied.value = true
+    setTimeout(() => { linkCopied.value = false }, 1800)
+  }
+  catch {
+    // Clipboard refused, or the link couldn't be made. Nothing is claimed — the button simply
+    // doesn't turn into "Copied".
+  }
+  finally {
+    linking.value = false
+  }
+}
+
+/* --------------------------------------------------------------- arriving from a link */
+
+/**
+ * `?call=1` — put me in the call on arrival.
+ *
+ * Set by a meeting link (see useMeetings.roomPath). Following one and then having to press
+ * "Join call" is two doors for one intention, and the press that followed the link is the user
+ * gesture a browser wants before it will ask for a microphone — spending it on the navigation
+ * and then asking for a second click wastes exactly the thing that makes this possible.
+ *
+ * Three guards, each of which is a real case rather than defensive habit:
+ *
+ *  - **Once.** The flag is cleared as it's acted on, so a reload of the room doesn't drag
+ *    somebody back into a call they deliberately left.
+ *  - **Not if you're already talking.** Somebody in another room's call who opens a meeting link
+ *    is choosing to look, not to be moved; `connect` would tear down the call they're in.
+ *  - **Not if you're already here.** Re-connecting an established seat would drop and remake it.
+ */
+async function autoJoinFromLink() {
+  if (surface.query.value.call !== '1') return
+
+  // Consumed first: a failure to get a microphone must not leave the flag armed for the next
+  // reload, or a refusal turns into a prompt that reappears forever.
+  surface.patch({ call: null })
+
+  if (here.value || (channelId.value !== null && channelId.value !== props.channel.id)) return
+
+  await connect(props.channel.id)
+}
+
+onMounted(() => {
+  void autoJoinFromLink()
+})
 
 /** A chat with no call going shows the conversation, not an empty stage. */
 const hidden = computed(() => props.quietWhenEmpty && !here.value && !waiting.value.length)
@@ -271,6 +426,62 @@ const deafenedCount = computed(() => waiting.value.filter(p => p.deafened).lengt
 </script>
 
 <template>
+  <!--
+    The meeting strip, deliberately *outside* the call section below.
+
+    That section hides itself in a chat with no call going (`quietWhenEmpty`) — which is right for
+    an empty call stage and was wrong for this: it meant a group chat created as a meeting room
+    couldn't show its own link until somebody was already in the call, i.e. exactly when nobody
+    needs the link any more. The strip is about the room, not about whether it's occupied.
+    Shown whether or not you've joined, too: "is something happening in here, and when" is the
+    question you have *before* you decide to go in.
+  -->
+  <div
+    v-if="meetingChannelId"
+    class="flex items-center gap-1.5 border-b px-4 py-1.5 text-xs"
+    :class="meetingNow ? 'bg-primary/10 text-primary' : 'text-muted-foreground'"
+  >
+    <CalendarClock class="h-3.5 w-3.5 shrink-0" />
+
+    <!-- The title opens the entry, because "what is this meeting" is the next question after
+         "there is one" — and the entry is where its notes and its room live. -->
+    <button
+      v-if="meetingNow || meetingNext"
+      type="button"
+      class="min-w-0 truncate text-left hover:underline"
+      :class="meetingNow && 'font-medium'"
+      :title="'Open this entry in the calendar'"
+      @click="openMeeting((meetingNow ?? meetingNext)!.id)"
+    >
+      <template v-if="meetingNow">{{ meetingNow.title }} — happening now</template>
+      <template v-else>{{ meetingNext!.title }} — {{ until(meetingNext!) }}</template>
+    </button>
+    <span v-else class="min-w-0 truncate">Nothing scheduled in here.</span>
+
+    <!-- The link to this room, made on demand if it hasn't got one. Beside Schedule because
+         the two are the same errand: getting somebody else in here. -->
+    <button
+      type="button"
+      class="ml-auto flex shrink-0 items-center gap-1 rounded px-1.5 py-0.5 hover:bg-muted hover:text-foreground"
+      :disabled="linking"
+      title="Copy a link that brings people straight into this room"
+      @click="copyMeetingLink"
+    >
+      <Loader2 v-if="linking" class="h-3.5 w-3.5 animate-spin" />
+      <component :is="linkCopied ? Check : LinkIcon" v-else class="h-3.5 w-3.5" />
+      {{ linkCopied ? 'Copied' : 'Copy link' }}
+    </button>
+
+    <button
+      type="button"
+      class="flex shrink-0 items-center gap-1 rounded px-1.5 py-0.5 hover:bg-muted hover:text-foreground"
+      title="Schedule a meeting in this room"
+      @click="scheduleMeeting"
+    >
+      <CalendarPlus class="h-3.5 w-3.5" /> Schedule
+    </button>
+  </div>
+
   <section v-if="!hidden" class="shrink-0 border-b bg-muted/20">
     <!-- Not in the call: a slim bar with whoever is, and a way in. -->
     <div v-if="!here" class="flex items-center gap-3 px-4 py-2">
@@ -516,6 +727,25 @@ const deafenedCount = computed(() => waiting.value.filter(p => p.deafened).lengt
           {{ isAudioSharing ? 'Stop audio' : 'Share audio' }}
         </Button>
 
+        <!-- Recording. Destructive-coloured while it runs, because the state it puts the room
+             in is the thing worth noticing, and it counts up so nobody forgets it's on. -->
+        <Button
+          :variant="recorder.recording.value ? 'destructive' : 'secondary'"
+          size="sm"
+          class="gap-2"
+          :disabled="recorder.uploading.value"
+          :title="recorder.recording.value
+            ? 'Stop recording — the file is posted here when it finishes uploading'
+            : 'Record this call\'s audio. Everyone in the room is told.'"
+          @click="toggleRecording"
+        >
+          <Loader2 v-if="recorder.uploading.value" class="h-4 w-4 animate-spin" />
+          <Circle v-else class="h-4 w-4" :class="recorder.recording.value && 'fill-current'" />
+          {{ recorder.uploading.value
+            ? 'Uploading…'
+            : recorder.recording.value ? `Stop ${recorder.label.value}` : 'Record' }}
+        </Button>
+
         <!-- Only when there's actually anyone to clear out. Turns everyone but you out of
              the room; you keep your seat (use Leave for that). -->
         <Button
@@ -535,6 +765,23 @@ const deafenedCount = computed(() => waiting.value.filter(p => p.deafened).lengt
         </Button>
       </div>
     </template>
+
+    <!--
+      Visible to the whole room, sourced from the roster rather than from this tab's recorder.
+      A call being recorded is something everybody in it is entitled to know at a glance — the
+      timeline announcement is the durable record, and this is the live one.
+    -->
+    <p
+      v-if="recordedBy.length"
+      class="flex items-center gap-1.5 border-t bg-destructive/10 px-4 py-1.5 text-xs font-medium text-destructive"
+    >
+      <Circle class="h-3 w-3 fill-current" />
+      {{ recordedBy.length === 1
+        ? `${nameFor(recordedBy[0]!.user)} is recording this call.`
+        : `${recordedBy.length} people are recording this call.` }}
+    </p>
+
+    <p v-if="recorder.error.value" class="border-t px-4 py-1.5 text-xs text-destructive">{{ recorder.error.value }}</p>
 
     <p v-if="status === 'error' && error" class="border-t px-4 py-2 text-xs text-destructive">
       {{ error }}

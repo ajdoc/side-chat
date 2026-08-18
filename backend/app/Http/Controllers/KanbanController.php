@@ -8,6 +8,7 @@ use App\Http\Resources\KanbanCardResource;
 use App\Models\Channel;
 use App\Models\KanbanBoard;
 use App\Models\KanbanCard;
+use App\Support\Apps\AppAutomations;
 use App\Support\Apps\KanbanBoards;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Response;
@@ -152,6 +153,7 @@ class KanbanController extends Controller
 
         $card->recordActivity('created', $user, ['column' => $column]);
         KanbanBoards::cardSaved($card);
+        AppAutomations::cardCreated($card, $user);
 
         return new KanbanCardResource($card->load(['assignee', 'author', 'tags'])->loadCount(['comments', 'reactions']));
     }
@@ -197,6 +199,7 @@ class KanbanController extends Controller
 
         if (isset($data['column']) && $data['column'] !== $from) {
             $card->recordActivity('moved', $user, ['from' => $from, 'to' => $data['column']]);
+            AppAutomations::cardMoved($card, $from, $user);
         }
 
         if (array_key_exists('assignee_id', $data)) {

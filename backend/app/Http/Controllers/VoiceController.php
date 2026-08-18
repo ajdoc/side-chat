@@ -18,6 +18,10 @@ use App\Http\Requests\Voice\UpdateVoiceEffectsRequest;
 use App\Http\Requests\Voice\UpdateVoiceStateRequest;
 use App\Http\Requests\Voice\VoiceChannelRequest;
 use App\Http\Resources\VoiceParticipantResource;
+use App\Http\Requests\Voice\RecordCallRequest;
+use App\Actions\Message\PostSystemMessageAction;
+use App\Events\VoiceStateUpdated;
+use App\Models\VoiceParticipant;
 use App\Models\Channel;
 use App\Models\Server;
 use App\Services\Sfu\VoiceTransportResolver;
@@ -138,6 +142,50 @@ class VoiceController extends Controller
         return response()->json([
             'data' => $action->handle($channel, UpdateVoiceEffectsData::fromArray($request->validated())),
         ]);
+    }
+
+    /**
+     * Start or stop recording the call — the *announcement* half of it.
+     *
+     * The bytes never come here. Mixing and encoding happen in the browser that pressed the
+     * button (see the client's useCallRecorder), and the finished file arrives later as an
+     * ordinary upload. What the server owns is the part everybody else needs *while* it happens:
+     * the flag on the participant, which every client already renders off the roster, and a line
+     * in the timeline saying who started it.
+     *
+     * Both, deliberately. The flag is live and disappears with the call; the message outlives it.
+     * "Was this meeting recorded?" is a question people ask afterwards, and a badge that vanished
+     * when the room emptied cannot answer it.
+     */
+    public function record(RecordCallRequest $request, Channel $channel, PostSystemMessageAction $system): JsonResponse
+    {
+        $user = $request->user();
+        $recording = $request->boolean('recording');
+
+        $participant = VoiceParticipant::query()
+            ->where('channel_id', $channel->getKey())
+            ->where('user_id', $user->getKey())
+            ->first();
+
+        // You can only record a call you are in. Not an error worth raising — the client asks
+        // this on the way out of a room too.
+        if ($participant === null) {
+            return response()->json(['recording' => false]);
+        }
+
+        if ((bool) $participant->recording === $recording) {
+            return response()->json(['recording' => $recording]);
+        }
+
+        $participant->update(['recording' => $recording, 'last_seen_at' => now()]);
+
+        broadcast(new VoiceStateUpdated($channel));
+
+        $system->handle($channel, $user, $recording
+            ? '🔴 **Recording started.** Everyone in the call can see that it is being recorded.'
+            : '⏹️ **Recording stopped.** The file will appear here once it has finished uploading.');
+
+        return response()->json(['recording' => $recording]);
     }
 
     /**

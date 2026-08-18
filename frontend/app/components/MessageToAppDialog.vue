@@ -50,12 +50,14 @@ interface Targets {
   here: TargetChannel | null
   app_channels: Record<string, TargetChannel[]>
   channels: TargetChannel[]
+  /** True for a message whose stored body is ciphertext — nothing here can take it. */
+  encrypted?: boolean
   preview: {
     title: string
     body: string
     poll: { question: string, options: string[] }
     files: number
-  }
+  } | null
 }
 
 const targets = ref<Targets | null>(null)
@@ -252,6 +254,12 @@ async function submit() {
       <!-- The fetch failed. Said here rather than under an empty grid, which reads as "there
            are no apps" — a different and much more alarming thing than "that didn't load". -->
       <p v-else-if="error && !app" class="py-6 text-center text-sm text-destructive">{{ error }}</p>
+
+      <!-- Said plainly rather than offering seven apps that would all refuse. -->
+      <p v-else-if="targets?.encrypted" class="py-6 text-center text-sm text-muted-foreground">
+        This message is encrypted, so it can’t be filed into an app — the apps aren’t encrypted,
+        and the server only has the envelope.
+      </p>
 
       <!-- Done. Kept on screen rather than closing, so "which board did that go to" is still
            answerable, and a second filing (the same message often belongs in two places) is

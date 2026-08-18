@@ -23,6 +23,8 @@ class VoiceParticipant extends Model
         'screen_sharing',
         'camera_on',
         'audio_sharing',
+        // Somebody in the room is recording the call. See the migration for why it's per person.
+        'recording',
         'last_seen_at',
         // Where they're standing, in a Side Space. Null in a voice channel or a DM.
         'x',
@@ -43,6 +45,7 @@ class VoiceParticipant extends Model
             'screen_sharing' => 'boolean',
             'camera_on' => 'boolean',
             'audio_sharing' => 'boolean',
+            'recording' => 'boolean',
             'last_seen_at' => 'datetime',
         ];
     }

@@ -3,6 +3,7 @@
 namespace App\Http\Resources;
 
 use App\Services\CommentService;
+use App\Support\Apps\AppSubjects;
 use App\Services\ReactionService;
 use Illuminate\Http\Request;
 use Illuminate\Http\Resources\Json\JsonResource;
@@ -41,6 +42,25 @@ class SideChatResource extends JsonResource
             'can_manage' => $this->when($request->user() !== null, fn () => $this->resource->canManage($request->user())),
             'creator' => new UserResource($this->whenLoaded('creator')),
             'parent_message' => new MessageResource($this->whenLoaded('parentMessage')),
+            /*
+             * What this room is about, when it was opened from an app item.
+             *
+             * The live item rather than a snapshot: a card gets renamed, and a header still
+             * showing what it used to be called is exactly the confusion this is here to
+             * remove. `parent_message` already carries the anchor; this says which *thing*.
+             */
+            'about' => $this->whenLoaded('appDiscussion', function () {
+                $discussion = $this->appDiscussion;
+                $subject = $discussion?->subject;
+
+                return $subject === null ? null : [
+                    'type' => $subject->getMorphClass(),
+                    'label' => AppSubjects::kindLabel($subject->getMorphClass()),
+                    'app' => AppSubjects::appFor($subject->getMorphClass()),
+                    'title' => AppSubjects::label($subject)['title'],
+                    'channel_id' => $discussion->channel_id,
+                ];
+            }),
             // Frozen snapshot of the origin message, so "Started from" outlives its deletion.
             'origin_author' => $this->origin_author,
             'origin_excerpt' => $this->origin_excerpt,

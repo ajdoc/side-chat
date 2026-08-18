@@ -878,3 +878,72 @@ it('puts cloudflare turn ahead of the statically configured relays', function ()
         // The others are still there — failover is the whole reason to configure more than one.
         ->and($relays)->toHaveCount(3);
 });
+
+/*
+ * Recording a call: who may start one, and the fact that it can't be quiet.
+ */
+
+it('flags the recorder and announces it in the timeline', function () {
+    [$owner, , $channel] = ownerWithVoiceChannel();
+    Passport::actingAs($owner);
+
+    $this->postJson("/api/channels/{$channel->id}/voice/join")->assertOk();
+
+    $this->postJson("/api/channels/{$channel->id}/voice/recording", ['recording' => true])
+        ->assertOk()->assertJson(['recording' => true]);
+
+    $participant = App\Models\VoiceParticipant::where('channel_id', $channel->id)->sole();
+
+    // The flag is what every client already renders off the roster — so the badge comes for free.
+    expect($participant->recording)->toBeTrue();
+
+    // And the announcement outlives the call, because "was this recorded?" is asked afterwards.
+    expect($channel->messages()->where('type', 'system')->latest('id')->first()->body)
+        ->toContain('Recording started');
+
+    $this->postJson("/api/channels/{$channel->id}/voice/recording", ['recording' => false])
+        ->assertOk()->assertJson(['recording' => false]);
+
+    expect($participant->fresh()->recording)->toBeFalse()
+        ->and($channel->messages()->where('type', 'system')->latest('id')->first()->body)
+        ->toContain('Recording stopped');
+});
+
+it('says nothing twice for the same state', function () {
+    [$owner, , $channel] = ownerWithVoiceChannel();
+    Passport::actingAs($owner);
+    $this->postJson("/api/channels/{$channel->id}/voice/join")->assertOk();
+
+    $this->postJson("/api/channels/{$channel->id}/voice/recording", ['recording' => true])->assertOk();
+    $this->postJson("/api/channels/{$channel->id}/voice/recording", ['recording' => true])->assertOk();
+
+    // A client re-asserting what it already said is not news, and two "recording started" lines
+    // in a row reads as two recordings.
+    expect($channel->messages()->where('type', 'system')->count())->toBe(1);
+});
+
+it('refuses a member who is not staff of the server', function () {
+    [, $server, $channel] = ownerWithVoiceChannel();
+    $member = User::factory()->create();
+    $server->members()->attach($member->id);
+    Passport::actingAs($member);
+
+    $this->postJson("/api/channels/{$channel->id}/voice/join")->assertOk();
+
+    // A recording leaves the room and outlives it, so making one belongs with the people who
+    // answer for the place — the same line drawn for muting somebody else.
+    $this->postJson("/api/channels/{$channel->id}/voice/recording", ['recording' => true])
+        ->assertForbidden();
+});
+
+it('answers harmlessly for somebody who is not in the call', function () {
+    [$owner, , $channel] = ownerWithVoiceChannel();
+    Passport::actingAs($owner);
+
+    // The client asks this on the way out of a room too; there is nothing to record and nothing
+    // that went wrong.
+    $this->postJson("/api/channels/{$channel->id}/voice/recording", ['recording' => false])
+        ->assertOk()->assertJson(['recording' => false]);
+
+    expect($channel->messages()->count())->toBe(0);
+});

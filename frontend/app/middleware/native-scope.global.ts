@@ -25,6 +25,10 @@ const ALLOWED = [
   /^\/onboarding$/,
   /^\/auth\/callback$/,
   /^\/invite\/[^/]+$/,
+  // A meeting link, for the same reason an invite link is here: a link somebody pastes into a
+  // chat is opened on whatever device is nearest, and a phone that bounced it to a redirect
+  // would make the link useless for half the people it was sent to.
+  /^\/meet\/[^/]+$/,
   /^\/chats$/,
   /^\/chats\/\d+$/,
   /^\/servers\/\d+$/,

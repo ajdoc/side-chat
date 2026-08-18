@@ -76,9 +76,15 @@ class MessageToAppController extends Controller
                 ->filter(fn (Channel $c) => $c->type !== 'app')
                 ->map(fn (Channel $c) => $this->row($c))
                 ->values(),
-            // What the message parses to, so the dialog can show the poll question and options
-            // before anybody commits. Read from the same class that creates them.
-            'preview' => [
+            /*
+             * An encrypted message is answered honestly rather than parsed.
+             *
+             * Its stored body is the envelope, so a preview built from it would be a title of
+             * base64 — and it can't be filed anyway (see MessageToApp::run). Saying so here is
+             * what lets the dialog explain itself instead of offering apps that all fail.
+             */
+            'encrypted' => $message->isEncrypted(),
+            'preview' => $message->isEncrypted() ? null : [
                 'title' => MessageParts::title($message->body),
                 'body' => MessageParts::rest($message->body),
                 'poll' => MessageParts::poll($message->body),

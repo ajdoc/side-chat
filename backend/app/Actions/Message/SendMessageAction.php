@@ -47,7 +47,17 @@ final class SendMessageAction
         // be recognised — and mustn't be guessed at. A base64 envelope that happens to start
         // with a prefix character is not a command, and running one would answer a message
         // nobody sent. Commands come back the moment encryption is turned off.
+        /*
+         * A guest's message is only ever a message.
+         *
+         * Commands are the app's other door into a room: `k!add` files a card, `a!board` opens a
+         * surface, a slash command can reach a bot. All of that is refused to a guest over HTTP
+         * (see ConfineGuests), and a guest who could do it by typing would make that gate
+         * decorative. So what they typed is posted as what they typed — visible, harmless, and
+         * honest about having done nothing.
+         */
         $isPlainText = ! $channel->isEncrypted()
+            && ! $user->is_guest
             && $files === [] && $uploadIds === [] && $data->gif === null;
 
         if ($isPlainText && ($command = $this->commands->parse($body)) !== null) {

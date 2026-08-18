@@ -7,6 +7,7 @@ use App\Http\Controllers\Admin\AdminServerController;
 use App\Http\Controllers\Admin\AdminUserController;
 use App\Http\Controllers\AppCatalogueController;
 use App\Http\Controllers\AppCommentController;
+use App\Http\Controllers\AppDiscussionController;
 use App\Http\Controllers\AppImportController;
 use App\Http\Controllers\AppPollController;
 use App\Http\Controllers\AppReactionController;
@@ -54,6 +55,7 @@ use App\Http\Controllers\InviteController;
 use App\Http\Controllers\JoinRequestController;
 use App\Http\Controllers\KanbanController;
 use App\Http\Controllers\LyricsController;
+use App\Http\Controllers\MeetingController;
 use App\Http\Controllers\MessageController;
 use App\Http\Controllers\MessageInfoController;
 use App\Http\Controllers\MessageToAppController;
@@ -93,6 +95,20 @@ Route::get('/ping', fn () => response()->json([
 // Public: Spotify sends the browser here after a user authorises the account link. It
 // carries no Bearer token — the caller is identified by the encrypted OAuth `state`.
 Route::get('spotify/callback', [SpotifyController::class, 'callback']);
+
+/*
+ * A meeting link, for somebody who has no account yet.
+ *
+ * The only public routes in this file besides the auth ones and the Spotify callback, and they
+ * are public for one reason: a link that needs an account to *look at* can't be a link anybody
+ * can follow. `show` is deliberately thin (a title, a time, whether you can get in — never the
+ * room's id or its people), and `guest` is rate-limited per IP because an unauthenticated route
+ * that creates accounts is exactly the shape of thing that gets hammered.
+ *
+ * Everything else about meetings is behind auth, below.
+ */
+Route::get('meetings/{token}', [MeetingController::class, 'show']);
+Route::post('meetings/{token}/guest', [MeetingController::class, 'guest']);
 
 Route::prefix('auth')->group(function () {
     Route::post('register', [AuthController::class, 'register']);
@@ -284,6 +300,13 @@ Route::middleware('auth:api')->group(function () {
     // Rename (name only — a channel's type is not editable). Staff only.
     Route::patch('channels/{channel}', [ChannelController::class, 'update']);
     /*
+     * What kind of channel this is — text, voice or Side Space, interchangeably.
+     *
+     * Separate from the rename above: a conversion ends any call in the room and can seed a map,
+     * and a single PATCH where forgetting a field converts a channel is not an API worth having.
+     */
+    Route::patch('channels/{channel}/type', [ChannelController::class, 'changeType']);
+    /*
      * Who may be in the channel. Staff only, and split off the rename on purpose: one is
      * cosmetic, the other decides who can read the history. Reading the allow-list is
      * gated too — knowing exactly who is in a private channel is itself private.
@@ -458,6 +481,13 @@ Route::middleware('auth:api')->group(function () {
     // Owner only: move somebody else's microphone. Unlike disconnecting, this reaches into
     // another person's machine rather than just emptying their seat.
     Route::post('channels/{channel}/voice/mute', [VoiceController::class, 'mute']);
+    /*
+     * Recording the call. Staff in a server's room, the owner of a group, either person in a DM
+     * — see RecordCallRequest. This is the *announcement*: the bytes are mixed in the browser
+     * and arrive afterwards as an ordinary upload.
+     */
+    Route::post('channels/{channel}/voice/recording', [VoiceController::class, 'record']);
+
     // Any member: disconnect one participant (with user_id) or clear the room (without).
     Route::post('channels/{channel}/voice/disconnect', [VoiceController::class, 'disconnect']);
 
@@ -553,6 +583,14 @@ Route::middleware('auth:api')->group(function () {
     Route::get('channels/{channel}/stickers/{sticker}', [AppStickerController::class, 'show']);
     Route::patch('channels/{channel}/stickers/{sticker}', [AppStickerController::class, 'update']);
     Route::delete('channels/{channel}/stickers/{sticker}', [AppStickerController::class, 'destroy']);
+
+    /*
+     * "Talk about this in chat" — an app item's own side chat, and the return trip for
+     * "Add this message to an app". One pair of routes for every item kind, like the comments
+     * above. See AppDiscussionController.
+     */
+    Route::get('channels/{channel}/apps/{type}/{id}/discussion', [AppDiscussionController::class, 'show']);
+    Route::post('channels/{channel}/apps/{type}/{id}/discussion', [AppDiscussionController::class, 'store']);
 
     // Reactions on anything an app owns. One verb, because reacting and un-reacting are the
     // same gesture on the same chip.
@@ -760,6 +798,32 @@ Route::middleware('auth:api')->group(function () {
 
     // The channel's Calendar app — a shared schedule, gated on membership like the board. The
     // Calendar *tab* and the Calendar *canvas card* are two views of exactly these rows.
+    /*
+     * What's scheduled *in this room* — a voice channel's or Side Space's own agenda.
+     *
+     * A meeting is a calendar entry with a `room_channel_id`, so this reads across the server's
+     * calendars rather than inventing a meetings table. See MeetingController.
+     */
+    Route::get('channels/{channel}/meetings', [MeetingController::class, 'index']);
+    // The room's meeting *links*, as opposed to what's scheduled in it. Any member may read
+    // them: a link is the thing they're entitled to pass on.
+    Route::get('channels/{channel}/meeting-links', [MeetingController::class, 'links']);
+
+    /*
+     * Meetings — a room, a link to it, and optionally a time.
+     *
+     * `store` decides where it lands from what it's sent: a server room, an existing room, or a
+     * group conversation made for it. `show` is what a link *is* before you follow it — thin on
+     * purpose, since anybody signed in can read it. `joins` is the audit, and is not.
+     */
+    Route::post('meetings', [MeetingController::class, 'store']);
+    // `show` is public — see the top of this file. Joining as yourself is not.
+    Route::post('meetings/{token}/join', [MeetingController::class, 'join']);
+    Route::get('meetings/{token}/joins', [MeetingController::class, 'joins']);
+
+    // The rooms an entry may say it happens in — this server's voice channels and Side Spaces.
+    // Exactly what the store path validates against, so the picker can't offer a refusal.
+    Route::get('channels/{channel}/calendar/rooms', [ChannelCalendarController::class, 'rooms']);
     Route::get('channels/{channel}/calendar', [ChannelCalendarController::class, 'index']);
     Route::post('channels/{channel}/calendar', [ChannelCalendarController::class, 'store']);
     Route::patch('channels/{channel}/calendar/{event}', [ChannelCalendarController::class, 'update']);
@@ -935,4 +999,33 @@ Route::middleware('auth.bot')->prefix('bot')->group(function () {
     // version of it registered — see BotCommandController.
     Route::get('commands', [BotCommandController::class, 'index']);
     Route::put('commands', [BotCommandController::class, 'update']);
+
+    /*
+     * The productivity apps, for a bot.
+     *
+     * A bot is a `User` with `is_bot`, so these are the **same controllers, request classes and
+     * membership gates** the people-facing routes use — the only additions are the token's server
+     * scope (`bot.channel`) and the shorter list of verbs. A parallel set of bot controllers
+     * would be the same logic twice, drifting apart on the first bug fixed in one of them.
+     *
+     * Read and file work: the standup bot that opens the weekly checklist, the CI bot that puts
+     * a failure on the board, the triage bot that moves a card to Done. Deleting is deliberately
+     * absent — a long-lived credential in somebody's CI config should not be able to remove
+     * other people's work, and nothing has asked to.
+     */
+    Route::middleware('bot.channel')->group(function () {
+        Route::get('channels/{channel}/kanban', [KanbanController::class, 'show']);
+        Route::post('channels/{channel}/kanban/cards', [KanbanController::class, 'storeCard']);
+        // Moving a card is the other half of filing one — a card a bot can add and never
+        // advance is a bot that only ever makes work.
+        Route::patch('channels/{channel}/kanban/cards/{card}', [KanbanController::class, 'updateCard']);
+
+        Route::get('channels/{channel}/tracker/projects', [TrackerProjectController::class, 'index']);
+        Route::get('channels/{channel}/tracker/tasks', [TrackerTaskController::class, 'index']);
+        Route::post('channels/{channel}/tracker/tasks', [TrackerTaskController::class, 'store']);
+        Route::patch('channels/{channel}/tracker/tasks/{task}', [TrackerTaskController::class, 'update']);
+
+        Route::get('channels/{channel}/calendar', [ChannelCalendarController::class, 'index']);
+        Route::post('channels/{channel}/calendar', [ChannelCalendarController::class, 'store']);
+    });
 });

@@ -1,4 +1,5 @@
 <script setup lang="ts">
+// The Side Desk's apps are refused for a guest — see useGuest.
 import { Info, LayoutPanelLeft, LogOut, MessagesSquare, Pencil, Phone, UserPlus, Users } from 'lucide-vue-next'
 import { Button } from '~/components/ui/button'
 import {
@@ -111,6 +112,9 @@ onBeforeUnmount(() => {
 })
 
 useHead({ title: computed(() => title.value) })
+
+/** A guest has no Side Desk: every one of its endpoints refuses them. See useGuest. */
+const { isGuest } = useGuest()
 </script>
 
 <template>
@@ -166,18 +170,25 @@ useHead({ title: computed(() => title.value) })
       <!-- Same collapse the server-channel header does: on a phone these are icons, because
            four labels plus a title don't fit across 390px and the labels are the part you can
            do without. What still overflows scrolls sideways — see ChannelView's header. -->
-      <SideChatsButton v-if="channel" :channel-id="channel.id" />
-      <FavoriteAppButton v-if="channel" :channel-id="channel.id" />
-      <AppsButton v-if="channel" :channel-id="channel.id" />
-      <Button variant="ghost" size="sm" class="gap-2 text-muted-foreground" :class="narrow && 'px-2'" title="Threads" @click="openThreadsList">
-        <MessagesSquare class="h-4 w-4" /> <span v-if="!narrow">Threads</span>
-      </Button>
-      <Button variant="ghost" size="sm" class="gap-2 text-muted-foreground" :class="narrow && 'px-2'" title="Side Desk" @click="openDesk">
-        <LayoutPanelLeft class="h-4 w-4" /> <span v-if="!narrow">Side Desk</span>
-      </Button>
-      <Button variant="ghost" size="sm" class="gap-2 text-muted-foreground" :class="narrow && 'px-2'" title="Info" @click="openInfo">
-        <Info class="h-4 w-4" /> <span v-if="!narrow">Info</span>
-      </Button>
+      <!--
+        Withheld from a guest, all of it: side chats, the app launcher, the favourite-app
+        shortcut, threads, the Side Desk and the info panel every one read endpoints
+        ConfineGuests refuses them. A guest is here for one call — see useGuest.
+      -->
+      <template v-if="!isGuest && channel">
+        <SideChatsButton :channel-id="channel.id" />
+        <FavoriteAppButton :channel-id="channel.id" />
+        <AppsButton :channel-id="channel.id" />
+        <Button variant="ghost" size="sm" class="gap-2 text-muted-foreground" :class="narrow && 'px-2'" title="Threads" @click="openThreadsList">
+          <MessagesSquare class="h-4 w-4" /> <span v-if="!narrow">Threads</span>
+        </Button>
+        <Button variant="ghost" size="sm" class="gap-2 text-muted-foreground" :class="narrow && 'px-2'" title="Side Desk" @click="openDesk">
+          <LayoutPanelLeft class="h-4 w-4" /> <span v-if="!narrow">Side Desk</span>
+        </Button>
+        <Button variant="ghost" size="sm" class="gap-2 text-muted-foreground" :class="narrow && 'px-2'" title="Info" @click="openInfo">
+          <Info class="h-4 w-4" /> <span v-if="!narrow">Info</span>
+        </Button>
+      </template>
 
       <DropdownMenu v-if="isGroup">
         <DropdownMenuTrigger as-child>

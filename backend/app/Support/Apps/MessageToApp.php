@@ -106,6 +106,23 @@ final class MessageToApp
             throw ValidationException::withMessages(['app' => 'That app can’t take a message.']);
         }
 
+        /*
+         * An encrypted message can't become an app item.
+         *
+         * The *reader* can see the words — their client decrypted them — but the server holds
+         * only the envelope, so what it would file is a base64 blob wearing a card's clothes.
+         * And the apps are not encrypted: even given the plaintext, filing it would move a
+         * message out of the room whose whole promise is that the server can't read it. Both
+         * halves say no, and the second is the one that would still say no if the first were
+         * solved. Docs already refused encrypted *attachments* for the first reason alone; this
+         * is the same rule where it belongs, over every handler at once.
+         */
+        if ($message->isEncrypted()) {
+            throw ValidationException::withMessages([
+                'app' => 'An encrypted message can’t be filed into an app — the apps aren’t encrypted, and the server only has the envelope.',
+            ]);
+        }
+
         return DB::transaction(fn () => self::$handler($message, $target, $actor, $options));
     }
 
@@ -158,6 +175,7 @@ final class MessageToApp
         $card->recordActivity('created', $actor, ['column' => $column, 'from_message' => $message->id]);
         KanbanBoards::cardSaved($card);
 
+        AppAutomations::cardCreated($card, $actor);
         self::surfaceWidget($target, $actor, 'kanban');
 
         return "Added as card #{$card->id}.";
@@ -212,6 +230,7 @@ final class MessageToApp
         ]);
 
         $task->recordActivity('created', $actor, ['from_message' => $message->id]);
+        AppAutomations::taskCreated($task, $actor);
 
         return "Created {$project->key}-{$task->number}.";
     }

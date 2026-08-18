@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ExternalLink, Plus } from 'lucide-vue-next'
 import type { SideDeskAppId } from '~/types'
+import { channelPath as scopedChannelPath, channelStream as scopedChannelStream } from '~/lib/deskScope'
 
 /**
  * The Side Desk — a tabbed workspace that hangs beside a chat and houses the *apps* a place
@@ -34,13 +35,31 @@ const props = defineProps<{
    */
   channelId: number
   readonlyHint?: string
+  /**
+   * An editor to open on arrival, for the Calendar — see SideDeskPanel, which is where the URL
+   * that carries it is read. Absent everywhere else, which is why it's optional.
+   */
+  compose?: { meeting: boolean, eventId: number | null }
 }>()
 
 const emit = defineEmits<{
   'update:activeApp': [SideDeskAppId]
+  /** The `compose` intent has been acted on and should be cleared from the URL. */
+  'composed': []
   /** Docs asking the host timeline to scroll to the message a chat file arrived in. */
   'jump': [messageId: number]
 }>()
+
+/**
+ * Where the *channel-scoped* apps hang, which is not always this surface.
+ *
+ * The Tracker, the Polls wall and the Sticker Wall store their rows against a channel and have
+ * no side-chat endpoints at all, so on a side chat's desk they resolve to its parent channel —
+ * the same rule the widget apps have always followed. The rule itself (and why) lives in
+ * lib/deskScope, where it's testable; this is only where it's applied.
+ */
+const channelPath = computed(() => scopedChannelPath(props.channelId))
+const channelStream = computed(() => scopedChannelStream(props.channelId))
 
 const { apps, toggle, enabled, open } = useDeskAppList(props.basePath, props.streamName)
 
@@ -186,15 +205,17 @@ function popOut() {
       :stream-name="streamName"
       :can-edit="canEdit"
       :readonly-hint="readonlyHint"
+      :compose="compose"
+      @composed="emit('composed')"
     />
 
     <!-- Tracker — projects and their tasks. The same component an app channel fills its whole
          window with; in a side panel it simply has less room. -->
     <TrackerApp
       v-else-if="resolved === 'tracker'"
-      :key="`${basePath}-tracker`"
-      :base-path="basePath"
-      :stream-name="streamName"
+      :key="`${channelPath}-tracker`"
+      :base-path="channelPath"
+      :stream-name="channelStream"
       :can-edit="canEdit"
       :channel-id="channelId"
     />
@@ -202,18 +223,18 @@ function popOut() {
     <!-- Polls — the channel's wall of questions. -->
     <AppPollsApp
       v-else-if="resolved === 'polls'"
-      :key="`${basePath}-polls`"
-      :base-path="basePath"
-      :stream-name="streamName"
+      :key="`${channelPath}-polls`"
+      :base-path="channelPath"
+      :stream-name="channelStream"
       :can-edit="canEdit"
     />
 
     <!-- Sticker Wall — the shared collage. -->
     <StickerWallApp
       v-else-if="resolved === 'stickers'"
-      :key="`${basePath}-stickers`"
-      :base-path="basePath"
-      :stream-name="streamName"
+      :key="`${channelPath}-stickers`"
+      :base-path="channelPath"
+      :stream-name="channelStream"
       :can-edit="canEdit"
     />
 

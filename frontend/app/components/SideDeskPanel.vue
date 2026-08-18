@@ -39,6 +39,31 @@ function setApp(app: SideDeskAppId) {
   surface.patch({ desk: app })
 }
 
+/**
+ * "Open the calendar *and* start something" — how a room's Schedule button reaches the editor.
+ *
+ * Read here and passed down as a prop rather than read inside the calendar, because the calendar
+ * is surface-agnostic: it also renders in a floating window, on the canvas and as a whole app
+ * channel, none of which should react to this page's query. The panel is the one placement that
+ * *is* the URL, so it's the one that translates it.
+ *
+ * `meet=1` means "compose a meeting in this room", which is only coherent when the surface is a
+ * room — the calendar resolves the room itself, since on a room's own desk that is this channel.
+ * `event=<id>` opens an existing entry, which is what the banner's title does.
+ */
+const compose = computed(() => ({
+  meeting: surface.query.value.meet === '1',
+  eventId: Number(surface.query.value.event) || null,
+}))
+
+/**
+ * Consumed once. Left in the URL, a reload or a second visit to the Calendar tab would reopen
+ * the editor over whatever somebody had since typed.
+ */
+function composed() {
+  surface.patch({ meet: null, event: null })
+}
+
 function close() {
   surface.patch({ desk: null })
 }
@@ -70,7 +95,9 @@ function close() {
       :channel-id="channelId"
       :can-edit="true"
       :active-app="activeApp"
+      :compose="compose"
       @update:active-app="setApp"
+      @composed="composed"
       @jump="emit('jump', $event)"
     />
   </aside>

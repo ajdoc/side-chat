@@ -44,6 +44,25 @@ final class TriggerRegistry
 
     public const SCHEDULE_DUE = 'schedule.due';
 
+    /*
+     * The productivity apps.
+     *
+     * Until these, a rule could only see *chat* — which meant the half of the product where
+     * work is actually tracked was invisible to it. A card reaching Done is exactly the kind of
+     * thing somebody wants announced, and it was the one thing no rule could notice.
+     *
+     * Deliberately four, not fourteen: created and moved on a board, created and status-changed
+     * on a task. Those are the moments people describe when they say "when X happens, tell the
+     * channel". A trigger nobody has asked for is still a promise to keep supplying it.
+     */
+    public const KANBAN_CARD_CREATED = 'kanban.card_created';
+
+    public const KANBAN_CARD_MOVED = 'kanban.card_moved';
+
+    public const TRACKER_TASK_CREATED = 'tracker.task_created';
+
+    public const TRACKER_TASK_STATUS_CHANGED = 'tracker.task_status_changed';
+
     /**
      * The fields every trigger about a person supplies — see {@see Subject}.
      *
@@ -103,6 +122,28 @@ final class TriggerRegistry
                 'label' => 'A schedule ran',
                 'description' => 'One of this server’s recurring posts came due.',
                 'fields' => ['schedule_id', 'schedule_name', 'channel_id'],
+            ],
+            self::KANBAN_CARD_CREATED => [
+                'label' => 'Kanban card added',
+                'description' => 'A card was added to a channel’s board — from the board, from `k!add`, or by filing a message onto it. Not fired by an import, which arrives all at once.',
+                'fields' => [...self::SUBJECT, 'channel_id', 'channel_name', 'card_id', 'column', 'column_label', 'text'],
+            ],
+            self::KANBAN_CARD_MOVED => [
+                'label' => 'Kanban card moved',
+                // The one people build "announce it when something ships" on, so both ends of
+                // the move are supplied and the condition is `to = done`.
+                'description' => 'A card changed column. Both the column it left and the one it landed in are supplied.',
+                'fields' => [...self::SUBJECT, 'channel_id', 'channel_name', 'card_id', 'from', 'to', 'to_label', 'text'],
+            ],
+            self::TRACKER_TASK_CREATED => [
+                'label' => 'Tracker task created',
+                'description' => 'A task was added to a project in a tracker channel.',
+                'fields' => [...self::SUBJECT, 'channel_id', 'channel_name', 'task_id', 'task_key', 'project_key', 'project_name', 'title', 'status'],
+            ],
+            self::TRACKER_TASK_STATUS_CHANGED => [
+                'label' => 'Tracker task status changed',
+                'description' => 'A task moved between statuses — backlog, todo, in progress, in review, done.',
+                'fields' => [...self::SUBJECT, 'channel_id', 'channel_name', 'task_id', 'task_key', 'project_key', 'title', 'from', 'to'],
             ],
             self::BADGE_GRANTED => [
                 'label' => 'Badge granted',

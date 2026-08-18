@@ -6,6 +6,7 @@ use App\Models\KanbanBoard;
 use App\Models\KanbanCard;
 use App\Models\User;
 use App\Models\Widget;
+use App\Support\Apps\AppAutomations;
 use App\Support\Apps\KanbanBoards;
 use App\Support\Commands\ParsedCommand;
 
@@ -131,6 +132,7 @@ final class KanbanWidget implements WidgetHandler
 
         $card->recordActivity('created', $user, ['column' => $column]);
         KanbanBoards::cardSaved($card);
+        AppAutomations::cardCreated($card, $user);
 
         return WidgetOutcome::card();
     }
@@ -172,8 +174,11 @@ final class KanbanWidget implements WidgetHandler
             return $viaCommand ? WidgetOutcome::reply("There's no card #{$id}.") : WidgetOutcome::noop();
         }
 
+        $from = $card->column;
         $card->update(['column' => $column, 'position' => KanbanBoards::nextPosition($board, $column)]);
         KanbanBoards::cardSaved($card);
+        // `k!done 12` is a person moving a card, exactly as a drag is.
+        AppAutomations::cardMoved($card, $from, $card->author);
 
         return WidgetOutcome::updated();
     }

@@ -15,6 +15,8 @@ use App\Http\Requests\Channel\UpdateChannelAccessRequest;
 use App\Http\Requests\Channel\UpdateChannelRequest;
 use App\Http\Requests\Channel\ViewChannelAccessRequest;
 use App\Http\Resources\ChannelResource;
+use App\Actions\Channel\ChangeChannelTypeAction;
+use App\Http\Requests\Channel\ChangeChannelTypeRequest;
 use App\Models\Channel;
 use App\Models\Server;
 use App\Services\ChannelService;
@@ -42,6 +44,20 @@ class ChannelController extends Controller
     {
         return new ChannelResource(
             $action->handle($channel, UpdateChannelData::fromArray($request->validated()))
+        );
+    }
+
+    /**
+     * Turn this channel into a different kind of channel — text, voice or Side Space.
+     *
+     * Its own endpoint rather than a field on `update`, because unlike a rename this ends any
+     * call in the room and can seed a map. See {@see ChangeChannelTypeAction} for what carries
+     * over and what refuses.
+     */
+    public function changeType(ChangeChannelTypeRequest $request, Channel $channel, ChangeChannelTypeAction $action): ChannelResource
+    {
+        return new ChannelResource(
+            $action->handle($channel, $request->string('type')->toString(), $request->input('map_preset'))
         );
     }
 

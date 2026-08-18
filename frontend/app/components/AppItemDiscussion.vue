@@ -1,6 +1,7 @@
 <script setup lang="ts">
-import { ArrowUp, Loader2, SmilePlus, Tag, Trash2, X } from 'lucide-vue-next'
+import { ArrowUp, ArrowUpRight, Loader2, MessagesSquare, SmilePlus, Tag, Trash2, X } from 'lucide-vue-next'
 import { tagChip } from '~/lib/tracker'
+import { isChannelPath } from '~/lib/deskScope'
 
 /**
  * Reactions, tags and a comment thread, for any item in any app.
@@ -38,9 +39,22 @@ const props = withDefaults(defineProps<{
   showReactions?: boolean
 }>(), { canEdit: true, showTags: true, showReactions: true })
 
-const id = computed(() => props.itemId)
+/**
+ * Comments, tags, reactions and the side chat all live on **channel-scoped** endpoints
+ * (`channels/{channel}/apps/...`), and several of the apps that host this panel can also be
+ * rendered on a *side chat*, where their rows belong to the side chat instead.
+ *
+ * There is no side-chat half of these tables — deliberately, since a side chat has its own
+ * roster and the authorisation would be a different rule (see APP_CHANNELS.md). So on a
+ * side-chat surface the panel draws nothing at all rather than four requests that 404 and an
+ * empty thread that never accepts a comment.
+ */
+const channelScoped = computed(() => isChannelPath(props.basePath))
 
-const { comments, reactions, itemTags, loading, addComment, removeComment, attachTag, detachTag, react }
+/** Null on a side chat, which is what stops useAppItem fetching anything there. */
+const id = computed(() => (channelScoped.value ? props.itemId : null))
+
+const { comments, reactions, itemTags, loading, discussion, addComment, removeComment, attachTag, detachTag, react, startDiscussion }
   = useAppItem(props.basePath, props.subject, id)
 
 const { user } = useAuth()
@@ -119,13 +133,88 @@ function when(iso: string) {
   return new Date(iso).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
 }
 
+/* ---------------------------------------------------------------- chat about this item */
+
+/**
+ * "Discuss in chat" — the return trip for "Add this message to an app".
+ *
+ * A comment thread and a side chat answer different questions, which is why this sits *beside*
+ * the thread rather than replacing it: a comment is a note on the record, and a side chat is a
+ * conversation with participants, decisions and a desk of its own. The item that needs working
+ * out gets the room; the item that needs a remark gets the thread.
+ *
+ * One button for "start" and "open", because the server is idempotent — pressing it second joins
+ * the first person's room. Only the label changes.
+ */
+const starting = ref(false)
+
+/**
+ * The path to the room.
+ *
+ * Built here from the ids the API returned, the same `?sidechat=` route the search panel builds.
+ * A server that emitted paths would be a second place the frontend's routes are written down.
+ */
+const discussionPath = computed(() => {
+  const d = discussion.value
+  if (!d) return null
+  const base = d.conversation_id ? `/chats/${d.conversation_id}` : `/servers/${d.server_id}/channels/${d.channel_id}`
+  return `${base}?sidechat=${d.side_chat_id}`
+})
+
+async function openDiscussion() {
+  if (discussionPath.value) return navigateTo(discussionPath.value)
+
+  starting.value = true
+  try {
+    const created = await startDiscussion()
+    // Straight into the room it just made: pressing "discuss" and then having to go find the
+    // conversation would be two steps for one intention.
+    if (created && discussionPath.value) await navigateTo(discussionPath.value)
+  }
+  finally {
+    starting.value = false
+  }
+}
+
 /** Whether the chip band has anything at all to draw, including its add buttons. */
 const hasChipBand = computed(() =>
   (props.showReactions || props.showTags) && (props.canEdit || used.value.length > 0 || mine.value.length > 0))
 </script>
 
 <template>
-  <div v-if="itemId != null" class="space-y-3 text-foreground">
+  <div v-if="itemId != null && channelScoped" class="space-y-3 text-foreground">
+    <!--
+      Above the chips: it's the one control here that leaves the page, and burying an exit under
+      a comment box is how people miss that the conversation already exists.
+    -->
+    <button
+      v-if="canEdit"
+      type="button"
+      class="flex w-full items-center gap-1.5 rounded-md border px-2 py-1.5 text-xs transition-colors hover:bg-muted"
+      :class="discussion ? 'border-primary/40 text-primary' : 'text-muted-foreground'"
+      :disabled="starting"
+      @click="openDiscussion"
+    >
+      <Loader2 v-if="starting" class="h-3.5 w-3.5 animate-spin" />
+      <MessagesSquare v-else class="h-3.5 w-3.5" />
+      <span class="truncate">{{ discussion ? 'Open the side chat' : 'Start a side chat' }}</span>
+      <ArrowUpRight class="ml-auto h-3.5 w-3.5 shrink-0 opacity-60" />
+    </button>
+
+    <!--
+      Says what the button does before it does it.
+
+      Pressing it *navigates* — out of this panel, into a room in the channel — and a control
+      that moves you somewhere without warning reads as a bug the first time. Naming the side
+      chat (rather than calling it "chat") also matters: it's a thing this product already has,
+      with participants and decisions, and people who know what one is need only be told that's
+      what they're getting.
+    -->
+    <p v-if="canEdit" class="-mt-1.5 px-0.5 text-[11px] text-muted-foreground">
+      <template v-if="discussion">Opens “{{ discussion.name }}” in the channel.</template>
+      <template v-else>Opens a side chat in this channel, linked to this item. Everyone here can find it.</template>
+    </p>
+
     <!--
       The chip band: reactions and tags together, because they're the same gesture — a
       one-click label on the thing. Wrapping in one row keeps two near-empty rows from taking

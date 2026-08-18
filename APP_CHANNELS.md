@@ -255,10 +255,338 @@ strokes. Docs takes the message's *files* rather than its text, copied on the di
 would make deleting either delete both) and refused for encrypted attachments, whose bytes the
 server can't read.
 
+**An encrypted message can't be filed.** The reader can see the words — their client decrypted
+them — but the server holds only the envelope, so what it would file is base64 wearing a card's
+clothes. And the apps aren't encrypted, so even given the plaintext this would move a message out
+of the room whose promise is that the server can't read it. Both halves say no, and the second
+would still say no if the first were solved.
+
 Nothing is moved, quoted or deleted: the message stays exactly where it is, and the target
 channel is never created — an app channel you meant to file into is one you make on purpose.
 Authorisation is the same two-question split as the import: the request class settles the
 message, `Channel::visibleTo` settles the target.
+
+## App item → chat: "Discuss in chat"
+
+The return trip. Any app item — a task, a card, a poll, an event, a sticker, a note — can open a
+**side chat** about itself, from the same `AppItemDiscussion` panel that carries its comments.
+
+- **A side chat, not a thread.** A side chat is the room this product already has for working
+  something out: participants, decisions, a desk of its own. A thread is a tangent off one
+  message. An item being *worked on* gets the room.
+- **It's anchored in the timeline.** Opening one posts a short system message in the channel and
+  starts the side chat from it. A side chat with no origin message is invisible to everyone who
+  wasn't told about it, which would make this reachable only from the item — half a connection.
+- **Once.** The unique index on `app_discussions` means the second person to press the button
+  joins the first one's room. Two rooms about one task is the split this exists to prevent, so
+  `store` is idempotent and the client shows one button whose label depends on whether a row
+  exists.
+- **The room outlives the item.** Deleting a card drops the pointer and leaves the side chat: the
+  conversation happened, and the people in it didn't consent to losing it because a card was
+  tidied. Deleting the *side chat* drops the row on the foreign key.
+- The side chat is **named after the item** — `ONB-4 Rewrite the welcome email`, the card's text —
+  by `AppSubjects::label()`, which is where the eight apps' different notions of "what is this
+  called" are reconciled into one name and one excerpt.
+- **The room says what it's about.** `SideChatResource.about` carries the *live* item — its kind
+  in words ("Kanban card"), its title, and which app it lives in — and the panel header draws it
+  above "Started from". Without it you arrive in a room titled with a card's words and no way to
+  tell it from an ordinary post, which was the confusing half of the round trip. Live rather
+  than a snapshot: a renamed card whose room still shows the old words is the same confusion
+  wearing a different hat.
+- The button says **"Start a side chat"** and warns that it navigates. It names the side chat
+  rather than saying "chat", because a side chat is a thing this product already has and people
+  who know what one is need only be told that's what they're getting.
+
+Why a pointer table rather than a column: the link hangs off any of eight item kinds, so a
+`side_chat_id` on each of those tables would be eight migrations to say one thing — the same
+reasoning that made comments and tags polymorphic.
+
+## Which apps work on a side chat's desk
+
+A Side Desk sits on a channel *or* on a side chat, and its apps split in two:
+
+| | Storage | On a side chat |
+| --- | --- | --- |
+| Board, Notes, Canvas, Calendar, Docs | per surface | its **own** — a side chat's whiteboard is its whiteboard |
+| Tracker, Polls, Sticker Wall | per channel | the **parent channel's** |
+| Every widget (Kanban, Music, Video, games) | per channel | the parent channel's, as always |
+
+The middle row is the fix: those three have no side-chat endpoints at all, so their tabs used to
+point at `/api/side-chats/3/tracker/...` — a 404, rendered as an app that silently never loads.
+They now resolve to the parent channel, which is the rule the widgets always followed ("a side
+chat's Kanban tab is its parent channel's board") and the honest one: a side chat is a room
+inside a channel, and the channel's tracker is what its people are working from.
+
+**Comments, tags, reactions and "Discuss in chat" are channel-only**, since
+`channels/{channel}/apps/{type}/{id}/...` is the only address they have. On a side-chat-owned
+item `AppItemDiscussion` therefore draws *nothing* rather than four requests that 404 and a
+thread that never accepts a comment. Giving side chats their own half is a coherent feature and
+simply isn't this one — it needs the side chat's roster as its gate, not the channel's.
+
+The rule lives in `frontend/app/lib/deskScope.ts` with a spec, rather than as a regex inside a
+component: getting it wrong doesn't throw, it renders an empty tab, which is exactly the failure
+that shipped before it was written down.
+
+## Apps in automations
+
+The rules engine could only ever see and say things in **chat**. It now reaches the apps from
+both directions, which took four triggers and two actions and no new architecture — the builder
+renders itself from the server's catalogue, so the dashboard gained all six with no client
+change.
+
+| Triggers | Actions |
+| --- | --- |
+| `kanban.card_created`, `kanban.card_moved` | `create_kanban_card` |
+| `tracker.task_created`, `tracker.task_status_changed` | `create_tracker_task` |
+
+`kanban.card_moved` supplies **both** ends of the move, because "announce it when something
+reaches Done" is the rule people build and `to = done` is how they write it.
+
+**One item by a person fires; a bulk arrival doesn't.** The board UI, `k!add` and filing a
+message all fire; an import of eighty-four cards fires nothing. That isn't a limitation dressed
+up — a rule that posts "card added" is a rule somebody wants to read, and eighty-four of those is
+a channel nobody can read. The import announces itself once, in its own way.
+
+A card created *by* `create_kanban_card` deliberately doesn't fire `kanban.card_created`. The
+depth counter would stop the loop, but the real reason is that a rule which files cards and a
+rule which reacts to filed cards are a pair written by accident far more often than on purpose —
+the same call chat makes by never letting a bot's own message trigger a rule.
+
+Firing lives in `App\Support\Apps\AppAutomations`, called from the paths a person acts on
+rather than from a model event, and it is best-effort throughout: a board must not fail to accept
+a card because a rule engine is unhappy.
+
+## Calendar reminders, and the room
+
+The Calendar was a place to *write down* that something is at three o'clock: nobody who wasn't
+looking at the tab found out. Two fields close that.
+
+- **`remind_minutes`** — post a notice in the channel that many minutes before it starts. Opt-in
+  per entry (0, 5, 10, 15, 30, 60, 120, 1440), because most calendar rows are records rather than
+  appointments and a channel that announced all of them is a channel people mute.
+- **`room_channel_id`** — the voice channel or Side Space it happens in. The reminder names it,
+  which is what turns a notice into a way *in* rather than a fact. Validated against the rooms
+  the author can see in this server, and offered by `calendar/rooms` — one query defines both, so
+  the picker can't offer something the save then refuses.
+
+`calendar:post-reminders` runs every minute and **stamps `reminded_at` before it posts**. A post
+that throws therefore loses one notice; stamping afterwards would leave the row due and it would
+fire again the next minute, and the minute after — a channel turning into a flood. Same trade
+`RunBotSchedules` makes, for the same reason.
+
+Two edges worth knowing:
+
+- **Rescheduling re-arms it.** Changing `starts_at` or the reminder clears `reminded_at`: the
+  notice that went out was about a time this no longer happens at.
+- **A stale entry is never announced.** The query's lower bound is ten minutes before now, so a
+  worker that was down for an hour can't wake up and announce a dozen meetings that already
+  happened. Those rows are left *unstamped* — writing to a row to record that we chose not to
+  post is work, and an index range that excludes it costs nothing.
+
+The notice is a `system` message authored by whoever scheduled the entry (the room asks "who put
+this in?" next), lands as an ordinary unread rather than a mention, and does go to push — for
+"starting in ten minutes" that's the delivery that matters.
+
+### Meetings, and recording one
+
+A **scheduled meeting is a calendar entry with a room** — no meetings table. A second concept
+would need its own reminders, its own editor and its own idea of "when", and would then disagree
+with the calendar about all three.
+
+What was missing was the *room's* half of that. `channels/{channel}/meetings` answers the question
+people have while standing in a room — *is something happening here, and when* — by reading across
+the server's calendars for entries pointing at it. Both the voice channel (a banner) and the Side
+Space (a chip in the toolbar) draw it, and it shows **before** you join, which is exactly when the
+calendar tab is the least convenient place to look. Entries are scoped to the calendars the viewer
+can see: a private channel may schedule a meeting in a public room, and the room must not publish
+its title to everybody who walks in.
+
+**Where you make one.** From the room: the voice channel's banner and the Side Space's toolbar
+chip both carry a **Schedule** button that opens the Calendar editor with *this room already
+chosen*, and the banner's title opens the entry that's coming up. Before that the only route was
+"open the desk, find Calendar, make an entry, then find this room in a dropdown" — four steps, none
+of which mention meetings. The intent rides in the URL (`?desk=calendar&meet=1`, or `&event=<id>`)
+like every other panel's state, and is cleared once acted on: left in place, a reload would reopen
+the editor over whatever had since been typed. `SideDeskPanel` translates the URL and passes a prop
+down, because the calendar also renders in a floating window and on the canvas, neither of which
+should react to the page's query.
+
+A **meeting link** is the room's path with the entry named — `/servers/3/channels/9?meeting=12`,
+built client-side from the copy button in the editor. Deliberately not an auto-join link: arriving
+in a room with your microphone already live is not something a pasted URL should be able to do.
+
+**Recording** is client-side, and the split matters. The server never has the audio — in a mesh
+the streams go peer to peer and behind an SFU it forwards packets it doesn't decode — so the mix
+is a few nodes in the graph `useVoice` already owns and the encode is `MediaRecorder`. What the
+server owns is the *fact* of it:
+
+- a `recording` flag on the **participant**, like `screen_sharing`, so two people can record and
+  one can stop while the other continues — and so the badge is already solved, since every client
+  renders participant flags off the roster;
+- a line in the timeline on start and stop, because "was this meeting recorded?" is asked
+  afterwards and a badge that vanished with the call cannot answer it.
+
+There is deliberately no path that records without saying so: capture only begins after the API
+call that sets the flag and posts the line, and if that is refused nothing is captured. Who may:
+staff in a server's room, a group's owner, either person in a DM — the same line `MuteVoiceParticipantRequest`
+draws, because a recording leaves the room and outlives it.
+
+The honest costs, stated in the code too: the recording is only as good as the recorder's
+connection, it stops if they close the tab, it contains what *they* heard, and **screens are not
+captured** (shared tab audio is). A server-side recording would be authoritative; this is a
+good-faith copy made by someone in the room, which is what the announcement says it is. It's mixed
+after the mic's effect chain, ignores per-listener volume and local mutes, and taps peers who
+arrive mid-meeting — a snapshot at start would omit exactly the people who turn up when the
+meeting begins.
+
+### Meetings you create, and the link
+
+A meeting is **a room, a link to it, and optionally a time**. `POST /api/meetings` decides where
+it lands from what it's sent, not from a mode:
+
+| Sent | Made |
+| --- | --- |
+| `server_id` | a voice channel or Side Space in that server |
+| `channel_id` | nothing — a link to a room that already exists |
+| neither | a **group conversation** whose channel is the room |
+
+The type defaults to **voice**; a Side Space is a deliberate choice about how it should feel, and
+it works by converting the channel (see below), which is why that had to exist first.
+
+**Getting the link back.** `channels/{channel}/meeting-links` lists a room's meetings — distinct
+from `channels/{channel}/meetings`, which lists what's *scheduled* there and answers in calendar
+entries. Every room (voice, Side Space, and a group meeting's own channel) has a **Copy link**
+button beside Schedule, and a room that has never had a meeting gets one pointing at itself when
+somebody asks — because "get the link" is one question whether or not it has been asked before.
+Any member may copy one; who *used* it is the audit, and is not. Expired links drop out of the
+list, since an address that admits nobody isn't worth copying.
+
+The link is `{origin}/meet/{token}`, composed by the client and opened by
+`pages/meet/[token].vue`. **Joining is a button, never automatic** — following a link should not
+silently add you to a group chat, and it certainly shouldn't put you in a live call before you've
+read what it is.
+
+**Pressing that button does put you straight into the call.** The room is reached with `?call=1`,
+which the voice channel and the Side Space each act on in their own way (`connect`, `enter`) —
+neither needs to know it came from a meeting. Two doors for one intention is the thing this
+avoids, and the press that followed the link is also the *user gesture* a browser wants before it
+will ask for a microphone: spending it on the navigation and then demanding a second click wastes
+exactly what makes this possible.
+
+Three guards, each a real case: the flag is **consumed as it's acted on** (so a reload doesn't
+drag somebody back into a call they left), it is **ignored if you're already in another call**
+(opening a link is choosing to look, not to be moved), and it is ignored if you're already in this
+one. It's consumed *before* connecting, so a refused microphone can't leave it armed for the next
+reload.
+
+**There is a `meetings` table, reversing the earlier call that a meeting is only a calendar
+entry.** Two requirements changed it, and neither is about time: a meeting can have **no
+schedule** ("make me a link, we're starting now"), and **a link is a thing with a policy**. So the
+row is the link and its policy, `scheduled_event_id` points at the calendar entry when there is
+one, and the calendar still owns "when" — reminders, rescheduling and the room's agenda are
+unchanged.
+
+### People from outside
+
+A meeting's door has **three settings**, not a boolean — "how far open is this" genuinely has
+three answers, and a pair of booleans would have made a nonsense state expressible:
+
+| `access` | Who gets in |
+| --- | --- |
+| `members` | only people already in the room; the link is just the address |
+| `account` | anybody signed in, who is added to the meeting's group chat |
+| `guest` | **anybody at all** — a name, and they're in, with no account |
+
+**A guest is a `User` with `is_guest`, no password, and a use-by date** — the trick `is_bot`
+already established. That isn't a shortcut around "real" anonymous access; it *is* the
+implementation. Every seat here is a user row (`voice_participants.user_id`, `messages.user_id`,
+the member pivot), so the alternative was making those nullable throughout to accommodate the
+least trusted person in the building. Presence, the roster, push and the audit work unchanged
+because nothing can tell the difference; the places that must ask `is_guest`.
+
+A guest gets a real Passport token and uses the ordinary client. What they may *reach* is settled
+by `ConfineGuests`, which **denies by default** and allows a short list. An allow-list can only
+ever be too small — somebody hits a wall and it gets widened — where a deny-list is wrong the
+moment anybody adds a route.
+
+It narrows twice. First to their own conversation (resolved from the route's channel,
+conversation or message binding), plus `auth/me`, `auth/logout` and the chat list. Then **within
+that room**, to `messages`, `voice`, `space`, reads, members and reacting to a message. Being in
+the meeting is not being able to work in the room: membership alone would have handed a stranger
+the whole Side Desk — calendar, board, tracker, shelf — of a chat they were let into for half an
+hour.
+
+The client hides what a guest can't do (no servers section, no new chat, no new meeting, no
+Schedule, no Side Desk — see `useGuest`), but that is **manners, not the boundary**. A guest
+offered "Add a server" gets a 403, and a guest is the one visitor with no way to tell a refusal
+from a broken app.
+
+Three refusals hold whatever the setting says: **never a server room** (a link is not a door into
+a server), **never an encrypted channel** (device keys belong to accounts that persist), and
+**never an expired link**. The guest join endpoint is public and rate-limited per IP, since an
+unauthenticated route that creates accounts is exactly the shape of thing that gets hammered.
+
+**Guests are retired, not deleted.** `guests:prune` revokes tokens and gives up the seat, and
+leaves the row standing — because deleting a user cascades into `messages` (cutting their side
+out of a transcript the other people are still entitled to read) *and* into `meeting_joins`
+(erasing the audit of who was admitted, which is the thing it exists for). What has to stop
+existing is the credential, not the record. Their name carries a **Guest** marker everywhere it
+appears: self-chosen, unverified, and nobody in a room should have to work that out.
+
+**A link can never admit anybody to a server.** Being in one is that server's people's decision,
+so `allow_external` + `server_id` is refused *at creation* rather than stored as a promise the
+link can't keep, and an outsider opening a server meeting is told to ask for a server invite
+rather than 404'd into thinking it doesn't exist.
+
+Every admission writes a `meeting_joins` row — who, when, by link or as a member, and whether they
+were an outsider. A link a stranger can follow makes *"who got in, and how"* a question that has to
+survive the call ending, and the roster can't answer it: an hour later it's empty, and on it a
+stranger and a colleague look identical. The audit is readable only by whoever answers for the
+room, and the stored IP and user agent are **never shipped** — they exist for an operator after an
+incident, not to make a guest list into a tracking record. The room is also told out loud when
+somebody arrives from a link.
+
+### Changing what a channel is
+
+`PATCH channels/{channel}/type` — text ↔ voice ↔ Side Space, for staff (a group's owner, either
+person in a DM). **A conversion moves the lid, not the contents**: a Side Space is a timeline with
+a map over it and a voice channel a timeline with a call over it, so messages, threads, side
+chats, pins and every Side Desk app hang off the channel either way and none of them move.
+
+- Becoming a space **seeds a map** if there isn't one, and never replaces an existing one —
+  converting away and back must not bulldoze the furniture somebody placed.
+- Leaving a room **ends the call**: a server text channel doesn't allow calls, so anyone left
+  seated would be a ghost in the sidebar nothing would clear.
+- **App channels are refused both ways.** An app channel's body is an application with a row of
+  its own; installing and uninstalling is the operation that means this.
+- Discussions follow their container when they still match what it *was* — they inherited that
+  type at creation — while one somebody deliberately made different is left alone.
+
+## A bot as an app actor
+
+A bot is a `User` with `is_bot`, so it needed no new permission system to reach the apps — only
+routes. The `bot/` prefix now carries the productivity apps:
+
+| | |
+| --- | --- |
+| Kanban | read the board, add a card, move a card |
+| Tracker | list projects and tasks, open a task, update one |
+| Calendar | read entries, add one |
+
+**They are the same controllers, request classes and membership gates the people-facing routes
+use.** The only additions are the token's server scope and a shorter list of verbs. A parallel
+set of bot controllers would be the same logic twice, drifting apart on the first bug fixed in
+one of them.
+
+`EnsureBotChannel` is that scope: a bot's *account* can be on several servers' rosters, so a
+token checked only against membership would reach every channel that account had ever been added
+to. `BotSendMessageRequest` makes the same check inline for the send path; this is the rule as
+middleware so the app routes can be plain reuse.
+
+**Deleting is deliberately absent.** A long-lived credential in somebody's CI config should not
+be able to remove other people's work, and nothing has asked for it. Note also that a bot could
+already drive a board through chat — `k!add` from `bot/channels/{channel}/messages` — so these
+routes make an existing reach *explicit and structured* rather than granting a new one.
 
 ## Importing from another channel
 
@@ -435,7 +763,12 @@ code sits in a room whose promise is that the server can't read it.
 | Import | `AppImportController`, `App\Support\Apps\AppImports`, `AppImportDialog.vue` |
 | Note mentions | `AnnounceNoteMentionsAction`, `useMentionPicker`, `SideDeskNotes.vue` |
 | Chat to app | `MessageToAppController`, `MessageToApp`, `MessageParts`, `MessageToAppDialog.vue` |
-| Tests | `tests/Feature/AppChannelTest.php`, `tests/Feature/TrackerTest.php`, `tests/Feature/KanbanTest.php`, `tests/Feature/NoteMentionTest.php`, `tests/Feature/MessageToAppTest.php` |
+| App to chat | `AppDiscussionController`, `AppDiscussion`, `AppSubjects::label`, `AppItemDiscussion.vue` |
+| Desk surface scoping | `frontend/app/lib/deskScope.ts` (+ spec), `SideDesk.vue` |
+| Apps in rules | `AppAutomations`, `TriggerRegistry`, `CreateKanbanCardAction`, `CreateTrackerTaskAction` |
+| Calendar reminders | `PostCalendarReminders`, `CalendarEvent::remindAt`, `SideDeskCalendar.vue` |
+| Bots in apps | `EnsureBotChannel`, the `bot/` group in `routes/api.php` |
+| Tests | `tests/Feature/AppChannelTest.php`, `tests/Feature/TrackerTest.php`, `tests/Feature/KanbanTest.php`, `tests/Feature/NoteMentionTest.php`, `tests/Feature/MessageToAppTest.php`, `tests/Feature/AppDiscussionTest.php`, `tests/Feature/CalendarReminderTest.php` |
 
 ## Known gaps
 

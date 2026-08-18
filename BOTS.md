@@ -12,6 +12,7 @@ Everything below is the whole of a bot's reach. There is no other endpoint it ca
 - [Registering a bot](#registering-a-bot)
 - [Authenticating](#authenticating)
 - [Posting a message](#posting-a-message)
+- [Working the apps](#working-the-apps)
 - [Webhooks](#webhooks)
 - [Verifying a delivery](#verifying-a-delivery)
 - [Slash commands](#slash-commands)
@@ -86,6 +87,43 @@ Three things follow from a bot's message taking the ordinary send path:
   reach is the whole command surface, not just chat.
 
 Bots can't upload files, and can't post into threads or side chats.
+
+## Working the apps
+
+A bot can also read and write the productivity apps directly, without going through chat. Same
+token, same `bot/` prefix:
+
+| Method | Path | What it does |
+| --- | --- | --- |
+| `GET` | `bot/channels/{channel}/kanban` | The board — columns and cards |
+| `POST` | `bot/channels/{channel}/kanban/cards` | Add a card: `text`, optional `column` |
+| `PATCH` | `bot/channels/{channel}/kanban/cards/{card}` | Move or edit one: `column`, `position`, `text`, `assignee_id` |
+| `GET` | `bot/channels/{channel}/tracker/projects` | The channel's projects |
+| `GET` | `bot/channels/{channel}/tracker/tasks` | Tasks, `?project={id}` for one board |
+| `POST` | `bot/channels/{channel}/tracker/tasks` | Open a task: `project_id`, `title`, … |
+| `PATCH` | `bot/channels/{channel}/tracker/tasks/{task}` | Update one — `status`, `assignee_id`, … |
+| `GET` | `bot/channels/{channel}/calendar` | The channel's entries |
+| `POST` | `bot/channels/{channel}/calendar` | Add one: `title`, `starts_at`, … |
+
+```bash
+curl -X POST https://your-host/api/bot/channels/7/kanban/cards \
+  -H "Authorization: Bearer $BOT_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"text": "Build 1482 failed on main", "column": "doing"}'
+```
+
+Three things to know:
+
+- **These are the endpoints the web app uses**, with the same bodies and the same responses — a
+  bot is a member account, so it is held to the same membership rule as a person. A private
+  channel it hasn't been added to refuses it identically.
+- **The token is scoped to its server.** A bot account can be on several servers' rosters; the
+  token reaches only channels in the server that issued it.
+- **Nothing here deletes.** A credential living in a CI config shouldn't be able to remove other
+  people's work. Cards and tasks can be added, moved and updated; removing them is a person's job.
+
+A bot's writes are attributed to the bot, so a card it files shows its name — the same as any
+member's.
 
 ## Webhooks
 

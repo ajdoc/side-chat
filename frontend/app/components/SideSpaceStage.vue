@@ -2,10 +2,15 @@
 import {
   AudioLines,
   ChevronLeft,
+  CalendarClock,
+  CalendarPlus,
+  Check,
+  Circle,
   DoorOpen,
   Headphones,
   HeadphoneOff,
   Loader2,
+  Link as LinkIcon,
   Map as MapIcon,
   Megaphone,
   MessageCircle,
@@ -210,6 +215,69 @@ const {
   subscribe: subscribeGame,
   unsubscribe: unsubscribeGame,
 } = useSpaceGame(props.channel.id)
+
+/**
+ * Recording the room's call — the same composable the voice channel uses.
+ *
+ * A Side Space's call *is* a voice call (same mesh, same roster, same signalling), so recording
+ * it is the same act with the same server-side gate. Nothing here is space-specific.
+ */
+const recorder = useCallRecorder()
+
+/** A guest is here for the meeting — see useGuest. */
+const { isGuest } = useGuest()
+
+/** What's scheduled in this space — the same endpoint the voice channel's banner reads. */
+const { current: meetingNow, next: meetingNext, until } = useRoomMeetings(computed(() => props.channel.id))
+
+/**
+ * Scheduling one, and opening one — through the URL, like every other panel here.
+ *
+ * The desk opens as a panel beside the room rather than over it, so a Side Space can schedule a
+ * meeting in itself without leaving the map.
+ */
+const meetingSurface = useSurfaceRoute()
+
+function scheduleMeeting() {
+  meetingSurface.patch({ desk: 'calendar', meet: '1', event: null })
+}
+
+function openMeeting(id: number) {
+  meetingSurface.patch({ desk: 'calendar', event: String(id), meet: null })
+}
+
+/**
+ * The link into this space — the one it has, or one made now.
+ *
+ * Same errand as the voice channel's: a link was only ever visible in the dialog that created it,
+ * so there had to be a way to ask a room for its own address.
+ */
+const { ensureFor, linkFor } = useMeetings()
+const linking = ref(false)
+const linkCopied = ref(false)
+
+async function copyMeetingLink() {
+  if (linking.value) return
+  linking.value = true
+
+  try {
+    const meeting = await ensureFor(props.channel.id, props.channel.name || 'Meeting')
+    await navigator.clipboard.writeText(linkFor(meeting.token))
+    linkCopied.value = true
+    setTimeout(() => { linkCopied.value = false }, 1800)
+  }
+  catch {
+    // Clipboard refused, or the link couldn't be made — nothing is claimed either way.
+  }
+  finally {
+    linking.value = false
+  }
+}
+
+async function toggleRecording() {
+  if (recorder.recording.value) await recorder.stop()
+  else await recorder.start(props.channel.id)
+}
 
 const { audibleIds, liveIds, startProximity, stopProximity } = useSpaceProximity()
 
@@ -3134,6 +3202,23 @@ onMounted(async () => {
   if (saved) zoomLevel.value = clampZoom(saved)
 
   frame = requestAnimationFrame(loop)
+
+  /*
+   * `?call=1` — walked in from a meeting link, so walk them into the room.
+   *
+   * Last in the mount, because entering needs the map: `enter` places you on a tile, and the
+   * tiles arrive with `loadMap` above. Same three guards the voice channel's version has (once,
+   * not if you're already in another call, not if you're already here) — and `enter` itself
+   * refuses a second attempt while one is in flight.
+   */
+  if (meetingSurface.query.value.call === '1') {
+    // Consumed first, so a refused microphone doesn't leave the flag armed for the next reload.
+    meetingSurface.patch({ call: null })
+
+    if (!inThisRoom.value && (activeCallChannel.value === null || activeCallChannel.value === props.channel.id)) {
+      void enter()
+    }
+  }
 })
 
 onBeforeUnmount(() => {
@@ -3228,6 +3313,70 @@ watch(inThisRoom, (now) => {
           @click="toggleMute"
         >
           <component :is="micOpen ? Mic : MicOff" class="h-4 w-4" />
+        </button>
+
+        <!--
+          What's scheduled in here, as a chip rather than a banner: the room is the whole window,
+          and a strip across it would cover the thing people came to look at.
+        -->
+        <button
+          v-if="meetingNow || meetingNext"
+          type="button"
+          class="flex min-w-0 items-center gap-1 rounded px-1.5 py-1 text-xs transition-colors hover:bg-muted"
+          :class="meetingNow ? 'bg-primary/10 font-medium text-primary' : 'text-muted-foreground'"
+          :title="meetingNow
+            ? `${meetingNow.title} — happening now. Open it in the calendar.`
+            : `${meetingNext!.title} — ${until(meetingNext!)}. Open it in the calendar.`"
+          @click="openMeeting((meetingNow ?? meetingNext)!.id)"
+        >
+          <CalendarClock class="h-3.5 w-3.5 shrink-0" />
+          <span v-if="!narrow" class="max-w-32 truncate">
+            {{ meetingNow ? meetingNow.title : `${meetingNext!.title} · ${until(meetingNext!)}` }}
+          </span>
+        </button>
+
+        <!-- Nothing scheduled: the chip becomes the way to schedule something, rather than an
+             absence nobody can act on. -->
+        <button
+          v-else-if="inThisRoom && !isGuest"
+          type="button"
+          class="rounded p-1.5 text-muted-foreground transition-colors hover:bg-muted"
+          title="Schedule a meeting in this space"
+          @click="scheduleMeeting"
+        >
+          <CalendarPlus class="h-4 w-4" />
+        </button>
+
+        <!-- The address of this room, for somebody who isn't in it yet. -->
+        <button
+          v-if="!isGuest"
+          type="button"
+          class="rounded p-1.5 text-muted-foreground transition-colors hover:bg-muted"
+          :class="linkCopied && 'text-primary'"
+          :disabled="linking"
+          title="Copy a link that brings people straight into this space"
+          @click="copyMeetingLink"
+        >
+          <Loader2 v-if="linking" class="h-4 w-4 animate-spin" />
+          <component :is="linkCopied ? Check : LinkIcon" v-else class="h-4 w-4" />
+        </button>
+
+        <!--
+          Recording the room's call. The same composable and the same server gate the voice
+          channel uses — a Side Space's call is the same call, so recording it is the same act.
+          Red while it runs, because the state it puts the room in is what matters.
+        -->
+        <button
+          v-if="inThisRoom"
+          type="button"
+          class="rounded p-1.5 transition-colors hover:bg-muted"
+          :class="recorder.recording.value ? 'text-destructive' : 'text-muted-foreground'"
+          :disabled="recorder.uploading.value"
+          :title="recorder.recording.value ? `Stop recording (${recorder.label.value})` : 'Record this call’s audio — everyone here is told'"
+          @click="toggleRecording"
+        >
+          <Loader2 v-if="recorder.uploading.value" class="h-4 w-4 animate-spin" />
+          <Circle v-else class="h-4 w-4" :class="recorder.recording.value && 'fill-current'" />
         </button>
 
         <!-- The way to everyone's cameras, screens and volumes: a sheet on a narrow window, the
