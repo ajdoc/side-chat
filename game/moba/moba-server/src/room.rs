@@ -345,6 +345,10 @@ impl Room {
                 hero,
                 pos: Vec2::new(Fx::from_raw(x), Fx::from_raw(y)),
             },
+            ClientIntent::MoveDir { dx, dy } => Command::MoveDirection {
+                hero,
+                dir: Vec2::new(Fx::from_raw(dx), Fx::from_raw(dy)),
+            },
             ClientIntent::Attack { target } => Command::Attack {
                 hero,
                 target: self.resolve(target)?,
@@ -361,6 +365,10 @@ impl Room {
             ClientIntent::Buy { item } => Command::BuyItem {
                 hero,
                 item: ItemId(item),
+            },
+            ClientIntent::Learn { slot } => Command::LearnAbility {
+                hero,
+                slot: slot as usize,
             },
         })
     }
@@ -394,10 +402,28 @@ impl Room {
 /// here into which a client could put someone else's hero.
 #[derive(Clone, Copy, Debug)]
 pub enum ClientIntent {
-    MoveTo { x: i32, y: i32 },
-    Attack { target: moba_proto::NetId },
-    Cast { slot: u8, target: NetTarget },
-    Buy { item: u16 },
+    MoveTo {
+        x: i32,
+        y: i32,
+    },
+    MoveDir {
+        dx: i32,
+        dy: i32,
+    },
+    Attack {
+        target: moba_proto::NetId,
+    },
+    Cast {
+        slot: u8,
+        target: NetTarget,
+    },
+    Buy {
+        item: u16,
+    },
+    /// Spend a skill point on one ability.
+    Learn {
+        slot: u8,
+    },
     Stop,
 }
 
@@ -406,9 +432,11 @@ impl ClientIntent {
         use moba_proto::ClientMessage as M;
         Some(match *message {
             M::MoveTo { x, y } => ClientIntent::MoveTo { x, y },
+            M::MoveDir { dx, dy } => ClientIntent::MoveDir { dx, dy },
             M::Attack { target } => ClientIntent::Attack { target },
             M::Cast { slot, target } => ClientIntent::Cast { slot, target },
             M::Buy { item } => ClientIntent::Buy { item },
+            M::Learn { slot } => ClientIntent::Learn { slot },
             M::Stop => ClientIntent::Stop,
             M::Hello { .. } | M::Ping { .. } => return None,
         })

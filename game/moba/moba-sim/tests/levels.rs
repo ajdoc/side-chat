@@ -204,7 +204,10 @@ fn the_ultimate_is_locked_until_level_six() {
         "a level-one hero cast its ultimate"
     );
 
-    // The other three are available from the start.
+    // A basic ability is learnable from level one — it costs the point every hero starts with,
+    // where the ultimate cannot be bought at any price until six.
+    sim.learn(hero, 0)
+        .expect("a basic could not be learned at level one");
     let events = sim.step(&[Command::CastAbility {
         hero,
         slot: 0,
@@ -214,11 +217,13 @@ fn the_ultimate_is_locked_until_level_six() {
         !events
             .iter()
             .any(|e| matches!(e, moba_sim::sim::Event::CastRefused { .. })),
-        "a basic ability was locked too"
+        "a learned basic ability was refused"
     );
 
-    // Level up and it unlocks.
+    // Level up, spend a point on it, and it unlocks.
     sim.entities.get_mut(hero).unwrap().xp = level::xp_for_level(level::ULTIMATE_LEVEL);
+    sim.learn(hero, level::ULTIMATE_SLOT)
+        .expect("the ultimate could not be learned at six");
     for _ in 0..TICK_HZ * 80 {
         sim.step(&[]);
     }

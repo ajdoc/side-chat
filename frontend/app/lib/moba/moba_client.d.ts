@@ -19,11 +19,12 @@ export interface InitOutput {
     readonly mobagame_new: (a: number, b: number, c: number, d: number, e: number, f: number) => [number, number, number];
     readonly mobagame_start: (a: number) => [number, number];
     readonly wasm_bindgen_36275c6b963d97fa___convert__closures_____invoke___f64______true_: (a: number, b: number, c: number) => void;
-    readonly wasm_bindgen_36275c6b963d97fa___convert__closures_____invoke___web_sys_c0f9e6d309ceb263___features__gen_MouseEvent__MouseEvent______true_: (a: number, b: number, c: any) => void;
-    readonly wasm_bindgen_36275c6b963d97fa___convert__closures_____invoke___web_sys_c0f9e6d309ceb263___features__gen_MouseEvent__MouseEvent______true__2: (a: number, b: number, c: any) => void;
-    readonly wasm_bindgen_36275c6b963d97fa___convert__closures_____invoke___web_sys_c0f9e6d309ceb263___features__gen_MouseEvent__MouseEvent______true__3: (a: number, b: number, c: any) => void;
-    readonly wasm_bindgen_36275c6b963d97fa___convert__closures_____invoke___web_sys_c0f9e6d309ceb263___features__gen_MouseEvent__MouseEvent______true__4: (a: number, b: number, c: any) => void;
-    readonly wasm_bindgen_36275c6b963d97fa___convert__closures_____invoke___web_sys_c0f9e6d309ceb263___features__gen_MouseEvent__MouseEvent______true__5: (a: number, b: number, c: any) => void;
+    readonly wasm_bindgen_36275c6b963d97fa___convert__closures_____invoke___web_sys_91cf9931bdfe2f30___features__gen_MouseEvent__MouseEvent______true_: (a: number, b: number, c: any) => void;
+    readonly wasm_bindgen_36275c6b963d97fa___convert__closures_____invoke___web_sys_91cf9931bdfe2f30___features__gen_MouseEvent__MouseEvent______true__2: (a: number, b: number, c: any) => void;
+    readonly wasm_bindgen_36275c6b963d97fa___convert__closures_____invoke___web_sys_91cf9931bdfe2f30___features__gen_MouseEvent__MouseEvent______true__3: (a: number, b: number, c: any) => void;
+    readonly wasm_bindgen_36275c6b963d97fa___convert__closures_____invoke___web_sys_91cf9931bdfe2f30___features__gen_MouseEvent__MouseEvent______true__4: (a: number, b: number, c: any) => void;
+    readonly wasm_bindgen_36275c6b963d97fa___convert__closures_____invoke___web_sys_91cf9931bdfe2f30___features__gen_MouseEvent__MouseEvent______true__5: (a: number, b: number, c: any) => void;
+    readonly wasm_bindgen_36275c6b963d97fa___convert__closures_____invoke___web_sys_91cf9931bdfe2f30___features__gen_MouseEvent__MouseEvent______true__6: (a: number, b: number, c: any) => void;
     readonly wasm_bindgen_36275c6b963d97fa___convert__closures_____invoke_______true_: (a: number, b: number) => void;
     readonly __wbindgen_malloc: (a: number, b: number) => number;
     readonly __wbindgen_realloc: (a: number, b: number, c: number, d: number) => number;

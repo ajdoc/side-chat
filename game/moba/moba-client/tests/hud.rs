@@ -18,11 +18,31 @@ fn own(cooldowns: Vec<u32>, items: usize) -> NetSelf {
         abilities: vec![0; 10],
         targeting: vec![moba_proto::NetTargeting::Point; 10],
         items: (0..items).map(|i| i as u16).collect(),
+        ranks: vec![1; 10],
+        rank_caps: vec![4; 10],
+        skill_points: 0,
         attack_range: 150 * 65536,
         respawn_in: 0,
         level: 1,
         xp_into_level: 0,
         xp_for_next: 100,
+    }
+}
+
+#[test]
+fn the_bar_labels_match_the_keys_that_actually_cast() {
+    // Two lists of one fact, so they are walked against each other: a bar that says W while the
+    // handler listens for E is a hero whose second ability appears not to work.
+    use moba_client::input::slot_for_key;
+    let hud = Hud::layout(1280.0, 720.0, None);
+    for view in &hud.slots {
+        assert_eq!(
+            slot_for_key(view.label),
+            Some(view.slot),
+            "the bar shows {} for slot {} but that key casts something else",
+            view.label,
+            view.slot
+        );
     }
 }
 
@@ -33,7 +53,7 @@ fn the_bar_has_a_slot_for_every_ability_and_every_item() {
     let hud = Hud::layout(1280.0, 720.0, None);
     assert_eq!(hud.slots.len(), SLOT_COUNT);
     assert_eq!(hud.slots[0].label, "Q");
-    assert_eq!(hud.slots[3].label, "R");
+    assert_eq!(hud.slots[3].label, "F");
     assert_eq!(hud.slots[4].label, "1");
     assert_eq!(hud.slots[9].label, "6");
 }

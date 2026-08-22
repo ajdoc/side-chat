@@ -16,13 +16,12 @@
 //! demands that you stay. A support who never last-hits still levels, and a hero who leaves the
 //! lane falls behind whether or not they were farming elsewhere.
 //!
-//! ## What is deliberately absent
+//! ## Skill points
 //!
-//! **Skill points.** Levelling raises every ability together rather than letting a player choose
-//! which to raise. Choosing is better — it is a real decision every game in the genre has — but
-//! it needs a UI, a respec rule and a per-ability rank in the wire format, and none of that is
-//! worth having before anyone has played with levels at all. The one rank rule that *is* here is
-//! the ultimate's, because an ultimate available at minute zero is a different game.
+//! A level grants a point, and a point raises one ability. That choice is the decision the genre
+//! is built on — whether to max your wave clear or your escape first is most of what separates
+//! two players on the same hero — and it was deliberately absent for one release while levels
+//! themselves were being proven. See [`ranks`].
 
 use crate::fixed::Fx;
 
@@ -35,6 +34,47 @@ pub const MAX_LEVEL: u32 = 18;
 /// minutes in, which is roughly when lanes start to be worth ganking. Available from the start,
 /// every hero's strongest ability would be up for the least consequential fight of the match.
 pub const ULTIMATE_LEVEL: u32 = 6;
+
+/// Ranks, and what a skill point may be spent on.
+pub mod ranks {
+    use crate::fixed::Fx;
+
+    /// How high a basic ability goes.
+    pub const MAX_BASIC: u8 = 4;
+    /// How high an ultimate goes. Fewer ranks, each worth much more.
+    pub const MAX_ULTIMATE: u8 = 3;
+
+    /// The level each rank of the ultimate needs.
+    ///
+    /// Six, eleven, sixteen — the genre's spacing, and it paces a match: the ultimate arrives,
+    /// then gets better twice, at roughly the points where fights change scale.
+    pub const ULTIMATE_LEVELS: [u32; MAX_ULTIMATE as usize] = [6, 11, 16];
+
+    /// The highest rank this ability may be raised to at this level.
+    pub fn cap(slot: usize, level: u32) -> u8 {
+        if slot == super::ULTIMATE_SLOT {
+            return ULTIMATE_LEVELS
+                .iter()
+                .filter(|need| level >= **need)
+                .count() as u8;
+        }
+        // A basic ability may be raised every other level. Without a cap a level-four hero could
+        // pour every point into one ability and have it maxed before leaving lane, which is a
+        // strictly better choice than any other and therefore not a choice.
+        ((level as u8).div_ceil(2)).min(MAX_BASIC)
+    }
+
+    /// What a rank multiplies an ability's effect by.
+    ///
+    /// Rank one is the printed number and each rank adds 35% of it, so a maxed basic is roughly
+    /// double. Zero for an unlearned ability, which cannot be cast at all.
+    pub fn scale(rank: u8) -> Fx {
+        if rank == 0 {
+            return Fx::ZERO;
+        }
+        Fx::ONE + Fx::ratio(35, 100) * Fx::from_int(rank as i32 - 1)
+    }
+}
 
 /// The ability slot the ultimate lives in.
 pub const ULTIMATE_SLOT: usize = 3;
@@ -103,9 +143,9 @@ pub fn bonus_for(level: u32) -> LevelBonus {
         attack_damage: steps * Fx::from_int(4),
         armour: steps * Fx::ratio(8, 10),
         max_mana: steps * Fx::from_int(45),
-        // +6% ability damage per level. Abilities scale with level rather than with a chosen
-        // rank, which is the simplification this module's header explains.
-        ability_scale: steps * Fx::ratio(6, 100),
+        // A small drift on top of the rank scaling, so a hero who has maxed an ability still
+        // gains a little from levelling past that point.
+        ability_scale: steps * Fx::ratio(2, 100),
     }
 }
 

@@ -220,6 +220,17 @@ pub enum Order {
     Attack(EntityId),
     /// Walk the lane, engaging whatever is in reach on the way. Creeps and drones.
     PushLane,
+    /// Keep walking in a direction until told otherwise.
+    ///
+    /// Distinct from [`Order::MoveTo`] rather than implemented as "move to a point far away",
+    /// which is how a keyboard scheme is usually bolted onto a click-to-move game. The
+    /// difference shows the moment a wall is involved: a far-off destination makes the hero
+    /// slide along the wall toward a point they will never reach, while a *direction* simply
+    /// stops when the way is blocked, which is what the key being held actually means.
+    ///
+    /// It is also far less network traffic — one message when the keys change, rather than a
+    /// destination every few frames.
+    MoveDirection(Vec2),
     /// Imposed, not chosen. Carries the tick it expires on.
     Forced {
         target: EntityId,

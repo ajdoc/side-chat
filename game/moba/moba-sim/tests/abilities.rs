@@ -70,6 +70,20 @@ fn with_ultimate(sim: &mut Sim, hero: EntityId) {
         moba_sim::level::xp_for_level(moba_sim::level::ULTIMATE_LEVEL);
 }
 
+/// A hero with its abilities actually learned.
+///
+/// Skill points mean an ability starts at rank zero and cannot be cast at all. A test about what
+/// an ability *does* is not a test about that rule — `ranks.rs` covers it — so this levels to six
+/// and spends a point on each of the four, which is what any player would have done by the time
+/// the ability under test matters.
+fn ready(sim: &mut Sim, hero: EntityId) {
+    sim.entities.get_mut(hero).unwrap().xp =
+        moba_sim::level::xp_for_level(moba_sim::level::ULTIMATE_LEVEL);
+    for slot in 0..4 {
+        let _ = sim.learn(hero, slot);
+    }
+}
+
 fn cast(sim: &mut Sim, hero: EntityId, slot: usize, target: Target) -> Vec<Event> {
     sim.step(&[Command::CastAbility { hero, slot, target }])
 }
@@ -87,6 +101,7 @@ fn refusal(events: &[Event]) -> Option<CastRefusal> {
 fn shield_charge_rides_through_creeps_and_stops_on_the_first_hero() {
     let mut sim = arena();
     let ironclad = sim.spawn_named_hero(Team::Blue, heroes::ironclad());
+    ready(&mut sim, ironclad);
     place(&mut sim, ironclad, at(0, 0));
 
     // A creep directly in the path, and a hero beyond it. The charge must ignore the first and
@@ -126,6 +141,7 @@ fn shield_charge_rides_through_creeps_and_stops_on_the_first_hero() {
 fn bulwark_toggles_on_and_off_without_stripping_item_armour() {
     let mut sim = arena();
     let ironclad = sim.spawn_named_hero(Team::Blue, heroes::ironclad());
+    ready(&mut sim, ironclad);
 
     // An item's armour, attached from a different source. Turning Bulwark off must not take it.
     sim.entities.get_mut(ironclad).unwrap().attach(
@@ -171,6 +187,7 @@ fn bulwark_toggles_on_and_off_without_stripping_item_armour() {
 fn bulwark_drains_mana_and_shuts_itself_off_when_empty() {
     let mut sim = arena();
     let ironclad = sim.spawn_named_hero(Team::Blue, heroes::ironclad());
+    ready(&mut sim, ironclad);
     sim.entities.get_mut(ironclad).unwrap().mana = Fx::from_int(20);
 
     cast(&mut sim, ironclad, 1, Target::None);
@@ -183,9 +200,12 @@ fn bulwark_drains_mana_and_shuts_itself_off_when_empty() {
         !e.abilities.state[1].toggled_on,
         "Bulwark ran on an empty mana pool"
     );
+    // Compared against the hero's own unbuffed armour rather than the level-one constant: a
+    // hero levels now, and a levelled hero has more armour than the statline it started with.
+    let unbuffed = Stats::melee_hero().armour + moba_sim::level::bonus_for(e.level()).armour;
     assert_eq!(
         e.effective_stats(sim.tick).armour.floor_int(),
-        Stats::melee_hero().armour.floor_int(),
+        unbuffed.floor_int(),
         "the armour outlived the toggle"
     );
 }
@@ -194,6 +214,7 @@ fn bulwark_drains_mana_and_shuts_itself_off_when_empty() {
 fn taunt_overrides_orders_and_hands_control_back_when_it_ends() {
     let mut sim = arena();
     let ironclad = sim.spawn_named_hero(Team::Blue, heroes::ironclad());
+    ready(&mut sim, ironclad);
     place(&mut sim, ironclad, at(0, 0));
     let victim = dummy(&mut sim, Team::Red, at(300, 0));
     sim.entities.get_mut(victim).unwrap().stats.move_speed = Fx::from_int(300);
@@ -226,6 +247,7 @@ fn last_stand_pays_out_on_missing_health_and_a_stun_cancels_it() {
     let hit_for = |ironclad_hp: i32| {
         let mut sim = arena();
         let ironclad = sim.spawn_named_hero(Team::Blue, heroes::ironclad());
+        ready(&mut sim, ironclad);
         place(&mut sim, ironclad, at(0, 0));
         let victim = dummy(&mut sim, Team::Red, at(200, 0));
 
@@ -250,6 +272,7 @@ fn last_stand_pays_out_on_missing_health_and_a_stun_cancels_it() {
     // And the counterplay: interrupting the channel means it never pays out at all.
     let mut sim = arena();
     let ironclad = sim.spawn_named_hero(Team::Blue, heroes::ironclad());
+    ready(&mut sim, ironclad);
     place(&mut sim, ironclad, at(0, 0));
     let victim = dummy(&mut sim, Team::Red, at(200, 0));
     with_ultimate(&mut sim, ironclad);
@@ -286,6 +309,7 @@ fn last_stand_pays_out_on_missing_health_and_a_stun_cancels_it() {
 fn cinder_hits_applies_heat_and_leaves_ground_that_keeps_burning() {
     let mut sim = arena();
     let witch = sim.spawn_named_hero(Team::Blue, heroes::emberwitch());
+    ready(&mut sim, witch);
     place(&mut sim, witch, at(0, 0));
     let victim = dummy(&mut sim, Team::Red, at(120, 0));
 
@@ -334,6 +358,7 @@ fn cinder_hits_applies_heat_and_leaves_ground_that_keeps_burning() {
 fn kindle_stacks_heat_on_autoattacks_and_caps_at_three() {
     let mut sim = arena();
     let witch = sim.spawn_named_hero(Team::Blue, heroes::emberwitch());
+    ready(&mut sim, witch);
     place(&mut sim, witch, at(0, 0));
     let victim = dummy(&mut sim, Team::Red, at(200, 0));
 
@@ -360,6 +385,7 @@ fn kindle_stacks_heat_on_autoattacks_and_caps_at_three() {
 fn flashstep_blinks_the_full_range_and_makes_the_next_cast_free() {
     let mut sim = arena();
     let witch = sim.spawn_named_hero(Team::Blue, heroes::emberwitch());
+    ready(&mut sim, witch);
     place(&mut sim, witch, at(0, 0));
 
     let before = sim.entities.get(witch).unwrap().mana;
@@ -388,6 +414,7 @@ fn flashstep_blinks_the_full_range_and_makes_the_next_cast_free() {
 fn pyre_pierces_the_line_and_consumes_heat_for_bonus_damage() {
     let mut sim = arena();
     let witch = sim.spawn_named_hero(Team::Blue, heroes::emberwitch());
+    ready(&mut sim, witch);
     place(&mut sim, witch, at(0, 0));
     with_ultimate(&mut sim, witch);
 
@@ -441,6 +468,7 @@ fn pyre_pierces_the_line_and_consumes_heat_for_bonus_damage() {
 fn a_refused_cast_says_why() {
     let mut sim = arena();
     let ironclad = sim.spawn_named_hero(Team::Blue, heroes::ironclad());
+    ready(&mut sim, ironclad);
     place(&mut sim, ironclad, at(0, 0));
     let victim = dummy(&mut sim, Team::Red, at(300, 0));
 
@@ -468,6 +496,7 @@ fn a_refused_cast_says_why() {
     // Out of mana.
     let mut sim = arena();
     let witch = sim.spawn_named_hero(Team::Blue, heroes::emberwitch());
+    ready(&mut sim, witch);
     sim.entities.get_mut(witch).unwrap().mana = Fx::ZERO;
     let events = cast(&mut sim, witch, 0, Target::Point(at(100, 0)));
     assert_eq!(refusal(&events), Some(CastRefusal::NotEnoughMana));
@@ -484,6 +513,10 @@ fn an_item_active_runs_through_the_same_path_as_a_spell() {
         Fx::from_int(400),
         [ids::FIREWALL, ids::BULWARK, ids::TAUNT, ids::LAST_STAND],
     );
+    // Deliberately in a *hero* slot, to prove an item's active runs the ordinary ability path —
+    // so it needs a rank like any other hero ability. Its natural home in an item slot needs no
+    // rank at all, which `economy.rs` covers.
+    ready(&mut sim, ironclad);
     place(&mut sim, ironclad, at(0, 0));
 
     cast(&mut sim, ironclad, 0, Target::None);
@@ -515,6 +548,7 @@ fn casting_a_channel_roots_the_caster() {
     // A cast time has to be a real commitment or every ability with one is free to use.
     let mut sim = arena();
     let ironclad = sim.spawn_named_hero(Team::Blue, heroes::ironclad());
+    ready(&mut sim, ironclad);
     place(&mut sim, ironclad, at(0, 0));
     with_ultimate(&mut sim, ironclad);
 

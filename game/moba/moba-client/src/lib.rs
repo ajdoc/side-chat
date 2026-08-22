@@ -10,6 +10,8 @@
 //!   lines, cast rings, deaths.
 //! - [`spells`] — what each ability *looks* like. Cosmetic only, and the reason a player can
 //!   tell Cinder from Pyre.
+//! - [`minimap`] — the corner map. Fog-correct for free, because it draws the same snapshot
+//!   the world does.
 //! - [`hud`] — the ability bar. A readout on desktop and the *input* on a phone, which is why
 //!   its geometry is computed once here rather than twice.
 //! - [`web`] — the wasm shim: a canvas, a socket, and a frame loop. Mechanical, and compiled
@@ -20,6 +22,7 @@ pub mod effects;
 pub mod hud;
 pub mod input;
 pub mod interp;
+pub mod minimap;
 pub mod spells;
 
 #[cfg(target_arch = "wasm32")]

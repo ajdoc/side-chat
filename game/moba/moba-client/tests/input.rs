@@ -98,15 +98,95 @@ fn stop_clears_an_armed_ability_too() {
 }
 
 #[test]
-fn qwer_are_the_hero_and_the_number_row_is_the_inventory() {
+fn movement_keys_add_up_to_a_direction() {
+    use moba_client::input::HeldKeys;
+
+    let mut held = HeldKeys::default();
+    assert_eq!(held.direction(), (0.0, 0.0));
+
+    assert!(held.press("w"));
+    assert_eq!(held.direction(), (0.0, -1.0), "up is negative y");
+
+    // Diagonals are the whole reason keys are held as a set rather than as a last-pressed
+    // direction: W and D together must mean north-east.
+    assert!(held.press("d"));
+    let (x, y) = held.direction();
+    assert!(
+        x > 0.6 && y < -0.6,
+        "W+D did not produce a diagonal: {x},{y}"
+    );
+    assert!(
+        (x * x + y * y - 1.0).abs() < 0.01,
+        "the diagonal was not normalised"
+    );
+
+    // Opposite keys cancel, which is what holding both means.
+    assert!(held.press("a"));
+    let (x, _) = held.direction();
+    assert!(x.abs() < 0.01, "A and D did not cancel");
+
+    assert!(held.release("w"));
+    assert!(
+        !held.release("w"),
+        "releasing a key twice reported a change"
+    );
+
+    // Losing focus lets go of everything, or a hero walks into the fog because the key-up
+    // never arrived.
+    held.press("s");
+    assert!(held.clear());
+    assert!(held.is_empty());
+    assert_eq!(held.direction(), (0.0, 0.0));
+}
+
+#[test]
+fn arrow_keys_work_like_wasd() {
+    use moba_client::input::HeldKeys;
+    let mut wasd = HeldKeys::default();
+    let mut arrows = HeldKeys::default();
+    wasd.press("a");
+    arrows.press("ArrowLeft");
+    assert_eq!(wasd.direction(), arrows.direction());
+}
+
+#[test]
+fn abilities_avoid_the_movement_keys() {
+    use moba_client::input::{direction_for_key, slot_for_key};
+    // The rule that makes both schemes coexist: nothing is both a movement key and an ability
+    // key. Q E R F are the four keys nearest WASD that WASD does not use.
+    for key in [
+        "w",
+        "a",
+        "s",
+        "d",
+        "ArrowUp",
+        "ArrowDown",
+        "ArrowLeft",
+        "ArrowRight",
+    ] {
+        assert!(
+            slot_for_key(key).is_none(),
+            "{key} is both a movement key and an ability key"
+        );
+    }
+    for key in ["q", "e", "r", "f", "1", "6"] {
+        assert!(direction_for_key(key).is_none(), "{key} moves and casts");
+    }
+}
+
+#[test]
+fn qerf_are_the_hero_and_the_number_row_is_the_inventory() {
     // Must match the slot layout in `AbilitySlots`: 0..4 hero, 4..10 items. A mismatch here casts
     // the wrong thing, which is the kind of bug that survives a long time because it still does
     // *something*.
     assert_eq!(slot_for_key("q"), Some(0));
-    assert_eq!(slot_for_key("R"), Some(3));
+    assert_eq!(slot_for_key("e"), Some(1));
+    assert_eq!(slot_for_key("R"), Some(2));
+    assert_eq!(slot_for_key("f"), Some(3));
     assert_eq!(slot_for_key("1"), Some(4));
     assert_eq!(slot_for_key("6"), Some(9));
     assert_eq!(slot_for_key("z"), None);
+    assert_eq!(slot_for_key("w"), None, "W is a movement key now");
 }
 
 // ── Camera ──────────────────────────────────────────────────────────────────────────────────

@@ -25,8 +25,9 @@ use web_sys::{CanvasRenderingContext2d, HtmlCanvasElement, MessageEvent, WebSock
 use crate::camera::Camera;
 use crate::effects::{EffectKind, Effects};
 use crate::hud::Hud;
-use crate::input::{slot_for_key, Armed, Input, MouseButton};
+use crate::input::{slot_for_key, Armed, HeldKeys, Input, MouseButton};
 use crate::interp::{from_fixed, RenderEntity, SnapshotBuffer};
+use crate::minimap::Minimap;
 use crate::spells::{look, short_name, Shape};
 
 /// Everything the frame loop and the socket callbacks both need.
@@ -39,6 +40,9 @@ struct State {
     hurt_flash: f32,
     /// Set once the match has ended, with who won.
     outcome: Option<String>,
+    /// Which movement keys are down. See `HeldKeys` — a set rather than a last-pressed
+    /// direction, so diagonals work.
+    held: HeldKeys,
     /// A short-lived line explaining why the last thing you pressed did nothing. Without it a
     /// refused cast and a broken ability are indistinguishable.
     notice: Option<(String, f32)>,
@@ -100,6 +104,7 @@ impl MobaGame {
                 effects: Effects::new(),
                 hurt_flash: 0.0,
                 outcome: None,
+                held: HeldKeys::default(),
                 notice: None,
                 socket: None,
                 last_frame_ms: 0.0,
@@ -166,7 +171,13 @@ fn open_socket(url: &str, ticket: &str, state: Rc<RefCell<State>>) -> Result<(),
             };
             let mut state = state.borrow_mut();
             match message {
-                ServerMessage::Welcome { slot, hero_id, .. } => {
+                ServerMessage::Welcome {
+                    slot, hero_id, map, ..
+                } => {
+                    // The map arrives once, at the handshake, and the renderer draws nothing
+                    // until it does — deliberately, since the previous client drew a hardcoded
+                    // diagonal that merely happened to match the one lane that existed.
+                    state.map = Some(map);
                     // Non-zero on a reconnect, which lets the camera find the hero on the
                     // first frame rather than after the first snapshot arrives.
                     if hero_id != 0 {
@@ -312,15 +323,83 @@ impl MobaGame {
                     };
                     let rect = canvas_for_down.get_bounding_client_rect();
                     let mut state = state.borrow_mut();
-                    let (wx, wy) = state.camera.screen_to_world(
+                    let (sx, sy) = (
                         e.client_x() as f32 - rect.left() as f32,
                         e.client_y() as f32 - rect.top() as f32,
                     );
+
+                    // The minimap is drawn over the world, and a click on it is an order to
+                    // walk there — the fastest way to cross a map and the reason anyone looks at
+                    // one. Tested before the bar and the world, since it sits on top of both.
+                    if let Some(map) = &state.map {
+                        let mini = Minimap::layout(
+                            state.camera.width,
+                            state.camera.height,
+                            map.size as f32,
+                        );
+                        if mini.contains(sx, sy) {
+                            let (wx, wy) = mini.map_to_world(sx, sy);
+                            send(
+                                &state,
+                                Some(ClientMessage::MoveTo {
+                                    x: to_fixed(wx),
+                                    y: to_fixed(wy),
+                                }),
+                            );
+                            return;
+                        }
+                    }
+
+                    // The bar is drawn over the world, so a click that lands on it must not also
+                    // become a move order into whatever is behind it.
+                    let hud =
+                        Hud::layout(state.camera.width, state.camera.height, state.buffer.own());
+                    // The upgrade badge sits on top of its button, so it is tested first.
+                    if let Some(slot) = hud.hit_upgrade(sx, sy) {
+                        let message = state.input.learn(slot);
+                        send(&state, Some(message));
+                        return;
+                    }
+                    // On a phone there is no modifier key, so the badge is the *only* way to
+                    // spend a skill point.
+                    if let Some(slot) = hud.hit_upgrade(sx, sy) {
+                        let message = state.input.learn(slot);
+                        send(&state, Some(message));
+                        return;
+                    }
+                    if let Some(slot) = hud.hit(sx, sy) {
+                        state.input.press_ability(slot);
+                        return;
+                    }
+                    if hud.contains(sx, sy) {
+                        return;
+                    }
+
+                    let (wx, wy) = state.camera.screen_to_world(sx, sy);
                     let message = state.input.click(button, to_fixed(wx), to_fixed(wy));
                     send(&state, message);
                 });
             canvas.set_onmousedown(Some(on_down.as_ref().unchecked_ref()));
             on_down.forget();
+        }
+
+        // Scroll to zoom.
+        {
+            let state = self.state.clone();
+            let on_wheel =
+                Closure::<dyn FnMut(web_sys::WheelEvent)>::new(move |e: web_sys::WheelEvent| {
+                    // Or the page scrolls behind the game.
+                    e.prevent_default();
+                    let mut state = state.borrow_mut();
+                    // `delta_y` is positive when scrolling *down*, which conventionally zooms
+                    // out. Its magnitude differs wildly between a mouse wheel, a trackpad and a
+                    // browser's line/page mode, so only the sign is used — one notch per event,
+                    // which feels the same on every device.
+                    let notches = if e.delta_y() > 0.0 { -1.0 } else { 1.0 };
+                    state.camera.zoom_by(notches);
+                });
+            canvas.set_onwheel(Some(on_wheel.as_ref().unchecked_ref()));
+            on_wheel.forget();
         }
 
         // ── Touch ───────────────────────────────────────────────────────────────────────
@@ -380,14 +459,43 @@ impl MobaGame {
                 move |e: web_sys::KeyboardEvent| {
                     let key = e.key();
                     let mut state = state.borrow_mut();
+
+                    // Movement first, and it swallows the key: WASD and the arrows are not
+                    // abilities, and letting them fall through would scroll the page.
+                    if state.held.press(&key) {
+                        e.prevent_default();
+                        let (dx, dy) = state.held.direction();
+                        send(
+                            &state,
+                            Some(ClientMessage::MoveDir {
+                                dx: to_fixed(dx),
+                                dy: to_fixed(dy),
+                            }),
+                        );
+                        return;
+                    }
+
                     match key.as_str() {
                         "Escape" => state.input.cancel(),
-                        "s" | "S" => {
+                        // Stop moved off S, which now walks south.
+                        " " | "Spacebar" => {
+                            e.prevent_default();
                             let message = state.input.stop();
                             send(&state, Some(message));
                         }
                         other => {
                             if let Some(slot) = slot_for_key(other) {
+                                // **Shift**, not Ctrl. `Ctrl+R` reloads the page and `Ctrl+F`
+                                // opens the browser's find bar — a game running in a tab does
+                                // not get to win that argument, and levelling an ability is
+                                // precisely the action you least want to lose to a refresh.
+                                // Shift+Q/E/R/F is unclaimed in every browser.
+                                if e.shift_key() && (slot as usize) < 4 {
+                                    e.prevent_default();
+                                    let message = state.input.learn(slot);
+                                    send(&state, Some(message));
+                                    return;
+                                }
                                 // A self-cast has nothing to aim, so arming it and demanding a
                                 // click is a second keystroke for no decision. The targeting
                                 // mode comes from the server — it is a rule, not a decoration,
@@ -409,6 +517,49 @@ impl MobaGame {
                 .ok_or("no window")?
                 .set_onkeydown(Some(on_key.as_ref().unchecked_ref()));
             on_key.forget();
+        }
+
+        // Key-up, so a released key stops the hero.
+        {
+            let state = self.state.clone();
+            let on_key_up = Closure::<dyn FnMut(web_sys::KeyboardEvent)>::new(
+                move |e: web_sys::KeyboardEvent| {
+                    let mut state = state.borrow_mut();
+                    if state.held.release(&e.key()) {
+                        let (dx, dy) = state.held.direction();
+                        send(
+                            &state,
+                            Some(ClientMessage::MoveDir {
+                                dx: to_fixed(dx),
+                                dy: to_fixed(dy),
+                            }),
+                        );
+                    }
+                },
+            );
+            web_sys::window()
+                .ok_or("no window")?
+                .set_onkeyup(Some(on_key_up.as_ref().unchecked_ref()));
+            on_key_up.forget();
+        }
+
+        // Losing focus lets go of everything.
+        //
+        // Alt-tabbing away with a key held means the key-up is delivered to the other window and
+        // never to this one, which otherwise leaves the hero walking into the fog until the
+        // player comes back and presses something.
+        {
+            let state = self.state.clone();
+            let on_blur = Closure::<dyn FnMut()>::new(move || {
+                let mut state = state.borrow_mut();
+                if state.held.clear() {
+                    send(&state, Some(ClientMessage::MoveDir { dx: 0, dy: 0 }));
+                }
+            });
+            web_sys::window()
+                .ok_or("no window")?
+                .set_onblur(Some(on_blur.as_ref().unchecked_ref()));
+            on_blur.forget();
         }
 
         Ok(())
@@ -824,6 +975,111 @@ fn draw(
         context.set_global_alpha(1.0);
     }
 
+    // ── The minimap ─────────────────────────────────────────────────────────────────────
+    //
+    // Drawn from the same snapshot as the world, which is what makes it fog-correct without any
+    // effort: the client only ever holds what the server filtered for its team, so an enemy in
+    // the fog is missing from both views or from neither.
+    if let Some(map) = &state.map {
+        let mini = Minimap::layout(state.camera.width, state.camera.height, map.size as f32);
+
+        context.set_fill_style_str("rgba(9,12,17,0.86)");
+        context.fill_rect(
+            mini.x as f64,
+            mini.y as f64,
+            mini.size as f64,
+            mini.size as f64,
+        );
+
+        // Terrain, as one path. Sampled rather than drawn cell by cell — a 64×64 grid is 4096
+        // rectangles and this runs every frame.
+        let cell = map.size as f32 / map.cells_across.max(1) as f32;
+        let pixel = mini.dot(cell);
+        context.set_fill_style_str("#1b2029");
+        context.begin_path();
+        for (cx, cy) in &map.blocked {
+            let (mx, my) = mini.world_to_map(*cx as f32 * cell, *cy as f32 * cell);
+            context.rect(mx as f64, my as f64, pixel as f64 + 0.5, pixel as f64 + 0.5);
+        }
+        context.fill();
+
+        // The lanes, so the map is legible at a glance even before anything is on it.
+        context.set_stroke_style_str("#2b3442");
+        context.set_line_width((mini.dot(420.0)).max(2.0) as f64);
+        for lane in &map.lanes {
+            context.begin_path();
+            for (index, (x, y)) in lane.iter().enumerate() {
+                let (mx, my) = mini.world_to_map(from_fixed(*x), from_fixed(*y));
+                if index == 0 {
+                    context.move_to(mx as f64, my as f64);
+                } else {
+                    context.line_to(mx as f64, my as f64);
+                }
+            }
+            context.stroke();
+        }
+
+        // Everything the player can see, structures largest so they read as landmarks.
+        for entity in entities {
+            let (mx, my) = mini.world_to_map(entity.x, entity.y);
+            let (colour, size) = match (entity.team, entity.kind) {
+                (_, NetKind::Zone) | (_, NetKind::Projectile) => continue,
+                (NetTeam::Blue, NetKind::Hero) => ("#5b9cff", mini.dot(150.0).max(3.0)),
+                (NetTeam::Red, NetKind::Hero) => ("#ff6b6b", mini.dot(150.0).max(3.0)),
+                (NetTeam::Blue, NetKind::Base) => ("#79c0ff", mini.dot(300.0).max(5.0)),
+                (NetTeam::Red, NetKind::Base) => ("#ffa198", mini.dot(300.0).max(5.0)),
+                (NetTeam::Blue, _) => ("#33608f", mini.dot(120.0).max(2.0)),
+                (NetTeam::Red, _) => ("#8f3a3a", mini.dot(120.0).max(2.0)),
+                (NetTeam::Neutral, _) => continue,
+            };
+            context.set_fill_style_str(colour);
+            context.fill_rect(
+                (mx - size / 2.0) as f64,
+                (my - size / 2.0) as f64,
+                size as f64,
+                size as f64,
+            );
+        }
+
+        // Your own hero, ringed. On a map of ten dots, finding yourself is the first thing you
+        // do and the hardest without a marker.
+        if let Some(own) = state
+            .own_id
+            .and_then(|id| entities.iter().find(|e| e.id == id))
+        {
+            let (mx, my) = mini.world_to_map(own.x, own.y);
+            context.set_stroke_style_str("#ffffff");
+            context.set_line_width(1.5);
+            context.begin_path();
+            let _ = context.arc(mx as f64, my as f64, 4.0, 0.0, TAU);
+            context.stroke();
+        }
+
+        // What the camera is looking at, so panning has somewhere to be shown once there is
+        // panning to do.
+        let half_w = state.camera.width / 2.0 / state.camera.zoom;
+        let half_h = state.camera.height / 2.0 / state.camera.zoom;
+        let (vx0, vy0) = mini.world_to_map(state.camera.x - half_w, state.camera.y - half_h);
+        let (vx1, vy1) = mini.world_to_map(state.camera.x + half_w, state.camera.y + half_h);
+        context.set_stroke_style_str("rgba(240,246,252,0.35)");
+        context.set_line_width(1.0);
+        context.stroke_rect(
+            vx0 as f64,
+            vy0 as f64,
+            (vx1 - vx0) as f64,
+            (vy1 - vy0) as f64,
+        );
+
+        context.set_stroke_style_str("#30363d");
+        context.set_line_width(1.0);
+        context.stroke_rect(
+            mini.x as f64,
+            mini.y as f64,
+            mini.size as f64,
+            mini.size as f64,
+        );
+    }
+
     // ── The ability bar ─────────────────────────────────────────────────────────────────
     //
     // A readout on desktop and the controls on a phone. Geometry comes from `Hud` so that what
@@ -890,6 +1146,37 @@ fn draw(
                     context.set_fill_style_str("#f0b429");
                     let _ = context.fill_text("6", x + bw - 10.0, y + 13.0);
                 }
+
+                // The rank, and a green plus when a point can go here. An unspent point with
+                // nothing telling you about it is a player permanently a rank behind.
+                let slot = view.slot as usize;
+                if slot < 4 {
+                    let rank = own.ranks.get(slot).copied().unwrap_or(0);
+                    let cap = own.rank_caps.get(slot).copied().unwrap_or(0);
+                    context.set_fill_style_str(if rank > 0 { "#d2a8ff" } else { "#484f58" });
+                    context.set_font("10px monospace");
+                    let _ = context.fill_text(&rank.to_string(), x + bw - 10.0, y + bh - 6.0);
+
+                    if own.skill_points > 0 && rank < cap {
+                        // A real target, not a decoration: it is clickable, and on a phone it is
+                        // the only way to spend a point.
+                        let badge = Hud::upgrade_rect(view);
+                        context.set_fill_style_str("#238636");
+                        context.fill_rect(
+                            badge.x as f64,
+                            badge.y as f64,
+                            badge.w as f64,
+                            badge.h as f64,
+                        );
+                        context.set_fill_style_str("#f0f6fc");
+                        context.set_font("bold 13px monospace");
+                        let _ = context.fill_text(
+                            "+",
+                            (badge.x + badge.w / 2.0 - 4.0) as f64,
+                            (badge.y + badge.h / 2.0 + 5.0) as f64,
+                        );
+                    }
+                }
             }
         }
     }
@@ -931,6 +1218,21 @@ fn draw(
     }
 
     if let Some(own) = state.buffer.own() {
+        if own.skill_points > 0 {
+            context.set_fill_style_str("#56d364");
+            context.set_font("bold 14px monospace");
+            let _ = context.fill_text(
+                &format!(
+                    "{} skill point(s) — shift+Q/E/R/F, or click the green +",
+                    own.skill_points
+                ),
+                12.0,
+                h - 118.0,
+            );
+            context.set_fill_style_str("#c9d1d9");
+            context.set_font("14px monospace");
+        }
+
         let line = format!(
             "lvl {}   gold {}   mana {}/{}",
             own.level,

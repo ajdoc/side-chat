@@ -53,6 +53,18 @@ fn creep(sim: &mut Sim, team: Team, pos: Vec2) -> EntityId {
     id
 }
 
+/// A hero with its abilities actually learned.
+///
+/// Skill points mean an ability starts at rank zero and cannot be cast — see `ranks.rs`, which
+/// is the test for that rule. Tests about items and gold are not, so they level past it.
+fn ready(sim: &mut Sim, hero: EntityId) {
+    sim.entities.get_mut(hero).unwrap().xp =
+        moba_sim::level::xp_for_level(moba_sim::level::ULTIMATE_LEVEL);
+    for slot in 0..4 {
+        let _ = sim.learn(hero, slot);
+    }
+}
+
 fn give(sim: &mut Sim, hero: EntityId, amount: i32) {
     sim.entities.get_mut(hero).unwrap().gold = Fx::from_int(amount);
 }
@@ -82,7 +94,9 @@ fn settle(sim: &mut Sim) {
 fn the_last_hit_takes_the_gold_and_the_hits_before_it_take_nothing() {
     let mut sim = arena();
     let killer = sim.spawn_named_hero(Team::Blue, heroes::ironclad());
+    ready(&mut sim, killer);
     let helper = sim.spawn_named_hero(Team::Blue, heroes::emberwitch());
+    ready(&mut sim, helper);
     let victim = creep(&mut sim, Team::Red, at(0, 0));
 
     // The helper does almost all the damage; the killer lands the blow that finishes it. In a
@@ -117,7 +131,9 @@ fn the_last_hit_takes_the_gold_and_the_hits_before_it_take_nothing() {
 fn killing_your_own_creep_denies_the_gold_to_everyone() {
     let mut sim = arena();
     let enemy = sim.spawn_named_hero(Team::Red, heroes::ironclad());
+    ready(&mut sim, enemy);
     let denier = sim.spawn_named_hero(Team::Blue, heroes::emberwitch());
+    ready(&mut sim, denier);
     let victim = creep(&mut sim, Team::Blue, at(0, 0));
 
     let mut events = Vec::new();
@@ -153,10 +169,12 @@ fn killing_your_own_creep_denies_the_gold_to_everyone() {
 fn a_creep_landing_the_last_hit_pays_nobody() {
     let mut sim = arena();
     let hero = sim.spawn_named_hero(Team::Blue, heroes::ironclad());
+    ready(&mut sim, hero);
     let lane_creep = creep(&mut sim, Team::Blue, at(0, 0));
     let victim = creep(&mut sim, Team::Red, at(50, 0));
 
     let control = sim.spawn_named_hero(Team::Blue, heroes::emberwitch());
+    ready(&mut sim, control);
     let mut events = Vec::new();
     sim.deal_damage(
         Some(hero),
@@ -184,6 +202,7 @@ fn a_creep_landing_the_last_hit_pays_nobody() {
 fn passive_income_accrues_every_second() {
     let mut sim = arena();
     let hero = sim.spawn_named_hero(Team::Blue, heroes::ironclad());
+    ready(&mut sim, hero);
     assert_eq!(gold(&sim, hero), STARTING_GOLD);
 
     for _ in 0..TICK_HZ * 10 {
@@ -203,7 +222,9 @@ fn ledger_pays_extra_per_creep_and_only_per_creep() {
     let take = |with_ledger: bool| {
         let mut sim = arena();
         let hero = sim.spawn_named_hero(Team::Blue, heroes::ironclad());
+        ready(&mut sim, hero);
         let control = sim.spawn_named_hero(Team::Blue, heroes::emberwitch());
+        ready(&mut sim, control);
         if with_ledger {
             give(&mut sim, hero, 5000);
             sim.buy(hero, items::LEDGER).expect("could not buy Ledger");
@@ -233,6 +254,7 @@ fn ledger_pays_extra_per_creep_and_only_per_creep() {
 fn firewall_occupies_an_item_slot_and_is_cast_like_any_other_ability() {
     let mut sim = arena();
     let hero = sim.spawn_named_hero(Team::Blue, heroes::ironclad());
+    ready(&mut sim, hero);
     give(&mut sim, hero, 5000);
 
     let slot = sim
@@ -275,16 +297,19 @@ fn firewall_occupies_an_item_slot_and_is_cast_like_any_other_ability() {
 fn broadcast_regenerates_allies_in_range_and_stops_when_they_leave() {
     let mut sim = arena();
     let holder = sim.spawn_named_hero(Team::Blue, heroes::ironclad());
+    ready(&mut sim, holder);
     place(&mut sim, holder, at(0, 0));
     give(&mut sim, holder, 5000);
     sim.buy(holder, items::BROADCAST)
         .expect("could not buy Broadcast");
 
     let ally = sim.spawn_named_hero(Team::Blue, heroes::emberwitch());
+    ready(&mut sim, ally);
     place(&mut sim, ally, at(300, 0));
     sim.entities.get_mut(ally).unwrap().hp = Fx::from_int(100);
 
     let enemy = sim.spawn_named_hero(Team::Red, heroes::emberwitch());
+    ready(&mut sim, enemy);
     place(&mut sim, enemy, at(300, 0));
     sim.entities.get_mut(enemy).unwrap().hp = Fx::from_int(100);
 
@@ -323,12 +348,14 @@ fn broadcast_regenerates_allies_in_range_and_stops_when_they_leave() {
 fn null_pointer_attaches_healing_reduction_to_whoever_an_ability_hits() {
     let mut sim = arena();
     let witch = sim.spawn_named_hero(Team::Blue, heroes::emberwitch());
+    ready(&mut sim, witch);
     place(&mut sim, witch, at(0, 0));
     give(&mut sim, witch, 5000);
     sim.buy(witch, items::NULL_POINTER)
         .expect("could not buy Null Pointer");
 
     let victim = sim.spawn_named_hero(Team::Red, heroes::ironclad());
+    ready(&mut sim, victim);
     place(&mut sim, victim, at(150, 0));
 
     sim.step(&[Command::CastAbility {
@@ -353,6 +380,7 @@ fn ability_power_scales_magical_damage_but_not_pure() {
     let cinder_damage = |with_item: bool| {
         let mut sim = arena();
         let witch = sim.spawn_named_hero(Team::Blue, heroes::emberwitch());
+        ready(&mut sim, witch);
         place(&mut sim, witch, at(0, 0));
         if with_item {
             give(&mut sim, witch, 5000);
@@ -391,6 +419,7 @@ fn ability_power_scales_magical_damage_but_not_pure() {
 fn a_refused_purchase_says_why() {
     let mut sim = arena();
     let hero = sim.spawn_named_hero(Team::Blue, heroes::ironclad());
+    ready(&mut sim, hero);
 
     give(&mut sim, hero, 10);
     assert_eq!(
@@ -424,6 +453,7 @@ fn a_refused_purchase_says_why() {
 fn buying_max_health_grants_the_health_rather_than_a_smaller_fraction_of_a_bigger_bar() {
     let mut sim = arena();
     let hero = sim.spawn_named_hero(Team::Blue, heroes::ironclad());
+    ready(&mut sim, hero);
     give(&mut sim, hero, 5000);
 
     let before = sim.entities.get(hero).unwrap().hp;
@@ -442,6 +472,7 @@ fn two_items_granting_armour_do_not_overwrite_each_other() {
     // armour item bought would silently replace the first.
     let mut sim = arena();
     let hero = sim.spawn_named_hero(Team::Blue, heroes::ironclad());
+    ready(&mut sim, hero);
     give(&mut sim, hero, 20_000);
 
     let base = sim
@@ -484,6 +515,7 @@ fn two_items_granting_armour_do_not_overwrite_each_other() {
 fn gold_is_not_paid_twice_for_one_death() {
     let mut sim = arena();
     let hero = sim.spawn_named_hero(Team::Blue, heroes::ironclad());
+    ready(&mut sim, hero);
     let victim = creep(&mut sim, Team::Red, at(0, 0));
 
     let mut events = Vec::new();
@@ -512,6 +544,7 @@ fn an_unspent_modifier_source_survives_a_stun() {
     // list, so a stun landing must not disturb what an item contributed.
     let mut sim = arena();
     let hero = sim.spawn_named_hero(Team::Blue, heroes::ironclad());
+    ready(&mut sim, hero);
     give(&mut sim, hero, 5000);
     sim.buy(hero, items::BOOTSTRAP).unwrap();
 

@@ -148,13 +148,25 @@ impl Sim {
     /// Abilities scale with level rather than with a chosen rank — the simplification `level.rs`
     /// explains. Returns a multiplier, so a level-one hero is unaffected.
     fn level_scale(&self, caster: EntityId) -> Fx {
-        let level = self
+        let Some(hero) = self
             .entities
             .get(caster)
             .filter(|e| e.kind == EntityKind::Hero)
-            .map(|e| e.level())
+        else {
+            // Creeps and towers have no ranks and no levels; their effects are simply printed.
+            return Fx::ONE;
+        };
+        let drift = Fx::ONE + crate::level::bonus_for(hero.level()).ability_scale;
+
+        // The rank of whatever is currently being cast. Read from the cast in progress rather
+        // than passed down, because an effect does not otherwise know which slot summoned it —
+        // and a rank that only applied to *some* of an ability's effects would be a bug nobody
+        // would spot for months.
+        let rank = hero
+            .casting
+            .map(|c| hero.abilities.state[c.slot].rank)
             .unwrap_or(1);
-        Fx::ONE + crate::level::bonus_for(level).ability_scale
+        crate::level::ranks::scale(rank.max(1)) * drift
     }
 
     /// Attempt a cast, in the order a player would expect to be told about a refusal.
@@ -185,12 +197,16 @@ impl Sim {
             return Err(CastRefusal::AlreadyCasting);
         }
 
-        // The ultimate is locked until level six. The one rank rule in the game — `level.rs`
-        // explains why choosing *which* ability to raise is deliberately absent, and why this
-        // one is not: an ultimate available at minute zero is a different game.
-        if slot == crate::level::ULTIMATE_SLOT
-            && entity.kind == EntityKind::Hero
-            && entity.level() < crate::level::ULTIMATE_LEVEL
+        // Rank zero is unlearned. This replaces the old flat "ultimates unlock at six" check —
+        // the ultimate is still gated to six, but by its rank cap rather than by a special case,
+        // so every hero ability answers the same question the same way.
+        //
+        // **Hero slots only.** An item's active is granted by owning the item, not by spending a
+        // skill point, and gating it on a rank it can never have gives you a button that will
+        // never fire.
+        if entity.kind == EntityKind::Hero
+            && slot < crate::ability::HERO_SLOTS
+            && entity.abilities.state[slot].rank == 0
         {
             return Err(CastRefusal::NotLearned);
         }

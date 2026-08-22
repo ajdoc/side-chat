@@ -49,7 +49,13 @@ pub struct Hud {
     pub touch_sized: bool,
 }
 
-const LABELS: [&str; SLOT_COUNT] = ["Q", "W", "E", "R", "1", "2", "3", "4", "5", "6"];
+/// The key each slot answers to.
+///
+/// **Q E R F, not Q W E R.** W is a movement key the moment WASD exists, and A, S and D go with
+/// it — so the abilities move to the four keys nearest WASD that WASD does not use, which is what
+/// every game in the genre offering keyboard movement settles on. Must match
+/// `input::slot_for_key`, and a test walks the pair.
+const LABELS: [&str; SLOT_COUNT] = ["Q", "E", "R", "F", "1", "2", "3", "4", "5", "6"];
 
 impl Hud {
     /// Lay the bar out along the bottom of the viewport.
@@ -122,6 +128,33 @@ impl Hud {
         self.slots
             .iter()
             .find(|s| s.rect.contains(x, y))
+            .map(|s| s.slot)
+    }
+
+    /// The small square in a button's top-right corner that spends a skill point.
+    ///
+    /// Its own hit region rather than "clicking the button levels it", because a click on an
+    /// ability already means *arm it* — and a gesture that sometimes casts and sometimes spends
+    /// an unspendable-back skill point is a gesture nobody can use confidently.
+    pub fn upgrade_rect(slot: &SlotView) -> Rect {
+        // Sized against the button so it stays tappable on a phone, where the whole bar grows.
+        let size = (slot.rect.w * 0.42).max(14.0);
+        Rect {
+            x: slot.rect.x + slot.rect.w - size,
+            y: slot.rect.y,
+            w: size,
+            h: size,
+        }
+    }
+
+    /// Which ability's upgrade badge a point is inside, if any.
+    ///
+    /// Hero slots only — an item has no rank to raise.
+    pub fn hit_upgrade(&self, x: f32, y: f32) -> Option<u8> {
+        self.slots
+            .iter()
+            .filter(|s| (s.slot as usize) < 4)
+            .find(|s| Hud::upgrade_rect(s).contains(x, y))
             .map(|s| s.slot)
     }
 

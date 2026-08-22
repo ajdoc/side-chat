@@ -45,6 +45,11 @@ pub enum Command {
         hero: EntityId,
         pos: Vec2,
     },
+    /// Walk this way until told otherwise. A zero vector stops.
+    MoveDirection {
+        hero: EntityId,
+        dir: Vec2,
+    },
     Attack {
         hero: EntityId,
         target: EntityId,
@@ -62,6 +67,11 @@ pub enum Command {
     BuyItem {
         hero: EntityId,
         item: crate::item::ItemId,
+    },
+    /// Spend a skill point on one ability.
+    LearnAbility {
+        hero: EntityId,
+        slot: usize,
     },
 }
 
@@ -308,6 +318,44 @@ impl Sim {
                 e.position_history.clear();
             }
         }
+    }
+
+    /// Spend a skill point on an ability.
+    ///
+    /// Refused rather than clamped when there is nothing to spend or the rank is capped: a
+    /// player who presses the button twice should be told the second press did nothing, not left
+    /// wondering whether the point went somewhere.
+    pub fn learn(
+        &mut self,
+        hero: EntityId,
+        slot: usize,
+    ) -> Result<(), crate::ability::CastRefusal> {
+        use crate::ability::CastRefusal;
+        use crate::level::ranks;
+
+        let Some(entity) = self.entities.get(hero) else {
+            return Err(CastRefusal::NoSuchAbility);
+        };
+        if entity.kind != EntityKind::Hero || slot >= crate::ability::HERO_SLOTS {
+            return Err(CastRefusal::NoSuchAbility);
+        }
+        if entity.abilities.id(slot).is_none() {
+            return Err(CastRefusal::NoSuchAbility);
+        }
+
+        let level = entity.level();
+        if entity.abilities.unspent_points(level) == 0 {
+            return Err(CastRefusal::NotLearned);
+        }
+        let current = entity.abilities.state[slot].rank;
+        if current >= ranks::cap(slot, level) {
+            return Err(CastRefusal::NotLearned);
+        }
+
+        if let Some(e) = self.entities.get_mut(hero) {
+            e.abilities.state[slot].rank = current + 1;
+        }
+        Ok(())
     }
 
     /// Whether this entity may be attacked at all.
@@ -597,6 +645,18 @@ impl Sim {
     fn apply_commands(&mut self, commands: &[Command], events: &mut Vec<Event>) {
         for command in commands {
             match *command {
+                Command::MoveDirection { hero, dir } => {
+                    if let Some(e) = self.entities.get_mut(hero) {
+                        // A Taunt still overrides it, exactly as it overrides a click.
+                        if !matches!(e.order, Order::Forced { .. }) {
+                            e.order = if dir == Vec2::ZERO {
+                                Order::Idle
+                            } else {
+                                Order::MoveDirection(dir.normalized())
+                            };
+                        }
+                    }
+                }
                 Command::MoveTo { hero, pos } => {
                     if let Some(e) = self.entities.get_mut(hero) {
                         // A player order cannot override a Taunt. Ironclad's E is meaningless if
@@ -618,6 +678,15 @@ impl Sim {
                         if !matches!(e.order, Order::Forced { .. }) {
                             e.order = Order::Idle;
                         }
+                    }
+                }
+                Command::LearnAbility { hero, slot } => {
+                    if let Err(reason) = self.learn(hero, slot) {
+                        events.push(Event::CastRefused {
+                            entity: hero,
+                            slot,
+                            reason,
+                        });
                     }
                 }
                 Command::BuyItem { hero, item } => {
@@ -771,6 +840,10 @@ impl Sim {
 
             let (destination, advance_leg) = match e.order {
                 Order::MoveTo(pos) => (Some(pos), false),
+                // One step's worth ahead, recomputed every tick. The hero never "arrives", which
+                // is the point — the order ends when the player lets go, not when a destination
+                // is reached.
+                Order::MoveDirection(dir) => (Some(e.pos + dir.scale(Fx::from_int(200))), false),
                 Order::Attack(target) | Order::Forced { target, .. } => {
                     // Walk toward the target only until in range; then stand and swing.
                     match self.entities.get(target) {

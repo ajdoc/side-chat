@@ -102,6 +102,19 @@ impl Input {
         }
     }
 
+    /// Spend a skill point on an ability.
+    ///
+    /// A separate gesture from casting it — held modifier plus the key, the genre's convention —
+    /// because the two are pressed in the same breath during a fight and a misfire in either
+    /// direction is expensive: levelling the wrong ability cannot be undone, and casting when
+    /// you meant to level wastes a cooldown.
+    pub fn learn(&mut self, slot: u8) -> ClientMessage {
+        // Learning cancels an armed ability. A player reaching for the modifier has changed
+        // their mind about casting.
+        self.armed = Armed::None;
+        ClientMessage::Learn { slot }
+    }
+
     /// `S` — stop. Also clears an armed ability, because a player pressing stop means it.
     pub fn stop(&mut self) -> ClientMessage {
         self.armed = Armed::None;
@@ -149,13 +162,21 @@ impl Input {
     }
 }
 
-/// Which slot a key maps to. `Q W E R` are the hero's four; `1`–`6` are the inventory.
+/// Which slot a key maps to.
+///
+/// ## Why not Q W E R
+///
+/// W is a movement key the moment WASD exists, and A, S and D are gone with it. Every game in
+/// the genre that offers keyboard movement moves its abilities off the home row for exactly this
+/// reason, and lands on **Q E R F** — the four keys nearest WASD that WASD does not use.
+///
+/// The inventory keeps `1`–`6`, which never conflicted.
 pub fn slot_for_key(key: &str) -> Option<u8> {
     Some(match key {
         "q" | "Q" => 0,
-        "w" | "W" => 1,
-        "e" | "E" => 2,
-        "r" | "R" => 3,
+        "e" | "E" => 1,
+        "r" | "R" => 2,
+        "f" | "F" => 3,
         "1" => 4,
         "2" => 5,
         "3" => 6,
@@ -164,4 +185,76 @@ pub fn slot_for_key(key: &str) -> Option<u8> {
         "6" => 9,
         _ => return None,
     })
+}
+
+/// Which way a movement key points, if it is one.
+///
+/// Arrows alongside WASD because they cost nothing and someone will reach for them — and on a
+/// keyboard laid out for another language, WASD is not always where W A S D are.
+///
+/// Y grows downward, matching the world's axes and the canvas's, so "up" is negative.
+pub fn direction_for_key(key: &str) -> Option<(f32, f32)> {
+    Some(match key {
+        "w" | "W" | "ArrowUp" => (0.0, -1.0),
+        "s" | "S" | "ArrowDown" => (0.0, 1.0),
+        "a" | "A" | "ArrowLeft" => (-1.0, 0.0),
+        "d" | "D" | "ArrowRight" => (1.0, 0.0),
+        _ => return None,
+    })
+}
+
+/// The keys currently held, and the direction they add up to.
+///
+/// Held as a set rather than a single "last pressed" direction, because diagonals are the whole
+/// point: W and D together must mean north-east, not whichever was pressed second.
+#[derive(Default)]
+pub struct HeldKeys {
+    keys: Vec<String>,
+}
+
+impl HeldKeys {
+    /// Record a key going down. Returns whether the direction changed.
+    pub fn press(&mut self, key: &str) -> bool {
+        if direction_for_key(key).is_none() || self.keys.iter().any(|k| k == key) {
+            return false;
+        }
+        self.keys.push(key.to_string());
+        true
+    }
+
+    /// Record a key coming up. Returns whether the direction changed.
+    pub fn release(&mut self, key: &str) -> bool {
+        let before = self.keys.len();
+        self.keys.retain(|k| k != key);
+        self.keys.len() != before
+    }
+
+    /// Everything let go at once — used when the window loses focus, which otherwise leaves a
+    /// hero walking into the fog because the key-up never arrived.
+    pub fn clear(&mut self) -> bool {
+        let had = !self.keys.is_empty();
+        self.keys.clear();
+        had
+    }
+
+    /// The unit vector the held keys add up to, or zero for none.
+    pub fn direction(&self) -> (f32, f32) {
+        let (mut x, mut y) = (0.0f32, 0.0f32);
+        for key in &self.keys {
+            if let Some((dx, dy)) = direction_for_key(key) {
+                x += dx;
+                y += dy;
+            }
+        }
+        // Opposite keys cancel, which is what a player holding both means.
+        let length = (x * x + y * y).sqrt();
+        if length < 0.001 {
+            return (0.0, 0.0);
+        }
+        (x / length, y / length)
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.keys.is_empty()
+    }
 }

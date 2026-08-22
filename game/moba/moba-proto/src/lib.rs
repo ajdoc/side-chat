@@ -19,7 +19,7 @@ use serde::{Deserialize, Serialize};
 /// The server rejects a client that does not match. A stale wasm bundle in somebody's cache is
 /// otherwise indistinguishable from a desync bug, and one of those is an evening of debugging
 /// while the other is a hard refresh.
-pub const PROTOCOL_VERSION: u32 = 8;
+pub const PROTOCOL_VERSION: u32 = 10;
 
 /// Ticks per second. Fixed, and shared by every crate, because a sim step is only meaningful
 /// against a known step duration.
@@ -90,6 +90,13 @@ pub struct NetSelf {
     pub abilities: Vec<u16>,
     /// How each slot is aimed, parallel to `abilities`.
     pub targeting: Vec<NetTargeting>,
+    /// The rank of each slot; zero means unlearned and uncastable.
+    pub ranks: Vec<u8>,
+    /// The highest rank each slot may currently be raised to, so the client can grey out a
+    /// button that has nothing to spend a point on.
+    pub rank_caps: Vec<u8>,
+    /// Points earned and not yet spent.
+    pub skill_points: u32,
     pub items: Vec<u16>,
     pub level: u32,
     /// Experience into the current level, and what the next one costs. Two numbers rather than a
@@ -221,6 +228,14 @@ pub enum ClientMessage {
         x: i32,
         y: i32,
     },
+    /// Walk this way until told otherwise. `Q16.16`, and a zero vector stops.
+    ///
+    /// Sent when the held keys *change*, not every frame — the sim keeps walking on its own, so
+    /// a key held for ten seconds is two messages rather than six hundred.
+    MoveDir {
+        dx: i32,
+        dy: i32,
+    },
     Attack {
         target: NetId,
     },
@@ -232,6 +247,10 @@ pub enum ClientMessage {
         item: u16,
     },
     Stop,
+    /// Spend a skill point on one ability.
+    Learn {
+        slot: u8,
+    },
     /// Round-trip probe. The server echoes the payload back untouched.
     Ping {
         nonce: u32,

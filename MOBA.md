@@ -335,7 +335,18 @@ evening of chasing a desync that was never in the code.
 
    **No art yet.** Everything renders as coloured discs. The sprite work described above is a
    separate and much larger job, and it should not start until the mechanics have been played.
-4. **PHP.** Queue, match tickets, results, MMR, `MobaApp.vue`. Last on purpose — it is the
-   best-understood part and the least likely to surprise anyone. Not started.
+4. **PHP.** ✅ Queue, match tickets, results, MMR, `MobaApp.vue`. The two halves meet exactly
+   twice, both signed and both one-way: a ticket lets a player in, a result comes back out.
+   Verified end to end — PHP forms a roster, mints a ticket the Rust server accepts and seats by
+   slot, and the server reports a result PHP records and rates. `tests/report.rs` covers the
+   second crossing and skips loudly when there is no API to talk to.
+
+5. **Depth.** 🔨 Skill points are in: a level grants a point, a point raises one ability, and an
+   ability at rank zero cannot be cast at all. Basics cap at every other level so a hero cannot
+   max one before leaving lane; the ultimate follows the genre's 6/11/16. That replaced the flat
+   "ultimates unlock at six" special case — every hero ability now answers the same question the
+   same way, and item actives are exempt because owning the item is what grants them.
+
+   Still to come: spectating, replays, and a proper post-game screen.
 
 Hosting is deliberately undecided; see the crate layout for why it can afford to be.

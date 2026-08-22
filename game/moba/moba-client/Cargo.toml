@@ -21,5 +21,6 @@ version = "0.3"
 features = [
   "Window", "Document", "Element", "HtmlCanvasElement", "CanvasRenderingContext2d",
   "WebSocket", "MessageEvent", "Event", "MouseEvent", "KeyboardEvent", "BinaryType",
+  "WheelEvent",
   "Performance", "CssStyleDeclaration", "DomRect", "TouchEvent", "TouchList", "Touch",
 ]

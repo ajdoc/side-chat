@@ -41,6 +41,24 @@ impl Camera {
         )
     }
 
+    /// How far out and how far in the wheel may go.
+    ///
+    /// Out far enough to see a whole lane and the fight at the end of it; in far enough to pick
+    /// one creep out of a wave. Beyond either end the game stops being playable rather than
+    /// becoming more so — zoomed fully out a hero is three pixels, and fully in you cannot see
+    /// what is walking at you.
+    pub const MIN_ZOOM: f32 = 0.18;
+    pub const MAX_ZOOM: f32 = 1.4;
+
+    /// Zoom by a wheel notch. Positive zooms in.
+    ///
+    /// Multiplicative rather than additive, so a notch feels the same at every distance — adding
+    /// a fixed amount makes the last notch out enormous and the last notch in imperceptible.
+    pub fn zoom_by(&mut self, notches: f32) {
+        let factor = 1.15f32.powf(notches);
+        self.zoom = (self.zoom * factor).clamp(Self::MIN_ZOOM, Self::MAX_ZOOM);
+    }
+
     /// Follow a target, easing rather than snapping.
     ///
     /// A camera locked exactly to the hero transfers every interpolation wobble in the hero's

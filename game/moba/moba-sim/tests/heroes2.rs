@@ -56,6 +56,20 @@ fn with_ultimate(sim: &mut Sim, hero: EntityId) {
         moba_sim::level::xp_for_level(moba_sim::level::ULTIMATE_LEVEL);
 }
 
+/// A hero with its abilities actually learned.
+///
+/// Skill points mean an ability starts at rank zero and cannot be cast at all. A test about what
+/// an ability *does* is not a test about that rule — `ranks.rs` covers it — so this levels to six
+/// and spends a point on each of the four, which is what any player would have done by the time
+/// the ability under test matters.
+fn ready(sim: &mut Sim, hero: EntityId) {
+    sim.entities.get_mut(hero).unwrap().xp =
+        moba_sim::level::xp_for_level(moba_sim::level::ULTIMATE_LEVEL);
+    for slot in 0..4 {
+        let _ = sim.learn(hero, slot);
+    }
+}
+
 fn cast(sim: &mut Sim, hero: EntityId, slot: usize, target: Target) {
     sim.step(&[Command::CastAbility { hero, slot, target }]);
 }
@@ -74,11 +88,14 @@ fn drop_the_beat_buffs_whoever_is_standing_near_him_not_whoever_he_clicked() {
     // hero.
     let mut sim = arena();
     let jukebox = sim.spawn_named_hero(Team::Blue, heroes::jukebox());
+    ready(&mut sim, jukebox);
     place(&mut sim, jukebox, at(1000, 1000));
 
     let near = sim.spawn_named_hero(Team::Blue, heroes::ironclad());
+    ready(&mut sim, near);
     place(&mut sim, near, at(1300, 1000));
     let far = sim.spawn_named_hero(Team::Blue, heroes::ironclad());
+    ready(&mut sim, far);
     place(&mut sim, far, at(5000, 5000));
 
     let base = sim
@@ -117,8 +134,10 @@ fn requiem_heals_over_time_and_pays_out_to_jukebox_if_the_target_dies() {
     // the ability unusable at exactly the moment it is most wanted.
     let mut sim = arena();
     let jukebox = sim.spawn_named_hero(Team::Blue, heroes::jukebox());
+    ready(&mut sim, jukebox);
     place(&mut sim, jukebox, at(1000, 1000));
     let ally = sim.spawn_named_hero(Team::Blue, heroes::ironclad());
+    ready(&mut sim, ally);
     place(&mut sim, ally, at(1200, 1000));
     sim.entities.get_mut(ally).unwrap().hp = Fx::from_int(300);
     sim.entities.get_mut(jukebox).unwrap().hp = Fx::from_int(200);
@@ -144,8 +163,10 @@ fn feedback_silences_without_stopping_movement_or_attacks() {
     // make Jukebox a hard-crowd-control hero, which is not what the roster needs him to be.
     let mut sim = arena();
     let jukebox = sim.spawn_named_hero(Team::Blue, heroes::jukebox());
+    ready(&mut sim, jukebox);
     place(&mut sim, jukebox, at(1000, 1000));
     let victim = sim.spawn_named_hero(Team::Red, heroes::ironclad());
+    ready(&mut sim, victim);
     place(&mut sim, victim, at(1200, 1000));
 
     cast(&mut sim, jukebox, 2, Target::Point(at(1200, 1000)));
@@ -168,8 +189,10 @@ fn idle_hides_him_from_the_enemy_snapshot_entirely() {
     // snapshot exactly as one in the fog is, so there is nothing on the client to reveal.
     let mut sim = arena();
     let ghost = sim.spawn_named_hero(Team::Blue, heroes::ghostuser());
+    ready(&mut sim, ghost);
     place(&mut sim, ghost, at(1000, 1000));
     let watcher = sim.spawn_named_hero(Team::Red, heroes::ironclad());
+    ready(&mut sim, watcher);
     place(&mut sim, watcher, at(1100, 1000));
 
     // Visible before.
@@ -193,6 +216,7 @@ fn idle_hides_him_from_the_enemy_snapshot_entirely() {
 fn attacking_breaks_stealth() {
     let mut sim = arena();
     let ghost = sim.spawn_named_hero(Team::Blue, heroes::ghostuser());
+    ready(&mut sim, ghost);
     place(&mut sim, ghost, at(1000, 1000));
     let victim = dummy(&mut sim, Team::Red, at(1080, 1000));
 
@@ -217,6 +241,7 @@ fn backspace_returns_him_to_where_he_stood_three_seconds_ago() {
     // hero, and this is the ability that spends them.
     let mut sim = arena();
     let ghost = sim.spawn_named_hero(Team::Blue, heroes::ghostuser());
+    ready(&mut sim, ghost);
     place(&mut sim, ghost, at(1000, 1000));
     settle(&mut sim, 5);
     let origin = sim.entities.get(ghost).unwrap().pos;
@@ -246,8 +271,10 @@ fn backspace_returns_him_to_where_he_stood_three_seconds_ago() {
 fn ban_takes_someone_off_the_map_and_gives_them_back() {
     let mut sim = arena();
     let ghost = sim.spawn_named_hero(Team::Blue, heroes::ghostuser());
+    ready(&mut sim, ghost);
     place(&mut sim, ghost, at(1000, 1000));
     let victim = sim.spawn_named_hero(Team::Red, heroes::ironclad());
+    ready(&mut sim, victim);
     place(&mut sim, victim, at(1300, 1000));
     with_ultimate(&mut sim, ghost);
 
@@ -285,6 +312,7 @@ fn ban_takes_someone_off_the_map_and_gives_them_back() {
 fn spool_up_ramps_on_one_target_and_resets_when_he_switches() {
     let mut sim = arena();
     let overclock = sim.spawn_named_hero(Team::Blue, heroes::overclock());
+    ready(&mut sim, overclock);
     place(&mut sim, overclock, at(1000, 1000));
     let first = dummy(&mut sim, Team::Red, at(1300, 1000));
     let second = dummy(&mut sim, Team::Red, at(1320, 1000));
@@ -334,6 +362,7 @@ fn vent_strips_slows_but_leaves_a_friendly_haste_alone() {
     // own user — a dispel working against the team that cast it.
     let mut sim = arena();
     let overclock = sim.spawn_named_hero(Team::Blue, heroes::overclock());
+    ready(&mut sim, overclock);
     let tick = sim.tick;
     {
         let e = sim.entities.get_mut(overclock).unwrap();
@@ -381,6 +410,7 @@ fn meltdown_costs_health_rather_than_mana_and_will_not_kill_him() {
     // button, and a player would simply never press it.
     let mut sim = arena();
     let overclock = sim.spawn_named_hero(Team::Blue, heroes::overclock());
+    ready(&mut sim, overclock);
     sim.entities.get_mut(overclock).unwrap().hp = Fx::from_int(120);
     let mana_before = sim.entities.get(overclock).unwrap().mana;
 
@@ -408,6 +438,7 @@ fn deploy_drone_puts_a_unit_on_the_map_that_expires_without_paying_a_bounty() {
     // carry for waiting, which turns Swarm into a gift.
     let mut sim = arena();
     let relay = sim.spawn_named_hero(Team::Blue, heroes::relay());
+    ready(&mut sim, relay);
     place(&mut sim, relay, at(1000, 1000));
 
     let before = sim
@@ -449,8 +480,10 @@ fn deploy_drone_puts_a_unit_on_the_map_that_expires_without_paying_a_bounty() {
 fn link_sends_a_share_of_an_allys_damage_to_relay() {
     let mut sim = arena();
     let relay = sim.spawn_named_hero(Team::Blue, heroes::relay());
+    ready(&mut sim, relay);
     place(&mut sim, relay, at(1000, 1000));
     let ally = sim.spawn_named_hero(Team::Blue, heroes::ironclad());
+    ready(&mut sim, ally);
     place(&mut sim, ally, at(1200, 1000));
 
     cast(&mut sim, relay, 1, Target::Unit(ally));
@@ -485,6 +518,7 @@ fn barrier_blocks_the_ground_and_then_gives_it_back() {
     // itself. A barrier that never lifted would leave the map permanently scarred.
     let mut sim = arena();
     let relay = sim.spawn_named_hero(Team::Blue, heroes::relay());
+    ready(&mut sim, relay);
     place(&mut sim, relay, at(1000, 1000));
     let spot = at(1300, 1000);
 
@@ -504,6 +538,7 @@ fn barrier_blocks_the_ground_and_then_gives_it_back() {
 fn swarm_summons_four_drones_already_tethered() {
     let mut sim = arena();
     let relay = sim.spawn_named_hero(Team::Blue, heroes::relay());
+    ready(&mut sim, relay);
     place(&mut sim, relay, at(1000, 1000));
     with_ultimate(&mut sim, relay);
 

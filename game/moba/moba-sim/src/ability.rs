@@ -286,6 +286,8 @@ pub struct Zone {
 pub struct AbilityState {
     pub cooldown: u32,
     pub toggled_on: bool,
+    /// 0 means unlearned and uncastable. Raised by spending a skill point.
+    pub rank: u8,
 }
 
 /// A hero's castables: four ability slots, then six item slots.
@@ -329,6 +331,16 @@ impl AbilitySlots {
         self.slots.get(slot).copied().flatten()
     }
 
+    /// Points earned but not yet spent.
+    ///
+    /// Derived rather than stored: a level grants a point, so unspent is levels minus ranks. Two
+    /// fields that must agree is two fields that will eventually disagree — the same reasoning
+    /// that keeps `level` derived from experience.
+    pub fn unspent_points(&self, level: u32) -> u32 {
+        let spent: u32 = self.state[..HERO_SLOTS].iter().map(|s| s.rank as u32).sum();
+        level.saturating_sub(spent)
+    }
+
     /// The first free inventory slot, if there is one.
     pub fn free_item_slot(&self) -> Option<usize> {
         (HERO_SLOTS..SLOT_COUNT).find(|slot| self.slots[*slot].is_none())
@@ -348,7 +360,7 @@ impl AbilitySlots {
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum CastRefusal {
     NoSuchAbility,
-    /// The ultimate, before level six.
+    /// Rank zero — no point has been spent on it yet.
     NotLearned,
     OnCooldown,
     NotEnoughMana,

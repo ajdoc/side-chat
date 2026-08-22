@@ -216,6 +216,17 @@ impl Sim {
                 xp_into_level: e.xp.saturating_sub(crate::level::xp_for_level(e.level())),
                 xp_for_next: crate::level::xp_for_level(e.level() + 1)
                     .saturating_sub(crate::level::xp_for_level(e.level())),
+                ranks: e.abilities.state.iter().map(|s| s.rank).collect(),
+                rank_caps: (0..e.abilities.state.len())
+                    .map(|slot| {
+                        if slot < crate::ability::HERO_SLOTS {
+                            crate::level::ranks::cap(slot, e.level())
+                        } else {
+                            0
+                        }
+                    })
+                    .collect(),
+                skill_points: e.abilities.unspent_points(e.level()),
                 attack_range: e.effective_stats(self.tick).attack_range.raw(),
                 respawn_in: e.respawn_at.map_or(0, |at| at.saturating_sub(self.tick)),
             });
