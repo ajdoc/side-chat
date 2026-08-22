@@ -285,6 +285,21 @@ pub struct Entity {
     pub lane_leg: usize,
     /// Which lane this creep is walking. `None` for anything that is not in a lane.
     pub lane: Option<crate::map::LaneId>,
+    /// Which of the catalogue's heroes this is, by position in `heroes::all`. Zero and
+    /// meaningless for anything that is not a hero.
+    ///
+    /// For the renderer alone — nothing in the sim branches on it. A hero is entirely described
+    /// by its stats and its four abilities, and it must stay that way: the day this decides a
+    /// rule is the day two heroes with the same abilities stop behaving the same.
+    pub hero: u8,
+    /// How far back a structure stands: 0 for the outermost tower, 1 for the one behind it.
+    /// Zero and meaningless for everything else.
+    ///
+    /// Kept even though `guarded_by` already encodes the ordering, because the two answer
+    /// different questions: `guarded_by` decides what may be attacked, and this decides what is
+    /// drawn. Deriving the second from the first would tie a silhouette to an invulnerability
+    /// rule, and the day one changes the other would follow it for no reason.
+    pub tier: u8,
     /// Who summoned this, if anyone. Relay's drones — kill credit and the tether follow it.
     pub owner: Option<EntityId>,
     /// The tick a summon disappears on. `None` for anything permanent.
@@ -313,6 +328,11 @@ pub struct Entity {
     pub respawn_at: Option<u32>,
     /// The tick of the last action taken. Ghostuser's Idle reads it, which is why actions have
     /// to be observable as events rather than only as mutations.
+    ///
+    /// The brush reads it too: attacking or casting from cover gives you away for a moment. See
+    /// [`crate::net::REVEAL_TICKS`]. Two rules on one field is a risk worth naming — but the
+    /// alternative was a second field updated at the same two places, which drifts from this one
+    /// the first time somebody adds a third kind of action and only remembers one of them.
     pub last_action_tick: u32,
     /// Structures that must fall before this one can be attacked.
     ///
@@ -365,6 +385,8 @@ impl Entity {
             modifiers: Vec::new(),
             lane_leg: 0,
             lane: None,
+            hero: 0,
+            tier: 0,
             owner: None,
             expires_tick: None,
             position_history: Vec::new(),

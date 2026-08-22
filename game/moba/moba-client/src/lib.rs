@@ -14,6 +14,10 @@
 //!   the world does.
 //! - [`hud`] — the ability bar. A readout on desktop and the *input* on a phone, which is why
 //!   its geometry is computed once here rather than twice.
+//! - [`sprites`] — which picture each unit is drawn with. Cosmetic, and testable, for the same
+//!   reason `terrain` is.
+//! - [`terrain`] — which ground texture belongs where. The art's *rules*, which is why they are
+//!   here and testable rather than buried in the renderer.
 //! - [`web`] — the wasm shim: a canvas, a socket, and a frame loop. Mechanical, and compiled
 //!   only for `wasm32`, which is why `cargo test` on the host exercises everything above it.
 
@@ -24,6 +28,10 @@ pub mod input;
 pub mod interp;
 pub mod minimap;
 pub mod spells;
+pub mod sprites;
+pub mod terrain;
 
+#[cfg(target_arch = "wasm32")]
+pub mod tileset;
 #[cfg(target_arch = "wasm32")]
 pub mod web;

@@ -200,6 +200,10 @@ fn drawn(id: u64, x: f32, y: f32) -> RenderEntity {
         y,
         hp_fraction: 1.0,
         level: 1,
+        variant: 0,
+        facing_x: 0.0,
+        facing_y: -1.0,
+        vision: 1800.0,
     }
 }
 

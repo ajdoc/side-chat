@@ -23,6 +23,8 @@ fn entity(id: u64, x: f32, y: f32) -> NetEntity {
         max_hp: fixed(100.0),
         facing_x: 0,
         facing_y: 0,
+        variant: 0,
+        vision: 1800 * 65536,
         level: 1,
     }
 }

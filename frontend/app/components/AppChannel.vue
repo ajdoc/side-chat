@@ -46,6 +46,16 @@ const app = computed(() => (props.channel.app_id ? deskApp(props.channel.app_id)
  * importer server-side lights this up with no client change.
  */
 const importing = ref(false)
+
+/**
+ * The MOBA is the one app with nothing to import.
+ *
+ * Its storage isn't scoped to the channel — see the dispatcher below — so there is no "another
+ * channel" to bring content from. Offering the button anyway isn't merely useless: it sits in
+ * the same top-right corner as the match's Leave button and, being `z-20`, swallows the click
+ * that gets you out of a match.
+ */
+const canImport = computed(() => props.canEdit && props.channel.app_id !== 'moba')
 </script>
 
 <template>
@@ -60,6 +70,7 @@ const importing = ref(false)
     <ChatTogglePill v-model="chatHidden" />
 
     <AppImportDialog
+      v-if="canImport"
       v-model:open="importing"
       :base-path="basePath"
       :label="app.label"
@@ -68,7 +79,7 @@ const importing = ref(false)
     <!-- Sits beside the chat pill, out of the app's own chrome: every app channel has it, and
          no app should have to make room for it in its own header. -->
     <button
-      v-if="canEdit"
+      v-if="canImport"
       type="button"
       class="absolute right-2 top-2 z-20 flex items-center gap-1 rounded-md border bg-background/80 px-2 py-1 text-xs text-muted-foreground backdrop-blur transition-colors hover:bg-muted hover:text-foreground"
       title="Import this app's content from another channel"

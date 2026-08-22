@@ -297,7 +297,12 @@ moba-client: ## Build the MOBA wasm client, its JS glue, and copy it into the fr
 		game/moba/moba-client/web/pkg/moba_client.d.ts \
 		game/moba/moba-client/web/pkg/moba_client_bg.wasm \
 		frontend/app/lib/moba/
+	@for dir in terrain units heroes; do \
+		mkdir -p frontend/public/moba/$$dir; \
+		cp game/moba/moba-client/assets/$$dir/*.png frontend/public/moba/$$dir/ 2>/dev/null || true; \
+	done
 	@echo "  wasm -> frontend/app/lib/moba/"
+	@echo "  art  -> frontend/public/moba/"
 
 # TEAM_SIZE=1 is a match two browser tabs can play. See MOBA.md.
 TEAM_SIZE ?= 1

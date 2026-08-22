@@ -23,4 +23,8 @@ features = [
   "WebSocket", "MessageEvent", "Event", "MouseEvent", "KeyboardEvent", "BinaryType",
   "WheelEvent",
   "Performance", "CssStyleDeclaration", "DomRect", "TouchEvent", "TouchList", "Touch",
+  # The terrain textures: an image element per tile, and a pattern built from each.
+  "HtmlImageElement", "CanvasPattern", "DomMatrix2dInit",
+  # The fog layer: its own canvas, and a radial gradient per vision source.
+  "CanvasGradient",
 ]

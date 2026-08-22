@@ -259,6 +259,91 @@ impl Terrain {
     }
 }
 
+
+/// The brush: patches you can stand in and not be seen.
+///
+/// ## Why patches and not just cells
+///
+/// The rule players expect is "you can see into brush only from inside *that* brush". A rule of
+/// "from inside any brush" would let a hero in one patch see into another across the map; a rule
+/// of "from an adjacent cell" would make the edge of a patch a different rule from its middle,
+/// which is unreadable in play. So each connected clump of brush cells gets an id, and the check
+/// is whether the watcher stands in the same one.
+///
+/// Ids start at 1. Zero means open ground, which makes "no brush here" the default of an
+/// unwritten cell rather than something to remember to set.
+pub struct Brush {
+    cells_across: usize,
+    cell_size: Fx,
+    /// Row-major patch id per cell. Zero is open ground.
+    patch: Vec<u16>,
+}
+
+impl Brush {
+    pub fn empty(cells_across: usize, world_size: i32) -> Brush {
+        Brush {
+            cells_across,
+            cell_size: Fx::from_int(world_size) / Fx::from_int(cells_across as i32),
+            patch: vec![0; cells_across * cells_across],
+        }
+    }
+
+    fn index(&self, cx: i32, cy: i32) -> Option<usize> {
+        if cx < 0 || cy < 0 || cx >= self.cells_across as i32 || cy >= self.cells_across as i32 {
+            return None;
+        }
+        Some(cy as usize * self.cells_across + cx as usize)
+    }
+
+    /// Mark every cell within `radius` of a point as one patch.
+    ///
+    /// Each call is its own patch, and two calls that touch are *not* merged. That is deliberate:
+    /// a patch is an authored place, and discovering that two of them silently became one because
+    /// their edges met is the kind of surprise that shows up as a vision bug months later.
+    pub fn add_disc(&mut self, centre: Vec2, radius: Fx, id: u16) {
+        let (cx, cy) = (
+            (centre.x / self.cell_size).floor_int(),
+            (centre.y / self.cell_size).floor_int(),
+        );
+        let reach = (radius / self.cell_size).floor_int();
+        for oy in -reach..=reach {
+            for ox in -reach..=reach {
+                if ox * ox + oy * oy > reach * reach {
+                    continue;
+                }
+                if let Some(index) = self.index(cx + ox, cy + oy) {
+                    self.patch[index] = id;
+                }
+            }
+        }
+    }
+
+    /// Which patch a world position stands in. Zero for open ground and for anything off the map.
+    pub fn patch_at(&self, pos: Vec2) -> u16 {
+        let (cx, cy) = (
+            (pos.x / self.cell_size).floor_int(),
+            (pos.y / self.cell_size).floor_int(),
+        );
+        self.index(cx, cy).map_or(0, |index| self.patch[index])
+    }
+
+    /// Every brush cell, as `(cx, cy, patch)`. For drawing it, and for tests.
+    pub fn cells(&self) -> Vec<(u16, u16, u16)> {
+        self.patch
+            .iter()
+            .enumerate()
+            .filter(|(_, patch)| **patch != 0)
+            .map(|(index, patch)| {
+                (
+                    (index % self.cells_across) as u16,
+                    (index / self.cells_across) as u16,
+                    *patch,
+                )
+            })
+            .collect()
+    }
+}
+
 pub struct Map {
     pub size: i32,
     pub lanes: Vec<Lane>,
@@ -267,10 +352,18 @@ pub struct Map {
     pub red_spawn: Vec2,
     pub blue_structures: Vec<StructureSite>,
     pub red_structures: Vec<StructureSite>,
+    pub brush: Brush,
 }
 
 /// The map is this many units square.
 const SIZE: i32 = 6000;
+
+/// How wide a brush patch is.
+///
+/// Big enough that a hero standing in one is genuinely hidden rather than half spilling out of
+/// it, and small enough that walking past one is a decision — a patch you can never avoid
+/// stepping into is not a place, it is a rule about the lane.
+const BRUSH_RADIUS: Fx = Fx::from_int(320);
 
 impl Map {
     /// The real map: three lanes, two towers each, a base a side.
@@ -313,6 +406,27 @@ impl Map {
         terrain.block_rect(at(0, 0), at(120, SIZE - 1));
         terrain.block_rect(at(SIZE - 121, 0), at(SIZE - 1, SIZE - 1));
 
+        // ── Brush ───────────────────────────────────────────────────────────────────────
+        //
+        // Placed beside the lanes rather than in the jungle, because on this map there *is* no
+        // jungle to stand in: the interior is filled solid and only the lanes are carved back
+        // out. So each patch carves its own clearing, positioned to just overlap the lane it
+        // sits beside — a brush you cannot walk into is scenery.
+        //
+        // Authored points are the Blue half; each is mirrored by transposing it. The map is
+        // symmetric under `(x, y) -> (y, x)` — that swap maps each base onto the other and each
+        // lane onto itself — so the transpose *is* the fair mirror, and a patch placed here
+        // cannot be a one-sided advantage.
+        let mut brush = Brush::empty(64, SIZE);
+        let mut patch = 0u16;
+        for (x, y) in [(1150, 3800), (2618, 4018), (2200, 4950)] {
+            for centre in [at(x, y), at(y, x)] {
+                patch += 1;
+                terrain.clear_disc_public(centre, BRUSH_RADIUS);
+                brush.add_disc(centre, BRUSH_RADIUS, patch);
+            }
+        }
+
         let lanes = vec![
             Lane {
                 id: LaneId::Top,
@@ -336,6 +450,7 @@ impl Map {
             red_structures: Map::structures_for(Team::Red, &lanes, red_base),
             lanes,
             terrain,
+            brush,
         }
     }
 
@@ -395,6 +510,7 @@ impl Map {
             size: SIZE,
             lanes: Vec::new(),
             terrain: Terrain::open(64, SIZE),
+            brush: Brush::empty(64, SIZE),
             blue_spawn: at(900, 5100),
             red_spawn: at(5100, 900),
             blue_structures: Vec::new(),
@@ -419,6 +535,10 @@ impl Map {
 
         Map {
             size: SIZE,
+            // No brush on the one-lane map. It exists to test lane mechanics with as little
+            // else in the way as possible, and vision that depends on where you stand is
+            // exactly the kind of "else" it is trying not to have.
+            brush: Brush::empty(64, SIZE),
             blue_spawn: at(900, 5100),
             red_spawn: at(5100, 900),
             blue_structures: vec![

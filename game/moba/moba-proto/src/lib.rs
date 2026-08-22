@@ -19,7 +19,7 @@ use serde::{Deserialize, Serialize};
 /// The server rejects a client that does not match. A stale wasm bundle in somebody's cache is
 /// otherwise indistinguishable from a desync bug, and one of those is an evening of debugging
 /// while the other is a hard refresh.
-pub const PROTOCOL_VERSION: u32 = 10;
+pub const PROTOCOL_VERSION: u32 = 12;
 
 /// Ticks per second. Fixed, and shared by every crate, because a sim step is only meaningful
 /// against a known step duration.
@@ -74,6 +74,21 @@ pub struct NetEntity {
     /// Facing, for the renderer. Derived, not authoritative.
     pub facing_x: i32,
     pub facing_y: i32,
+    /// Which of a kind this is, for the renderer alone: a tower's tier, or 1 for a ranged creep
+    /// and 0 for a melee one. Zero for everything else.
+    ///
+    /// How far this sees, in `Q16.16` world units.
+    ///
+    /// Sent so the client can draw the fog — the lit area is the union of your own team's sight,
+    /// and without the radii the client would have to keep its own copy of them, which is a
+    /// second set of numbers to drift. It reveals nothing: an entity you can see is one you
+    /// already know about, and how far a creep can see is in every guide ever written.
+    pub vision: i32,
+    /// Cosmetic, and deliberately not a second copy of the rules — nothing the client decides
+    /// from this may change what it is allowed to see or do. It exists because a `NetKind` of
+    /// `Tower` is not enough to know which tower to draw, and guessing from max health would
+    /// tie the art to a balance number.
+    pub variant: u8,
 }
 
 /// What only the owning player sees about their own hero.
@@ -273,6 +288,13 @@ pub struct NetMap {
     pub lanes: Vec<Vec<(i32, i32)>>,
     /// How many terrain cells span the map.
     pub cells_across: u16,
+    /// The brush cells, as `(cx, cy, patch)`. Empty on a map with no brush.
+    ///
+    /// The patch id rides along so the client can draw each clump as one shape rather than as
+    /// loose cells. It is not a secret: where the brush *is* is public, permanently, and on
+    /// every map diagram in the genre. Who is standing in it is the secret, and that is decided
+    /// by the snapshot filter, not here.
+    pub brush: Vec<(u16, u16, u16)>,
     /// Only the blocked cells, as `(cx, cy)`. A 64×64 grid is 4096 cells and most of a lane map
     /// is walls, but sending the sparse list still beats a bitmap once the JSON encoding is
     /// accounted for — and it is a single message per match either way.

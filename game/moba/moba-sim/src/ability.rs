@@ -949,6 +949,18 @@ pub mod heroes {
     pub fn all() -> [fn() -> Hero; 6] {
         [ironclad, emberwitch, jukebox, ghostuser, overclock, relay]
     }
+
+    /// Where a hero sits in [`all`], which is the number the client draws it by.
+    ///
+    /// Position in the roster rather than a separate id field, because a second numbering is a
+    /// second thing to keep in step — and this order is already load-bearing: the PHP roster
+    /// mirrors it, and a test walks the pair.
+    pub fn index_of(name: &str) -> u8 {
+        all()
+            .iter()
+            .position(|make| make().name == name)
+            .unwrap_or(0) as u8
+    }
 }
 
 /// The catalogue as a lookup table, indexed by id.

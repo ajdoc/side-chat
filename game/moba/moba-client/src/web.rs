@@ -29,6 +29,20 @@ use crate::input::{slot_for_key, Armed, HeldKeys, Input, MouseButton};
 use crate::interp::{from_fixed, RenderEntity, SnapshotBuffer};
 use crate::minimap::Minimap;
 use crate::spells::{look, short_name, Shape};
+use crate::sprites::{facing_angle, for_entity};
+use crate::terrain::{is_border, Tile, BASE_PLAZA, FOG_ALPHA, FOG_FEATHER};
+use crate::tileset::{SpriteBank, TileSet};
+
+/// Where the terrain textures are served from.
+///
+/// An absolute path rather than one relative to the wasm bundle: the bundle is imported by a
+/// Nuxt page that may be mounted at any route, and a relative URL would resolve against
+/// whichever one the player happened to be on.
+const TERRAIN_BASE: &str = "/moba/terrain";
+
+/// Where the unit art is served from — the parent of `units/` and `heroes/`. See
+/// [`TERRAIN_BASE`].
+const UNIT_BASE: &str = "/moba";
 
 /// Everything the frame loop and the socket callbacks both need.
 struct State {
@@ -62,6 +76,15 @@ struct State {
     wants_reconnect: bool,
     /// Seconds until the next reconnect attempt.
     reconnect_in: f32,
+    /// The ground textures. Starts downloading at construction and is drawable before it
+    /// finishes — every tile falls back to the flat colour the client used before there was
+    /// any art, so a missing or slow file costs looks and never playability.
+    /// Which team this client plays. `None` until the handshake.
+    team: Option<NetTeam>,
+    tiles: TileSet,
+    /// The unit art. Same contract as `tiles`: anything not loaded is drawn as the disc it was
+    /// always drawn as, so the sprites can land one file at a time.
+    sprites: SpriteBank,
 }
 
 #[wasm_bindgen]
@@ -115,6 +138,9 @@ impl MobaGame {
                 give_up: false,
                 wants_reconnect: false,
                 reconnect_in: 0.0,
+                team: None,
+                tiles: TileSet::load(TERRAIN_BASE),
+                sprites: SpriteBank::load(UNIT_BASE),
             })),
         })
     }
@@ -172,8 +198,16 @@ fn open_socket(url: &str, ticket: &str, state: Rc<RefCell<State>>) -> Result<(),
             let mut state = state.borrow_mut();
             match message {
                 ServerMessage::Welcome {
-                    slot, hero_id, map, ..
+                    slot,
+                    hero_id,
+                    map,
+                    team,
+                    ..
                 } => {
+                    // Which side you are on. The fog is the union of *your team's* sight, so the
+                    // renderer needs to know which entities in the snapshot are yours — and a
+                    // snapshot alone does not say, since it contains visible enemies too.
+                    state.team = Some(team);
                     // The map arrives once, at the handshake, and the renderer draws nothing
                     // until it does — deliberately, since the previous client drew a hardcoded
                     // diagonal that merely happened to match the one lane that existed.
@@ -656,6 +690,241 @@ fn to_fixed(v: f32) -> i32 {
     (v * 65536.0) as i32
 }
 
+/// The ground, drawn in world coordinates.
+///
+/// The canvas transform is set to world→screen for the whole of this function rather than each
+/// point being converted by hand. That is not tidiness: a `CanvasPattern` is anchored to the
+/// transform in force when it is filled, so under a screen-space transform every texture would
+/// slide across the ground as the camera moved, and stretch as it zoomed. Under the world
+/// transform the ground stays nailed to the ground, which is the entire point.
+fn draw_terrain(
+    context: &CanvasRenderingContext2d,
+    state: &State,
+    map: &moba_proto::NetMap,
+    w: f64,
+    h: f64,
+) {
+    let camera = &state.camera;
+    let zoom = camera.zoom as f64;
+    let cell = map.size as f32 / map.cells_across.max(1) as f32;
+
+    // The world rectangle the viewport covers, for culling. Cheaper than converting every one of
+    // 4096 cells and asking whether it landed on screen, and it is the same answer.
+    let (left, top) = camera.screen_to_world(0.0, 0.0);
+    let (right, bottom) = camera.screen_to_world(w as f32, h as f32);
+
+    context.save();
+    if context
+        .set_transform(
+            zoom,
+            0.0,
+            0.0,
+            zoom,
+            -camera.x as f64 * zoom + w / 2.0,
+            -camera.y as f64 * zoom + h / 2.0,
+        )
+        .is_err()
+    {
+        context.restore();
+        return;
+    }
+
+    let size = map.size as f64;
+
+    // Open ground under everything, so the gaps between lane and jungle are grass rather than
+    // the void the canvas was cleared to.
+    state.tiles.fill(context, Tile::Grass);
+    context.fill_rect(0.0, 0.0, size, size);
+
+    // The lanes, as one thick stroke along each polyline. The *shape* comes from the waypoints
+    // the server sent, never from the texture — which is why a lane moved in the sim moves here
+    // for free.
+    state.tiles.stroke(context, Tile::Lane);
+    context.set_line_width(420.0);
+    context.set_line_join("round");
+    context.set_line_cap("round");
+    for lane in &map.lanes {
+        context.begin_path();
+        for (index, (x, y)) in lane.iter().enumerate() {
+            let (x, y) = (from_fixed(*x) as f64, from_fixed(*y) as f64);
+            if index == 0 {
+                context.move_to(x, y);
+            } else {
+                context.line_to(x, y);
+            }
+        }
+        context.stroke();
+    }
+
+    // A plaza under each base. Every lane runs from the Blue base to the Red one, so the two
+    // ends of any lane are the two bases — no extra field on the wire to say so.
+    if let Some(lane) = map.lanes.first() {
+        for (point, tile) in [(lane.first(), Tile::BaseBlue), (lane.last(), Tile::BaseRed)] {
+            let Some((x, y)) = point else { continue };
+            let (x, y) = (from_fixed(*x) as f64, from_fixed(*y) as f64);
+            let r = BASE_PLAZA as f64;
+
+            // Clipped to a circle and stamped once, rather than tiled: the plaza texture is a
+            // centred mandala, and repeating it would cut the circle into quarters and scatter
+            // the pieces.
+            context.save();
+            context.begin_path();
+            let _ = context.arc(x, y, r, 0.0, std::f64::consts::TAU);
+            context.clip();
+            match state.tiles.image(tile) {
+                Some(image) => {
+                    let _ = context
+                        .draw_image_with_html_image_element_and_dw_and_dh(
+                            &image,
+                            x - r,
+                            y - r,
+                            r * 2.0,
+                            r * 2.0,
+                        );
+                }
+                None => {
+                    context.set_fill_style_str(tile.fallback());
+                    context.fill_rect(x - r, y - r, r * 2.0, r * 2.0);
+                }
+            }
+            context.restore();
+        }
+    }
+
+    // Brush, over the lanes it overlaps. Drawn from the cells the server sent, like everything
+    // else here — where the brush *is* is public and permanent, and it is only who is standing
+    // in it that the snapshot filter keeps to itself.
+    if !map.brush.is_empty() {
+        state.tiles.fill(context, Tile::Brush);
+        context.set_global_alpha(0.85);
+        context.begin_path();
+        for (cx, cy, _) in &map.brush {
+            let (x, y) = (*cx as f32 * cell, *cy as f32 * cell);
+            if x + cell < left || y + cell < top || x > right || y > bottom {
+                continue;
+            }
+            context.rect(x as f64, y as f64, cell as f64 + 1.0, cell as f64 + 1.0);
+        }
+        context.fill();
+        context.set_global_alpha(1.0);
+    }
+
+    // Terrain last, so it sits over the lane stroke's rounded ends rather than under them.
+    //
+    // Two passes over the blocked cells, one per texture, batched into a single path each:
+    // thousands of individual fills per frame is the kind of thing that quietly costs a third of
+    // the frame budget on a phone.
+    for (tile, want_border) in [(Tile::Jungle, false), (Tile::Cliff, true)] {
+        state.tiles.fill(context, tile);
+        context.begin_path();
+        let mut any = false;
+        for (cx, cy) in &map.blocked {
+            if is_border(*cx, *cy, map.cells_across) != want_border {
+                continue;
+            }
+            let (x, y) = (*cx as f32 * cell, *cy as f32 * cell);
+            if x + cell < left || y + cell < top || x > right || y > bottom {
+                continue;
+            }
+            // A hair over one cell, to close the seams that rounding would otherwise leave
+            // between neighbours.
+            context.rect(x as f64, y as f64, cell as f64 + 1.0, cell as f64 + 1.0);
+            any = true;
+        }
+        if any {
+            context.fill();
+        }
+    }
+
+    context.restore();
+}
+
+/// The fog of war, as the player sees it.
+///
+/// ## This is not the fog of war
+///
+/// The fog that *matters* is in `moba-sim`'s `net.rs`: an enemy outside your team's vision is
+/// not in the bytes the server sent, so there is nothing here to reveal and nothing on a hacked
+/// client to switch off. This function is the picture of that rule, drawn from information the
+/// client already has, and removing it would change how the game looks and not who can see whom.
+///
+/// Which is exactly why it is safe to draw it client-side, and why it must never become the
+/// place the rule lives.
+///
+/// ## Why an offscreen canvas
+///
+/// The lit area is the union of a dozen overlapping circles, and "darken everything except this
+/// union" cannot be drawn directly: painting each circle bright would double-brighten the
+/// overlaps, and cutting holes with `destination-out` on the main canvas would erase the terrain
+/// underneath. So the layer is built on its own canvas — filled solid, holes punched in it — and
+/// composited over the world in one go.
+fn draw_fog(
+    context: &CanvasRenderingContext2d,
+    state: &State,
+    entities: &[RenderEntity],
+    w: f64,
+    h: f64,
+) -> Option<()> {
+    let Some(team) = state.team else {
+        return Some(());
+    };
+    let document = web_sys::window()?.document()?;
+    let layer: HtmlCanvasElement = document.create_element("canvas").ok()?.dyn_into().ok()?;
+    layer.set_width(w as u32);
+    layer.set_height(h as u32);
+    let mask: CanvasRenderingContext2d = layer.get_context("2d").ok()??.dyn_into().ok()?;
+
+    mask.set_fill_style_str("#05070c");
+    mask.fill_rect(0.0, 0.0, w, h);
+
+    // Punch out what your team can see. A radial gradient rather than a flat disc, so the edge
+    // fades instead of reading as a spotlight with a wall around it.
+    mask.set_global_composite_operation("destination-out").ok()?;
+    let mut lit = false;
+    for entity in entities {
+        if entity.team != team || entity.vision <= 0.0 {
+            continue;
+        }
+        let (sx, sy) = state.camera.world_to_screen(entity.x, entity.y);
+        let outer = (entity.vision * state.camera.zoom) as f64;
+        let inner = ((entity.vision - FOG_FEATHER).max(0.0) * state.camera.zoom) as f64;
+        if outer <= 0.5 {
+            continue;
+        }
+        // Off-screen sources still matter: a hero just past the edge lights ground that is on it.
+        if sx as f64 + outer < 0.0
+            || sy as f64 + outer < 0.0
+            || sx as f64 - outer > w
+            || sy as f64 - outer > h
+        {
+            continue;
+        }
+        let gradient = mask
+            .create_radial_gradient(sx as f64, sy as f64, inner, sx as f64, sy as f64, outer)
+            .ok()?;
+        gradient.add_color_stop(0.0, "rgba(0,0,0,1)").ok()?;
+        gradient.add_color_stop(1.0, "rgba(0,0,0,0)").ok()?;
+        mask.set_fill_style_canvas_gradient(&gradient);
+        mask.begin_path();
+        mask.arc(sx as f64, sy as f64, outer, 0.0, TAU).ok()?;
+        mask.fill();
+        lit = true;
+    }
+
+    // Before the first snapshot there are no sources, and a fully dark screen looks like a
+    // crash. Show the map instead and let the fog appear with the first thing that can see.
+    if !lit {
+        return Some(());
+    }
+
+    context.set_global_alpha(FOG_ALPHA as f64);
+    context
+        .draw_image_with_html_canvas_element(&layer, 0.0, 0.0)
+        .ok()?;
+    context.set_global_alpha(1.0);
+    Some(())
+}
+
 /// Placeholder art: coloured discs and health bars.
 ///
 /// Explicitly not the Dota-1-style sprite work MOBA.md describes — that is a separate and much
@@ -678,42 +947,12 @@ fn draw(
     // lane there was; it looked right and was luck, and it would have drawn one stripe through
     // the middle of three lanes without complaining.
     if let Some(map) = &state.map {
-        let cell = map.size as f32 / map.cells_across.max(1) as f32;
-
-        // Terrain first, as one path: thousands of individual fill_rect calls per frame is the
-        // kind of thing that quietly costs a third of the frame budget on a phone.
-        context.set_fill_style_str("#161b23");
-        context.begin_path();
-        for (cx, cy) in &map.blocked {
-            let (sx, sy) = state
-                .camera
-                .world_to_screen(*cx as f32 * cell, *cy as f32 * cell);
-            let size = (cell * state.camera.zoom) as f64;
-            // Skip anything off-screen. At full zoom-out most of the grid is not visible, and
-            // the check is much cheaper than the rect.
-            if sx < -size as f32 || sy < -size as f32 || sx > w as f32 || sy > h as f32 {
-                continue;
-            }
-            // +1 closes the hairline seams between adjacent cells that rounding would leave.
-            context.rect(sx as f64, sy as f64, size + 1.0, size + 1.0);
-        }
-        context.fill();
-
-        context.set_stroke_style_str("#222a35");
-        context.set_line_width((420.0 * state.camera.zoom) as f64);
-        for lane in &map.lanes {
-            context.begin_path();
-            for (index, (x, y)) in lane.iter().enumerate() {
-                let (sx, sy) = state.camera.world_to_screen(from_fixed(*x), from_fixed(*y));
-                if index == 0 {
-                    context.move_to(sx as f64, sy as f64);
-                } else {
-                    context.line_to(sx as f64, sy as f64);
-                }
-            }
-            context.stroke();
-        }
+        draw_terrain(context, state, map, w, h);
     }
+
+    // Over the ground, under the units. Anything the server sent is inside your vision by
+    // definition, so dimming it would only make what you *are* allowed to see harder to read.
+    draw_fog(context, state, entities, w, h);
 
     for entity in entities {
         let (sx, sy) = state.camera.world_to_screen(entity.x, entity.y);
@@ -740,28 +979,85 @@ fn draw(
             continue;
         }
 
-        let colour = match (entity.team, entity.kind) {
-            (NetTeam::Blue, NetKind::Hero) => "#5b9cff",
-            (NetTeam::Blue, _) => "#33608f",
-            (NetTeam::Red, NetKind::Hero) => "#ff6b6b",
-            (NetTeam::Red, _) => "#8f3a3a",
-            (NetTeam::Neutral, _) => "#7a7f8a",
-        };
+        // Art if there is any, and the disc it has always been if not. The fallback is not a
+        // degraded mode to apologise for: it is what keeps a missing or still-downloading file
+        // from costing anyone a playable game, and it is what lets the art arrive a unit at a
+        // time rather than all at once or not at all.
+        let drawn = for_entity(entity.kind, entity.team, entity.variant)
+            .and_then(|sprite| state.sprites.get(sprite).map(|image| (sprite, image)))
+            .map(|(sprite, image)| {
+                // A hero is one drawing for both teams, so the team has to be said some other
+                // way. A ring on the ground under the feet, which is also where the eye already
+                // looks to read who is where in a fight.
+                if sprite.is_hero() {
+                    let ring = match entity.team {
+                        NetTeam::Blue => "#5b9cff",
+                        NetTeam::Red => "#ff6b6b",
+                        NetTeam::Neutral => "#7a7f8a",
+                    };
+                    context.set_stroke_style_str(ring);
+                    context.set_line_width((2.5 * state.camera.zoom as f64).max(1.5));
+                    context.set_global_alpha(0.85);
+                    context.begin_path();
+                    let _ = context.ellipse(
+                        sx as f64,
+                        sy as f64,
+                        radius,
+                        radius * 0.55,
+                        0.0,
+                        0.0,
+                        TAU,
+                    );
+                    context.stroke();
+                    context.set_global_alpha(1.0);
+                }
 
-        context.set_fill_style_str(colour);
-        context.begin_path();
-        let _ = context.arc(
-            sx as f64,
-            sy as f64,
-            radius,
-            0.0,
-            std::f64::consts::PI * 2.0,
-        );
-        context.fill();
+                let width = radius * 2.0 * sprite.scale() as f64;
+                let aspect = image.natural_height() as f64 / image.natural_width().max(1) as f64;
+                let height = width * aspect;
+
+                context.save();
+                let _ = context.translate(sx as f64, sy as f64);
+                if sprite.rotates() {
+                    let _ = context
+                        .rotate(facing_angle(entity.facing_x, entity.facing_y) as f64);
+                }
+                // The anchor is where the *entity* sits inside the picture. A creep is centred
+                // on itself; a tower is not, because it is drawn from slightly in front and
+                // centring it would leave the building standing behind the thing that shoots.
+                let _ = context.draw_image_with_html_image_element_and_dw_and_dh(
+                    image,
+                    -width / 2.0,
+                    -height * sprite.ground_anchor() as f64,
+                    width,
+                    height,
+                );
+                context.restore();
+                true
+            })
+            .unwrap_or(false);
+
+        if !drawn {
+            let colour = match (entity.team, entity.kind) {
+                (NetTeam::Blue, NetKind::Hero) => "#5b9cff",
+                (NetTeam::Blue, _) => "#33608f",
+                (NetTeam::Red, NetKind::Hero) => "#ff6b6b",
+                (NetTeam::Red, _) => "#8f3a3a",
+                (NetTeam::Neutral, _) => "#7a7f8a",
+            };
+            context.set_fill_style_str(colour);
+            context.begin_path();
+            let _ = context.arc(sx as f64, sy as f64, radius, 0.0, TAU);
+            context.fill();
+        }
 
         if Some(entity.id) == state.own_id {
+            // Its own path now, rather than re-stroking whatever was last filled: with a sprite
+            // drawn instead of a disc there is no disc path left to stroke.
             context.set_stroke_style_str("#ffffff");
             context.set_line_width(2.0);
+            context.begin_path();
+            let _ = context.arc(sx as f64, sy as f64, radius, 0.0, TAU);
             context.stroke();
 
             // Your reach, drawn faintly on the ground. Without it there is no way to tell why an

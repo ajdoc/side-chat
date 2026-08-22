@@ -42,6 +42,13 @@ pub struct RenderEntity {
     pub hp_fraction: f32,
     /// Heroes only; zero for everything else.
     pub level: u32,
+    /// Which of a kind this is — a tower's tier, or whether a creep is ranged. Cosmetic.
+    pub variant: u8,
+    /// Where it is pointing, in world units. Not normalised; the renderer only needs the angle.
+    pub facing_x: f32,
+    pub facing_y: f32,
+    /// How far this sees, in world units. Drives the fog, for your own team's entities.
+    pub vision: f32,
 }
 
 /// Convert a `Q16.16` raw integer to world units.
@@ -265,6 +272,10 @@ fn render_one(entity: &NetEntity) -> RenderEntity {
         y: from_fixed(entity.y),
         hp_fraction: hp_fraction(entity),
         level: entity.level,
+        variant: entity.variant,
+        facing_x: from_fixed(entity.facing_x),
+        facing_y: from_fixed(entity.facing_y),
+        vision: from_fixed(entity.vision),
     }
 }
 
@@ -287,5 +298,12 @@ fn lerp_entity(before: &NetEntity, after: &NetEntity, t: f32) -> RenderEntity {
         hp_fraction: lerp(hp_fraction(before), hp_fraction(after)),
         // Not interpolated: a level is a whole number and half a level means nothing.
         level: after.level,
+        variant: after.variant,
+        // Nor is facing. Interpolating a direction linearly is wrong at the wrap — a unit
+        // turning past due north would swing the long way round through every other heading —
+        // and the correct version is a slerp for something nobody can see at forty pixels.
+        facing_x: from_fixed(after.facing_x),
+        facing_y: from_fixed(after.facing_y),
+        vision: from_fixed(after.vision),
     }
 }

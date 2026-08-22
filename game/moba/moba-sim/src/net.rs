@@ -15,12 +15,19 @@
 //! Vision here is a plain radius per entity. Terrain occlusion — high ground, brush, the parts
 //! that make warding interesting — is phase 3, and lands as a change to [`can_see`] alone.
 
-use crate::entity::{Entity, EntityId, EntityKind, Team};
+use crate::entity::{Entity, EntityId, EntityKind, Team, RANGED_THRESHOLD};
 use crate::fixed::Fx;
 use crate::sim::{Event, Sim};
 use moba_proto::{
     NetEntity, NetEvent, NetKind, NetMap, NetRefusal, NetSelf, NetTargeting, NetTeam, Snapshot,
 };
+
+/// How long attacking or casting keeps you visible after doing it from cover.
+///
+/// A second and a half: long enough that a hero who opens from a brush can be found and answered,
+/// short enough that stepping back into cover after a trade is still a real option. See
+/// [`crate::entity::Entity::last_action_tick`].
+pub const REVEAL_TICKS: u32 = moba_proto::TICK_HZ * 3 / 2;
 
 /// How far each kind of thing can see. Wider than its attack range in every case — you should
 /// see the tower that is about to shoot you before it does.
@@ -33,6 +40,18 @@ fn vision_radius(kind: EntityKind) -> Fx {
         // Neither a burning patch of ground nor a bullet is a scout.
         EntityKind::Zone | EntityKind::Projectile => Fx::ZERO,
     }
+}
+
+/// One place a team currently sees from.
+///
+/// A struct rather than the tuple this used to be: with the brush there are three fields, and
+/// `(pos, radius_sq, patch)` at every call site is the kind of thing that gets mis-destructured
+/// once and produces a vision bug nobody can reproduce.
+struct VisionSource {
+    pos: crate::fixed::Vec2,
+    radius_sq: crate::fixed::Sq,
+    /// Which brush patch this source stands in, or zero for open ground.
+    brush: u16,
 }
 
 fn net_team(team: Team) -> NetTeam {
@@ -76,6 +95,7 @@ impl Sim {
                 .collect(),
             cells_across: self.map.terrain.cells_across as u16,
             blocked: self.map.terrain.blocked_cells(),
+            brush: self.map.brush.cells(),
         }
     }
 
@@ -84,13 +104,17 @@ impl Sim {
     /// Collected once per snapshot rather than per candidate: with ~150 entities the naive form
     /// is 150×150 distance checks every snapshot, and this makes it 150×(the team's units),
     /// which at 5v5 is an order of magnitude fewer.
-    fn vision_sources(&self, team: Team) -> Vec<(crate::fixed::Vec2, crate::fixed::Sq)> {
+    fn vision_sources(&self, team: Team) -> Vec<VisionSource> {
         self.entities
             .iter()
             .filter(|(_, e)| e.team == team && e.is_alive())
             .filter_map(|(_, e)| {
                 let radius = vision_radius(e.kind);
-                (radius > Fx::ZERO).then(|| (e.pos, radius.sq()))
+                (radius > Fx::ZERO).then(|| VisionSource {
+                    pos: e.pos,
+                    radius_sq: radius.sq(),
+                    brush: self.map.brush.patch_at(e.pos),
+                })
             })
             .collect()
     }
@@ -99,12 +123,7 @@ impl Sim {
     ///
     /// Your own units are always visible; a Neutral zone is visible to whoever is close enough,
     /// the same as anything else.
-    fn can_see(
-        &self,
-        team: Team,
-        entity: &Entity,
-        sources: &[(crate::fixed::Vec2, crate::fixed::Sq)],
-    ) -> bool {
+    fn can_see(&self, team: Team, entity: &Entity, sources: &[VisionSource]) -> bool {
         if entity.team == team {
             return true;
         }
@@ -125,11 +144,27 @@ impl Sim {
             return true;
         }
 
+        // Standing in brush hides you, but only from watchers outside it — and only while you
+        // are not doing anything. Attacking or casting from cover gives you away, or the brush
+        // would be a place to shoot from rather than a place to hide.
+        let hiding = {
+            let patch = self.map.brush.patch_at(entity.pos);
+            let acted_recently = self.tick < entity.last_action_tick.saturating_add(REVEAL_TICKS)
+                && entity.last_action_tick > 0;
+            (patch != 0 && !acted_recently).then_some(patch)
+        };
+
         // Radius first, then line of sight. The radius check is two multiplies; the grid walk is
         // a loop, and most candidates fail the cheap test.
-        sources.iter().any(|(pos, radius_sq)| {
-            (entity.pos - *pos).len_sq() <= *radius_sq
-                && self.map.terrain.line_is_clear(*pos, entity.pos)
+        sources.iter().any(|source| {
+            // The rule players expect: you see into a brush only from inside that same brush.
+            if let Some(patch) = hiding {
+                if source.brush != patch {
+                    return false;
+                }
+            }
+            (entity.pos - source.pos).len_sq() <= source.radius_sq
+                && self.map.terrain.line_is_clear(source.pos, entity.pos)
         })
     }
 
@@ -178,6 +213,18 @@ impl Sim {
                     },
                     facing_x: facing.x.raw(),
                     facing_y: facing.y.raw(),
+                    vision: vision_radius(e.kind).raw(),
+                    variant: match e.kind {
+                        EntityKind::Hero => e.hero,
+                        EntityKind::Tower | EntityKind::Base => e.tier,
+                        // A creep's silhouette follows its reach, which is the same thing that
+                        // makes it a ranged creep. Read from the base stats rather than the
+                        // effective ones so a buff cannot change what a unit looks like.
+                        EntityKind::Creep => {
+                            u8::from(e.stats.attack_range > Fx::from_int(RANGED_THRESHOLD))
+                        }
+                        _ => 0,
+                    },
                 }
             })
             .collect();
@@ -249,7 +296,7 @@ impl Sim {
         team: Team,
         own: Option<EntityId>,
         events: &[Event],
-        sources: &[(crate::fixed::Vec2, crate::fixed::Sq)],
+        sources: &[VisionSource],
     ) -> Vec<NetEvent> {
         let visible = |id: EntityId| {
             self.entities

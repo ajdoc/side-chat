@@ -212,6 +212,7 @@ impl Sim {
                 let id = entities.spawn(Entity::new(kind, team, site.pos, stats));
                 if let Some(e) = entities.get_mut(id) {
                     e.lane = site.lane;
+                    e.tier = site.tier;
                 }
                 placed.push((id, site.lane, site.tier, site.is_base));
             }
@@ -430,7 +431,12 @@ impl Sim {
 
     /// Put one of the catalogue's heroes on the map.
     pub fn spawn_named_hero(&mut self, team: Team, hero: crate::ability::heroes::Hero) -> EntityId {
-        self.spawn_hero_with(team, hero.stats, hero.mana, hero.abilities)
+        let index = crate::ability::heroes::index_of(hero.name);
+        let id = self.spawn_hero_with(team, hero.stats, hero.mana, hero.abilities);
+        if let Some(e) = self.entities.get_mut(id) {
+            e.hero = index;
+        }
+        id
     }
 
     /// Creeps per wave at this match's size.
