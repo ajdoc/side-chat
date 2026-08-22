@@ -77,8 +77,19 @@ const importing = ref(false)
       <Download class="h-3.5 w-3.5" /> Import
     </button>
 
+    <!--
+      The MOBA takes the channel and nothing else: no base path, because unlike every other app
+      here its storage is not scoped to the channel. A match belongs to the ten people in it and
+      to their ratings; this channel is a lobby to launch one from. See MOBA.md.
+    -->
+    <MobaApp
+      v-if="channel.app_id === 'moba'"
+      :channel="channel"
+      :can-edit="canEdit"
+    />
+
     <TrackerApp
-      v-if="channel.app_id === 'tracker'"
+      v-else-if="channel.app_id === 'tracker'"
       :base-path="basePath"
       :stream-name="streamName"
       :can-edit="canEdit"

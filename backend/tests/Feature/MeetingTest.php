@@ -55,6 +55,91 @@ it('makes the room a Side Space when asked, with a map to stand on', function ()
         ->and($channel->spaceMap()->exists())->toBeTrue();
 });
 
+it('gives a server’s Side Space meeting a map on the discussion people actually open', function () {
+    [$owner, $server] = ownerWithServer();
+    Passport::actingAs($owner);
+
+    $meeting = $this->postJson('/api/meetings', [
+        'title' => 'All hands', 'server_id' => $server->id, 'type' => 'space',
+    ])->assertCreated()->json('data');
+
+    $room = Channel::find($meeting['channel_id']);
+
+    /*
+     * **The room is the General discussion**, not the container.
+     *
+     * That's what the sidebar links to (`resolveDiscussion`) and where every other space
+     * channel's map lives. Pointing the meeting at the container sent people to a channel with
+     * no map — "could not load this space" — and seeding the container instead would have made
+     * this the one Side Space in the app shaped differently from all the others.
+     */
+    expect($room->parent_id)->not->toBeNull()
+        ->and($room->type)->toBe('space')
+        ->and($room->spaceMap()->exists())->toBeTrue()
+        // The room built for meetings, not an empty grid.
+        ->and($room->spaceMap->name)->toBe('Meeting room')
+        // The container stays mapless, exactly like every other space channel's.
+        ->and($room->parent->spaceMap()->exists())->toBeFalse();
+});
+
+it('points a meeting at a room that already exists, creating nothing', function () {
+    [$owner, $server, $room] = ownerWithVoiceChannel();
+    Passport::actingAs($owner);
+
+    // The rooms the dialog offers are the ones the create path accepts — one query, two uses.
+    $offered = $this->getJson('/api/meetings/rooms')->assertOk()->json('data');
+    expect(collect($offered)->pluck('id')->all())->toContain($room->id);
+
+    $meeting = $this->postJson('/api/meetings', [
+        'title' => 'Weekly', 'channel_id' => $room->id, 'starts_at' => now()->addDay()->toIso8601String(),
+    ])->assertCreated()->json('data');
+
+    expect($meeting['channel_id'])->toBe($room->id)
+        ->and(Channel::where('server_id', $server->id)->whereNull('parent_id')->count())->toBe(1)
+        // Scheduling still goes through the calendar, in the room's own.
+        ->and(CalendarEvent::sole()->room_channel_id)->toBe($room->id);
+});
+
+it('tells a member of the server that they can join a room they can see', function () {
+    [$owner, $server, $room] = ownerWithVoiceChannel();
+    $member = User::factory()->create();
+    $server->members()->attach($member->id);
+
+    Passport::actingAs($owner);
+    $meeting = $this->postJson('/api/meetings', ['title' => 'Standup', 'channel_id' => $room->id])
+        ->assertCreated()->json('data');
+
+    Passport::actingAs($member);
+
+    /*
+     * The preview route is public, so no `auth:api` middleware runs on it — and `$request->user()`
+     * then asks the *default* guard (`web`) and answers null however good the token is. Every
+     * signed-in person looked like a stranger, and their own meeting told them it was "in a server
+     * you're not in".
+     */
+    $this->getJson("/api/meetings/{$meeting['token']}")
+        ->assertOk()
+        ->assertJson(['data' => ['member' => true, 'can_join' => true, 'needs' => null]]);
+});
+
+it('says which kind of refusal it is', function () {
+    [$owner, $server] = ownerWithServer();
+    Passport::actingAs($owner);
+
+    $inServer = $this->postJson('/api/meetings', ['title' => 'Board', 'server_id' => $server->id])
+        ->assertCreated()->json('data');
+    $inGroup = $this->postJson('/api/meetings', ['title' => 'Private', 'access' => 'members'])
+        ->assertCreated()->json('data');
+
+    Passport::actingAs(User::factory()->create());
+
+    // Two different situations, and the page used to give the server sentence for both.
+    $this->getJson("/api/meetings/{$inServer['token']}")->assertOk()
+        ->assertJsonPath('data.needs', 'server-invite');
+    $this->getJson("/api/meetings/{$inGroup['token']}")->assertOk()
+        ->assertJsonPath('data.needs', 'invite');
+});
+
 it('creates a room in a server when one is named', function () {
     [$owner, $server] = ownerWithServer();
     Passport::actingAs($owner);
@@ -341,6 +426,52 @@ it('confines a guest to the meeting they joined', function () {
     // The two things an account needs to function while it exists.
     $this->getJson('/api/auth/me')->assertOk();
     $this->getJson('/api/conversations')->assertOk();
+});
+
+/*
+ * One guest, two links.
+ *
+ * Signing out and back in as a fresh stranger to follow a second link loses the chat they were
+ * already in and makes one visitor look like two in the audit — so the same account follows it.
+ * What must *not* travel with them is any extra reach: an `account` link stays shut.
+ */
+it('lets a guest follow a second link without signing out', function () {
+    [$owner] = ownerWithServer();
+    Passport::actingAs($owner);
+
+    $first = $this->postJson('/api/meetings', ['title' => 'Open house', 'access' => 'guest'])
+        ->assertCreated()->json('data');
+    $second = $this->postJson('/api/meetings', ['title' => 'The other one', 'access' => 'guest'])
+        ->assertCreated()->json('data');
+    $accountOnly = $this->postJson('/api/meetings', ['title' => 'Members and accounts', 'access' => 'account'])
+        ->assertCreated()->json('data');
+
+    app('auth')->forgetGuards();
+    $joined = $this->postJson("/api/meetings/{$first['token']}/guest", ['name' => 'Sam'])->json();
+
+    $guest = User::find($joined['user']['id']);
+    Passport::actingAs($guest);
+
+    // The second link: previewed, then followed, on the account they already have.
+    $this->getJson("/api/meetings/{$second['token']}")->assertOk()->assertJsonPath('data.can_join', true);
+    $this->postJson("/api/meetings/{$second['token']}/join")->assertOk();
+
+    // Both rooms, and nothing invented: the same user id is in both.
+    $this->getJson("/api/channels/{$first['channel_id']}/messages")->assertOk();
+    $this->getJson("/api/channels/{$second['channel_id']}/messages")->assertOk();
+    expect($this->getJson('/api/conversations')->json('data'))->toHaveCount(2);
+
+    // A door a stranger with no account could not have walked through stays shut, and the page
+    // is told why rather than being offered a button that fails.
+    $this->getJson("/api/meetings/{$accountOnly['token']}")
+        ->assertOk()
+        ->assertJsonPath('data.can_join', false)
+        ->assertJsonPath('data.needs', 'account');
+    $this->postJson("/api/meetings/{$accountOnly['token']}/join")->assertStatus(422);
+    $this->getJson("/api/channels/{$accountOnly['channel_id']}/messages")->assertForbidden();
+
+    // And the link list is still not a thing a guest may read, token or no token.
+    $this->getJson('/api/meetings/rooms')->assertForbidden();
 });
 
 it('stops working the moment the guest session lapses', function () {

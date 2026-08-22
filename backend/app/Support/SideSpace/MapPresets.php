@@ -43,6 +43,8 @@ final class MapPresets
     public static function all(): array
     {
         return [
+            // The default a meeting is given when nobody picked a room — see meetingRoom().
+            'meeting-room' => self::meetingRoom(),
             'office' => self::office(),
             'lounge' => self::lounge(),
             'park' => self::park(),
@@ -89,7 +91,9 @@ final class MapPresets
      * the middle of the geometry. The order of {@see self::GROUPS} is the order they're shown in.
      */
     public const GROUPS = [
-        'Rooms' => ['office', 'lounge', 'park', 'campfire', 'blank'],
+        // The meeting room leads: it's the default a meeting gets, so it's the one somebody
+        // opening this picker is most likely to be comparing the others against.
+        'Rooms' => ['meeting-room', 'office', 'lounge', 'park', 'campfire', 'blank'],
         'Themed' => ['throne-room', 'green-hall', 'sleep-temple', 'espurr-den', 'new-york', 'gather-town', 'nyc-street', 'nyc-skyline', 'nyc-island', 'movie-theatre', 'met-museum', 'outdoor-cinema'],
         'Gyms' => ['gym-cinnabar', 'gym-celadon', 'gym-vermilion', 'gym-azalea', 'gym-olivine', 'gym-blackthorn'],
     ];
@@ -195,6 +199,65 @@ final class MapPresets
      * you sit, not what you sit on, which is why one is allowed to contain furniture and only
      * has to contain somewhere to stand.
      */
+    /**
+     * One table, chairs round it, a board and a screen — the room a meeting is given when
+     * nobody chose one.
+     *
+     * Deliberately the smallest room here. A meeting's Side Space has a job the themed rooms
+     * don't: everybody who follows the link has to end up *within earshot of each other* within a
+     * second of arriving, without being told how to walk. So it is one space, the table is the
+     * middle of it, and the spawn is two tiles from the seats — where a bigger room would scatter
+     * eight arrivals across four corners and leave them silently alone in the same building.
+     *
+     * The whiteboard and the wall planner are the Side Desk's own apps standing in the room
+     * (see Decorations), so the two things a meeting reaches for — draw this, when is that — are
+     * furniture rather than a menu.
+     */
+    private static function meetingRoom(): array
+    {
+        $w = 16;
+        $h = 12;
+        $tiles = self::room($w, $h, Tiles::WOOD);
+
+        // Carpet under the table, so the middle reads as the middle rather than as more floor.
+        self::rect($tiles, 4, 3, 8, 6, Tiles::CARPET);
+
+        return [
+            'label' => 'Meeting room',
+            'description' => 'One table with chairs round it, a whiteboard and a screen — everyone in earshot from the moment they arrive',
+            'name' => 'Meeting room',
+            'width' => $w,
+            'height' => $h,
+            'tiles' => $tiles,
+            /*
+             * A stage zone over the table.
+             *
+             * Whoever is standing at it is heard map-wide (see the Side Space docs), which is what
+             * a room built for a meeting wants by default: somebody presenting shouldn't have to
+             * ask everyone to gather round, and the proximity audio everywhere else still applies
+             * to the side conversations at the edges.
+             */
+            'zones' => [
+                ['id' => 'table', 'name' => 'The table', 'kind' => 'stage', 'x' => 4, 'y' => 3, 'w' => 8, 'h' => 6],
+            ],
+            'objects' => self::objects([
+                // The table: four desks in a block, chairs down both long sides.
+                ['desk', 6, 5], ['desk', 8, 5],
+                ['chair', 6, 4], ['chair', 7, 4], ['chair', 8, 4], ['chair', 9, 4],
+                ['chair', 6, 7], ['chair', 7, 7], ['chair', 8, 7], ['chair', 9, 7],
+                ['chair', 4, 5], ['chair', 11, 5],
+                // What a meeting reaches for, as furniture: draw this, watch that, when is it.
+                ['whiteboard', 6, 1], ['tv', 9, 1], ['planner', 13, 0],
+                // Somewhere to put the coffee, and something to look at.
+                ['watercooler', 1, 1], ['plant', 14, 1], ['plant', 1, 10], ['bookshelf', 14, 8],
+                ['window', 3, 0], ['clock', 12, 0], ['mat', 8, 10],
+            ]),
+            // Two tiles from the table, facing it: you arrive already in the room rather than
+            // in a doorway wondering which way to walk.
+            'spawn' => ['x' => 8, 'y' => 9],
+        ];
+    }
+
     private static function lounge(): array
     {
         $w = 24;

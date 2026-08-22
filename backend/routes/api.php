@@ -14,6 +14,8 @@ use App\Http\Controllers\AppReactionController;
 use App\Http\Controllers\AppStickerController;
 use App\Http\Controllers\AppTagController;
 use App\Http\Controllers\ArpgCharacterController;
+use App\Http\Controllers\MobaController;
+use App\Http\Controllers\MobaResultController;
 use App\Http\Controllers\AttachmentController;
 use App\Http\Controllers\Auth\AuthController;
 use App\Http\Controllers\Auth\SocialAuthController;
@@ -107,8 +109,16 @@ Route::get('spotify/callback', [SpotifyController::class, 'callback']);
  *
  * Everything else about meetings is behind auth, below.
  */
-Route::get('meetings/{token}', [MeetingController::class, 'show']);
-Route::post('meetings/{token}/guest', [MeetingController::class, 'guest']);
+/*
+ * `whereUuid`, so `{token}` can never swallow a sibling.
+ *
+ * A meeting token *is* a uuid (see the Meeting model), and without saying so the first
+ * `meetings/anything` route registered later — `meetings/rooms`, as it happens — resolves here
+ * instead, with "rooms" as the token, and 404s. Constraining the pattern settles it for every
+ * route anybody adds afterwards rather than for the one that noticed.
+ */
+Route::get('meetings/{token}', [MeetingController::class, 'show'])->whereUuid('token');
+Route::post('meetings/{token}/guest', [MeetingController::class, 'guest'])->whereUuid('token');
 
 Route::prefix('auth')->group(function () {
     Route::post('register', [AuthController::class, 'register']);
@@ -706,6 +716,34 @@ Route::middleware('auth:api')->group(function () {
     Route::get('arpg/skills', [ArpgCharacterController::class, 'skills']);
     Route::delete('arpg/characters/{character}', [ArpgCharacterController::class, 'destroy']);
 
+    /*
+     * The MOBA — see MOBA.md.
+     *
+     * No channel in the path, like the dungeon heroes above and for a sharper version of the
+     * same reason: a match is played by up to ten people who may be in ten different channels,
+     * it outlives whichever one launched it, and the rank it feeds belongs to a *user*. An app
+     * channel is somewhere to launch and watch a match from, not the thing that owns it.
+     *
+     * Nothing here simulates anything. The match runs at 30Hz in a separate Rust process; these
+     * routes are the queue, the roster and the signed ticket that gets a player into it.
+     */
+    Route::get('moba/catalogue', [MobaController::class, 'catalogue']);
+    Route::get('moba/me', [MobaController::class, 'me']);
+    Route::post('moba/queue', [MobaController::class, 'join']);
+    Route::delete('moba/queue', [MobaController::class, 'leave']);
+    /*
+     * The queue poll. A GET that has a side effect — it attempts to form matches — which is
+     * deliberate: whoever is polling is a live request that can do the work, and a queue that
+     * only advances on a scheduled job keeps everyone waiting for the job.
+     */
+    Route::get('moba/queue', [MobaController::class, 'status']);
+    Route::get('moba/matches/{match}', [MobaController::class, 'show']);
+    /*
+     * Give up on a match. Ends it for everyone in it — a MOBA cannot be played four-versus-five,
+     * and leaving four people in a game they can neither win nor leave is the worse option.
+     */
+    Route::post('moba/matches/{match}/leave', [MobaController::class, 'leaveMatch']);
+
     Route::get('channels/{channel}/space/game', [SpaceGameController::class, 'show']);
     Route::post('channels/{channel}/space/game', [SpaceGameController::class, 'propose']);
     Route::post('channels/{channel}/space/game/vote', [SpaceGameController::class, 'vote']);
@@ -816,10 +854,12 @@ Route::middleware('auth:api')->group(function () {
      * group conversation made for it. `show` is what a link *is* before you follow it — thin on
      * purpose, since anybody signed in can read it. `joins` is the audit, and is not.
      */
+    // The rooms that already exist, for holding a meeting in one rather than making another.
+    Route::get('meetings/rooms', [MeetingController::class, 'rooms']);
     Route::post('meetings', [MeetingController::class, 'store']);
     // `show` is public — see the top of this file. Joining as yourself is not.
-    Route::post('meetings/{token}/join', [MeetingController::class, 'join']);
-    Route::get('meetings/{token}/joins', [MeetingController::class, 'joins']);
+    Route::post('meetings/{token}/join', [MeetingController::class, 'join'])->whereUuid('token');
+    Route::get('meetings/{token}/joins', [MeetingController::class, 'joins'])->whereUuid('token');
 
     // The rooms an entry may say it happens in — this server's voice channels and Side Spaces.
     // Exactly what the store path validates against, so the picker can't offer a refusal.
@@ -1029,3 +1069,13 @@ Route::middleware('auth.bot')->prefix('bot')->group(function () {
         Route::post('channels/{channel}/calendar', [ChannelCalendarController::class, 'store']);
     });
 });
+
+/*
+ * The MOBA game server's one call back into the API.
+ *
+ * Outside every guard above on purpose: the caller is a Rust process with no cookie and no
+ * token. It authenticates by signing the request body with the shared secret, which
+ * MobaResultController checks — see the note there on why that is the whole of the auth, and on
+ * why a retry after a timed-out response is a success rather than a duplicate.
+ */
+Route::post('moba/matches/{match}/result', [MobaResultController::class, 'store']);

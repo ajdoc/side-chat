@@ -43,6 +43,15 @@ export function useCall() {
   const incoming = useState<IncomingCall | null>('call:incoming', () => null)
   const joining = useState<boolean>('call:joining', () => false)
 
+  /**
+   * A Side Space room we've answered into and haven't walked through the door of yet.
+   *
+   * Set by `accept`, consumed once by the stage when it mounts — see the comment there. A
+   * channel id rather than a flag, so a stage that happens to mount for some *other* room
+   * on the way doesn't swallow it.
+   */
+  const autoEnter = useState<number | null>('call:auto-enter', () => null)
+
   function stopRinging() {
     clearTimeout(ringTimeout)
     ringTimeout = undefined
@@ -72,6 +81,24 @@ export function useCall() {
     joining.value = true
     try {
       stopRinging()
+
+      /*
+       * A chat whose call is a Side Space is answered by *walking in*, not by dialling.
+       *
+       * Connecting from here would take the seat without any of what standing in a room means:
+       * proximity mode off (so the mesh dials everybody at once instead of your neighbours),
+       * no tile, no presence whisper. To everyone already in the room the answerer arrived as
+       * a peer with no position and no avatar — a figure stuck loading in their earshot.
+       *
+       * So the room answers for us: navigate there and let SideSpaceStage's own `enter()` run,
+       * which is the same door every other way in goes through.
+       */
+      if (call.conversation.channel_type === 'space') {
+        autoEnter.value = call.conversation.channel_id
+        await navigateTo(`/chats/${call.conversation.id}`)
+        return
+      }
+
       await connect(call.conversation.channel_id)
       await navigateTo(`/chats/${call.conversation.id}`)
     } finally {
@@ -98,7 +125,7 @@ export function useCall() {
     await connect(conversation.channel_id)
   }
 
-  return { incoming, joining, ringingFor, stopRinging, accept, decline, start }
+  return { incoming, joining, autoEnter, ringingFor, stopRinging, accept, decline, start }
 }
 
 /**

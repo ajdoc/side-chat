@@ -53,6 +53,11 @@ services:
     environment: *php-env
     volumes:
       - ./backend:/app
+      # Read-only, and only so one test can read it: the MOBA's hero roster is defined in the
+      # Rust crate and mirrored in PHP, and MobaTest walks the pair so adding a hero to one side
+      # and not the other fails in CI rather than as a pick the game server refuses at seat time.
+      # Without the mount that test can only skip, which is a test that proves nothing.
+      - ./game:/game:ro
     ports:
       - "${APP_PORT:-8000}:8000"
     depends_on: *php-depends
@@ -162,6 +167,26 @@ services:
       timeout: 5s
       retries: 10
 
+  # The MOBA's Rust crates — see MOBA.md. A toolbox, not a daemon: it idles so that
+  # `docker compose exec rust cargo test` works, and nothing depends on it. The registry and
+  # target volumes are what keep a rebuild from re-downloading and re-compiling the world.
+  rust:
+    build:
+      context: ./docker/rust
+    image: sidechat/rust:local
+    restart: unless-stopped
+    command: ["sleep", "infinity"]
+    working_dir: /game
+    # The match server and the dev harness. Development only — nothing here is meant to face
+    # the internet yet.
+    ports:
+      - "${MOBA_PORT:-930}:930"
+      - "${MOBA_HARNESS_PORT:-9301}:9301"
+    volumes:
+      - ./game:/game
+      - cargo_registry:/usr/local/cargo/registry
+      - cargo_target:/game/target
+
   frontend:
     build:
       context: ./docker/frontend
@@ -182,6 +207,8 @@ services:
       - app
 
 volumes:
+  cargo_registry:
+  cargo_target:
   pgdata:
   redisdata:
   frontend_node_modules:

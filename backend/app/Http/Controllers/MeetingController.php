@@ -106,6 +106,33 @@ class MeetingController extends Controller
     }
 
     /**
+     * The rooms a meeting could be held in that already exist.
+     *
+     * The create dialog can make a room, and could always *point* at one (`channel_id` has been
+     * accepted since the first version) — but it had no way to list them, so "schedule something
+     * in the standup room we already have" was reachable only from inside that room. This is that
+     * list: every voice channel and Side Space the caller can see, which is exactly what the
+     * create path will accept.
+     */
+    public function rooms(Request $request): JsonResponse
+    {
+        $rooms = Channel::query()
+            ->visibleTo($request->user())
+            ->whereIn('type', ['voice', 'space'])
+            ->with('server:id,name')
+            ->orderBy('name')
+            ->limit(200)
+            ->get();
+
+        return response()->json(['data' => $rooms->map(fn (Channel $c) => [
+            'id' => $c->id,
+            'name' => $c->name,
+            'type' => $c->type,
+            'server' => $c->server?->name,
+        ])->values()]);
+    }
+
+    /**
      * Make a meeting — a room, a link to it, and optionally a time.
      *
      * Where it lands is decided by what the caller sends, not by a mode: `server_id` makes a room
@@ -159,10 +186,30 @@ class MeetingController extends Controller
 
         abort_if($meeting === null, 404);
 
-        // Unauthenticated here as often as not — the whole point of a public link — so every
-        // question below has to have an answer for "nobody".
-        $user = $request->user();
+        /*
+         * `user('api')`, not `user()`.
+         *
+         * This route is public, so no `auth:api` middleware has run — and `$request->user()` then
+         * asks the *default* guard, which is `web`, and answers null however good the Bearer
+         * token is. Every signed-in person therefore looked like a stranger here: their own
+         * meeting told them it was "in a server you're not in".
+         *
+         * Naming the guard is the whole fix. It stays optional — unauthenticated is the normal
+         * case for a link — so every question below still has an answer for "nobody".
+         */
+        $user = $request->user('api');
         $inside = $user !== null && $meeting->channel?->hasMember($user);
+
+        /*
+         * A guest already signed in is held to the guest door, not the outsider one.
+         *
+         * They can follow a second link — that's the point of them keeping one account — but
+         * only into a room a stranger could have walked into, which is what JoinMeetingAction
+         * enforces. Saying so here means the page offers a button that works instead of one
+         * that 422s.
+         */
+        $asGuest = $user !== null && $user->is_guest;
+        $mayEnter = $inside || ($asGuest ? $meeting->admitsGuests() : $meeting->admitsOutsiders());
 
         return response()->json(['data' => [
             'title' => $meeting->title,
@@ -172,11 +219,28 @@ class MeetingController extends Controller
             'open' => $meeting->isOpen(),
             // Can *this* person get in, and if not, why. The client says so rather than sending
             // somebody through a join that will refuse them.
-            'can_join' => $inside || $meeting->admitsOutsiders(),
+            'can_join' => $mayEnter,
             'member' => $inside,
             // Whether somebody with no account at all may walk in. What turns the link page from
             // "sign in to join" into a name field.
             'guests' => $meeting->admitsGuests(),
+            /*
+             * *Why* they can't come in, when they can't.
+             *
+             * The page used to say "this meeting is in a server you're not in" for every refusal,
+             * which is one of three reasons and was the wrong one two times out of three. A
+             * machine-readable answer keeps the explanation and the rule in the same place — the
+             * client picks a sentence, it doesn't work out the situation for itself.
+             */
+            'needs' => match (true) {
+                $mayEnter => null,
+                // Open to outsiders, but not to a throwaway account — they need a real one.
+                $asGuest && $meeting->admitsOutsiders() => 'account',
+                // The room is in a server: no link can admit anybody to one.
+                $meeting->channel?->server_id !== null => 'server-invite',
+                // A group meeting whose door is shut to everybody but its people.
+                default => 'invite',
+            },
         ]]);
     }
 

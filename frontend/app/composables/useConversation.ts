@@ -45,6 +45,22 @@ export function useConversation() {
     void useNicknames().open({ kind: 'conversation', id })
   }
 
+  /**
+   * Re-read the open chat.
+   *
+   * For the things that change *about* a chat rather than in it — converting its channel between
+   * a voice bar and a Side Space, say. `openConversation` can't serve this: it returns early when
+   * the id is already open, which is exactly the case here.
+   */
+  async function refreshConversation(id: number) {
+    const res = await api<{ data: Conversation }>(`/api/conversations/${id}`)
+
+    if (requestedId.value !== id) return
+
+    conversation.value = res.data
+    upsert(res.data)
+  }
+
   function closeConversation(id: number) {
     roster.unsubscribeConversation(id)
     useNicknames().close()
@@ -56,5 +72,5 @@ export function useConversation() {
     patch(id, { unread_count: 0, mention: false })
   }
 
-  return { conversation, openConversation, closeConversation, clearUnread }
+  return { conversation, openConversation, refreshConversation, closeConversation, clearUnread }
 }

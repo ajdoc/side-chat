@@ -446,12 +446,21 @@ it lands from what it's sent, not from a mode:
 
 | Sent | Made |
 | --- | --- |
-| `server_id` | a voice channel or Side Space in that server |
+| `server_id` | a voice channel or Side Space in that server — the meeting's room is its **General discussion** |
 | `channel_id` | nothing — a link to a room that already exists |
 | neither | a **group conversation** whose channel is the room |
 
 The type defaults to **voice**; a Side Space is a deliberate choice about how it should feel, and
 it works by converting the channel (see below), which is why that had to exist first.
+
+**A server meeting's room is the General discussion, not the container.** A channel in a server is
+a container; what anybody opens is its discussion — that is what the sidebar links to
+(`resolveDiscussion`) and where every other space channel's map lives. Pointing a meeting at the
+container sent people to a channel with no map and the room answered *"could not load this
+space"*. Seeding the container instead would have "fixed" it by making this the one Side Space in
+the app shaped differently from all the others. One `MapSeeder::ensure()` is now the single
+seeding path for channel creation, conversion and meetings alike, because *type* and *map* are one
+fact that was being set by two pieces of code.
 
 **Getting the link back.** `channels/{channel}/meeting-links` lists a room's meetings — distinct
 from `channels/{channel}/meetings`, which lists what's *scheduled* there and answers in calendar

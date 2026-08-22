@@ -34,6 +34,16 @@ class ConversationResource extends JsonResource
             // The channel behind the chat. Every message, thread, pin, reaction and call
             // endpoint in the app is addressed by this — a chat *is* a channel.
             'channel_id' => $this->whenLoaded('channel', fn () => $this->channel->id),
+            /*
+             * What kind of room the chat's channel is.
+             *
+             * It was `text` for every chat until channel types became convertible, and the client
+             * *assumed* that — it synthesised a channel with `type: 'text'` written in. So a group
+             * chat converted to a Side Space (which is what a Side Space meeting makes) rendered
+             * the voice bar over a map nobody could see. The chat has to be told what its own room
+             * is, rather than the client knowing in advance.
+             */
+            'channel_type' => $this->whenLoaded('channel', fn () => $this->channel->type),
             // The lock on the sidebar row. Comes off the channel because that's where the
             // setting lives, and is absent rather than false when the channel wasn't loaded —
             // drawing "not encrypted" from a missing relation would be a claim, not a default.

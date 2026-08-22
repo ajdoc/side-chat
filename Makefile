@@ -1,7 +1,7 @@
 .DEFAULT_GOAL := help
 COMPOSE := docker compose
 
-.PHONY: help build up down restart logs ps icons win-codesign-cache migrate fresh shell tinker composer artisan npm octane-build octane-up octane-down octane-logs app-bundle app-desktop app-desktop-win app-mobile app-apk
+.PHONY: help build up down restart logs ps icons win-codesign-cache migrate fresh shell tinker composer artisan npm octane-build octane-up octane-down octane-logs app-bundle app-desktop app-desktop-win app-mobile app-apk rust-test rust-lint moba-client moba-server moba-play
 
 # Where the packaged apps look for the API and the WebSocket server.
 #
@@ -274,3 +274,40 @@ octane-down: ## Stop and remove the Octane variants (classic app is untouched)
 
 octane-logs: ## Tail logs for the Octane variants
 	$(COMPOSE) --profile octane logs -f --tail=100 app-octane-frankenphp app-octane-swoole
+
+rust-test: ## Run the MOBA sim test suite (see MOBA.md)
+	$(COMPOSE) exec -T rust cargo test
+
+rust-lint: ## Clippy + rustfmt over the MOBA crates
+	$(COMPOSE) exec -T rust cargo fmt --check
+	$(COMPOSE) exec -T rust cargo clippy --all-targets -- -D warnings
+
+# The app channel imports the bundle from frontend/app/lib/moba. Copied rather than symlinked,
+# so a frontend build has no opinion about whether the Rust workspace is checked out — and
+# copied by the same target that builds it, because a bundle that goes stale silently is worse
+# than one that is missing.
+moba-client: ## Build the MOBA wasm client, its JS glue, and copy it into the frontend
+	$(COMPOSE) exec -T rust cargo build -p moba-client --target wasm32-unknown-unknown --release
+	$(COMPOSE) exec -T rust wasm-bindgen --target web \
+		--out-dir /game/moba/moba-client/web/pkg \
+		/game/target/wasm32-unknown-unknown/release/moba_client.wasm
+	$(COMPOSE) exec -T rust chown -R $${UID:-1000}:$${GID:-1000} /game/moba/moba-client/web
+	@mkdir -p frontend/app/lib/moba
+	@cp game/moba/moba-client/web/pkg/moba_client.js \
+		game/moba/moba-client/web/pkg/moba_client.d.ts \
+		game/moba/moba-client/web/pkg/moba_client_bg.wasm \
+		frontend/app/lib/moba/
+	@echo "  wasm -> frontend/app/lib/moba/"
+
+# TEAM_SIZE=1 is a match two browser tabs can play. See MOBA.md.
+TEAM_SIZE ?= 1
+
+moba-server: ## Run the MOBA match server (TEAM_SIZE=1..5)
+	$(COMPOSE) exec -e MOBA_TEAM_SIZE=$(TEAM_SIZE) rust cargo run -p moba-server --release
+
+moba-play: moba-client ## Build the client, then serve the dev harness on :9301
+	@echo ""
+	@echo "  Harness  -> http://localhost:9301   (open two tabs for a 1v1)"
+	@echo "  Start 'make moba-server' in another shell first."
+	@echo ""
+	$(COMPOSE) exec rust python3 -m http.server 9301 -d /game/moba/moba-client/web

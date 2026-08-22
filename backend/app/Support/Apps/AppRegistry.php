@@ -53,6 +53,20 @@ final class AppRegistry
         'polls' => ['family' => 'surface', 'desk' => true, 'channel' => true],
         'stickers' => ['family' => 'surface', 'desk' => true, 'channel' => true],
 
+        /*
+         * The MOBA — see MOBA.md.
+         *
+         * `desk` is false, and that is the interesting half. Every other surface app is
+         * something you glance at beside a conversation; a MOBA is thirty minutes of undivided
+         * attention. As a tab on a Side Desk strip it would be a match you cannot see, running
+         * beside the notes you switched to.
+         *
+         * It is also the first app whose storage is not scoped to the channel: a match belongs
+         * to the ten people in it and to their ratings, not to wherever it was launched from.
+         * The channel is a lobby.
+         */
+        'moba' => ['family' => 'surface', 'desk' => false, 'channel' => true],
+
         // Widgets promoted to apps.
         'music' => ['family' => 'widget', 'desk' => true, 'channel' => true],
         'video' => ['family' => 'widget', 'desk' => true, 'channel' => true],

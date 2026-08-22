@@ -120,7 +120,9 @@ it('lists the map presets, each one whole enough to load over a room', function 
     $res = $this->getJson('/api/space/map-presets')
         ->assertOk()
         ->assertJsonCount(count(MapPresets::keys()), 'data')
-        ->assertJsonPath('data.0.key', 'office');
+        // The meeting room leads: it's what a Side Space meeting is given when nobody picks a
+        // room, so it's the one anybody opening this picker is comparing the others against.
+        ->assertJsonPath('data.0.key', 'meeting-room');
 
     // The editor loads a preset *over* the room it's editing, so every one has to arrive with
     // everything a room is — spawn included. A layout without its entrance would leave people

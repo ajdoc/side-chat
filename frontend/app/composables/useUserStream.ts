@@ -54,6 +54,19 @@ export function useUserStream() {
 
     subscribed.value = id
 
+    /**
+     * Joining the call silences the ring, however you joined it.
+     *
+     * `accept()` stops the ringtone itself, but that's only one of the ways in. A Side
+     * Space chat is a *room*: you can walk past the dialog, open the chat and press Join
+     * on the stage, which is a plain `connect()` and knows nothing about a phone ringing.
+     * That left the tone chiming underneath the call you were already in until the 45s
+     * give-up timer. Watching the call we're actually in covers every door.
+     */
+    watch(callChannelId, (channelId) => {
+      if (channelId !== null && incoming.value?.conversation.channel_id === channelId) stopRinging()
+    })
+
     echo.private(`user.${id}`)
       // A chat you're now in has appeared: someone DM'd you, or added you to a group.
       .listen('.ConversationCreated', (conversation: Conversation) => {

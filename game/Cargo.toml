@@ -1,0 +1,12 @@
+[workspace]
+resolver = "2"
+members = ["moba/moba-proto", "moba/moba-sim", "moba/moba-server", "moba/moba-client"]
+
+[workspace.package]
+edition = "2021"
+license = "MIT"
+
+[workspace.dependencies]
+moba-proto = { path = "moba/moba-proto" }
+moba-sim = { path = "moba/moba-sim" }
+serde = { version = "1", features = ["derive"], default-features = false }

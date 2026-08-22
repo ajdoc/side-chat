@@ -116,6 +116,8 @@ const props = defineProps<{ channel: Channel, canEdit: boolean }>()
 const chatHidden = defineModel<boolean>('chatHidden', { default: true })
 
 const { user } = useAuth()
+/** A room somebody answered a call into, waiting for its stage to appear. See onMounted. */
+const { autoEnter } = useCall()
 const {
   status,
   error,
@@ -3189,6 +3191,18 @@ onMounted(async () => {
   // Walked in earlier and only now come back to look at it. The map has to be loaded first —
   // `place` needs to know which tiles you're allowed to stand on.
   reattach()
+
+  /*
+   * Answered a call into this room — walk in without being asked twice.
+   *
+   * Pressing Answer on a Side Space chat can't dial the call itself (see useCall.accept): a
+   * room is entered, not connected to. It leaves the channel id here instead, and the door it
+   * meant is this one. Claimed before entering so a second mount can't fire it again.
+   */
+  if (autoEnter.value === props.channel.id) {
+    autoEnter.value = null
+    await enter()
+  }
 
   window.addEventListener('keydown', onInteractKey)
   // Not `@wheel` in the template: Vue attaches listeners passively where it can, and a passive

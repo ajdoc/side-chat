@@ -8,6 +8,7 @@ use App\Models\Message;
 use App\Models\User;
 use Closure;
 use Illuminate\Http\Request;
+use Illuminate\Support\Str;
 use Symfony\Component\HttpFoundation\Response;
 
 /**
@@ -45,6 +46,20 @@ class ConfineGuests
         'api/auth/logout',
         'api/conversations',
     ];
+
+    /**
+     * What a guest may do with a *meeting link*, by the segment after the token.
+     *
+     * A guest account is confined to the meetings it has been let into — not to the first one.
+     * Somebody sent a second link is the same person, and making them sign out and mint a fresh
+     * throwaway account to follow it loses the chat they were already in, the name the room
+     * knows them by, and any chance of the audit saying the two arrivals were one visitor.
+     *
+     * `''` is the link preview, `join` is following it — and the join is still checked by
+     * {@see \App\Actions\Meeting\JoinMeetingAction}, which lets a guest in only where a
+     * stranger with no account could have walked in anyway. This widens reach, not rights.
+     */
+    private const ON_MEETING = ['', 'join'];
 
     /**
      * What a guest may do *inside* their own room, by the first segment after the channel.
@@ -87,6 +102,18 @@ class ConfineGuests
 
         if (in_array($path, self::ALLOWED, true)) {
             return true;
+        }
+
+        // A meeting link names no channel — the token is the whole address, and until the link
+        // has been followed the guest is by definition not in the room it leads to.
+        $segments = $request->segments();
+
+        if (($segments[1] ?? '') === 'meetings') {
+            // A *token*, specifically. `api/meetings` is creating one and `api/meetings/rooms`
+            // is the list of rooms to hold one in — neither is a door, and matching the whole
+            // prefix would have opened both.
+            return Str::isUuid($segments[2] ?? '')
+                && in_array($segments[3] ?? '', self::ON_MEETING, true);
         }
 
         /*

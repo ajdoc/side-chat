@@ -99,4 +99,22 @@ return [
         'credentials' => env('FCM_CREDENTIALS'),
     ],
 
+
+    /*
+     * The MOBA match server. See MOBA.md.
+     *
+     * `secret` is shared with the Rust game server and is the whole of the trust between them:
+     * it signs the ticket that seats a player and the result that ends a match. Unset, both
+     * sides fall back to the app key so a development stack works out of the box — a fallback,
+     * never a production posture.
+     *
+     * `server_address` is what the client is told to connect to. One address because there is
+     * one game server; a real deployment assigns matches to servers and writes the address onto
+     * the match row, which is why it is stored there rather than read from config at play time.
+     */
+    'moba' => [
+        'secret' => env('MOBA_SECRET'),
+        'server_address' => env('MOBA_SERVER_ADDRESS', 'ws://localhost:930'),
+    ],
+
 ];

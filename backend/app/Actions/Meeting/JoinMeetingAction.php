@@ -62,7 +62,28 @@ final class JoinMeetingAction
                 ]);
             }
 
+            /*
+             * A guest may follow a second link — to a room a guest could have joined.
+             *
+             * Nothing here creates the account; it already exists, because they walked in
+             * through another link an hour ago. What this refuses is a guest reaching further
+             * than the front door they came through: `admitsGuests` is the same test
+             * {@see JoinMeetingAsGuestAction} applies to a stranger, and it rules out a server
+             * room and an encrypted channel whatever the access setting says. Without it, an
+             * `account`-level link — deliberately closed to guests — would admit one.
+             */
+            if ($user->is_guest && ! $meeting->admitsGuests()) {
+                throw ValidationException::withMessages([
+                    'meeting' => 'This meeting needs an account to join. Sign up, or ask for a guest link.',
+                ]);
+            }
+
             $this->admit($meeting, $user);
+
+            // Long enough to sit through what they've just been invited to. Only ever extended:
+            // a guest let into a meeting that runs past their use-by date would otherwise be
+            // thrown out of it mid-call by an expiry set by a different meeting.
+            $this->extendGuest($user, $meeting);
         }
 
         $this->record($meeting, $user, $inside ? 'member' : 'link', ! $inside, $request);
@@ -84,6 +105,26 @@ final class JoinMeetingAction
         });
 
         broadcast(new ConversationUpdated($conversation->fresh()->load('members')));
+    }
+
+    /**
+     * Keep a guest's account alive as long as the meeting they've just joined needs it.
+     *
+     * A guest expires — that's the point of one — and the deadline was set by the *first* link
+     * they followed. Never shortened: this is about not cutting somebody off mid-meeting, and a
+     * later link has no business bringing a lapse forward.
+     */
+    private function extendGuest(User $user, Meeting $meeting): void
+    {
+        if (! $user->is_guest) {
+            return;
+        }
+
+        $until = $meeting->expires_at ?? now()->addHours(JoinMeetingAsGuestAction::HOURS);
+
+        if ($user->guest_expires_at !== null && $user->guest_expires_at->lt($until)) {
+            $user->forceFill(['guest_expires_at' => $until])->save();
+        }
     }
 
     /**

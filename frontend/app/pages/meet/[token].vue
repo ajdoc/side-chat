@@ -158,7 +158,21 @@ useHead({ title: 'Meeting' })
                plainly beats a 404 that reads as "this meeting doesn't exist". -->
           <p v-if="!meeting.open" class="text-sm text-destructive">This link has expired.</p>
           <p v-else-if="!meeting.can_join" class="text-sm text-destructive">
-            This meeting is in a server you’re not in. Ask whoever sent it for an invite to the server.
+            <template v-if="meeting.needs === 'server-invite'">
+              This meeting is in a server you’re not in. Ask whoever sent it for an invite to the server.
+            </template>
+            <!-- Signed in as a guest, at a door guests can't use. Said plainly, because a
+                 throwaway account has no way to tell a closed door from a broken app. -->
+            <template v-else-if="meeting.needs === 'account'">
+              This link needs a real account. You’re here as a guest, so ask whoever sent it for a
+              guest link — or sign up and follow this one again.
+            </template>
+            <template v-else-if="!isLoggedIn">
+              Sign in to see whether you’re in this meeting.
+            </template>
+            <template v-else>
+              This link only lets in people who are already in the chat. Ask whoever sent it to add you.
+            </template>
           </p>
 
           <!-- Signed in: join as yourself. -->

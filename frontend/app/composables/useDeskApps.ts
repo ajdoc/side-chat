@@ -1,6 +1,6 @@
 import {
   BarChart3, CalendarDays, Columns3, FileText, Film, Flag, Gamepad2, LayoutGrid, ListChecks,
-  Music, NotebookPen, Palette, PenTool, Spade, Sticker, Vote,
+  Music, NotebookPen, Palette, PenTool, Spade, Sticker, Swords, Vote,
 } from 'lucide-vue-next'
 import type { Component } from 'vue'
 import type { SideDeskAppId, WidgetType } from '~/types'
@@ -109,6 +109,15 @@ export const DESK_APPS: DeskApp[] = [
   // Docs is a file shelf with its own upload flow and viewers; squeezed into a canvas card it's
   // a scrollbar around a scrollbar, so it stays a tab.
   { id: 'docs', label: 'Docs', icon: FileText, family: 'surface', removable: true, canvasable: false, channelable: true, group: 'workspace' },
+  /*
+   * The MOBA — see MOBA.md.
+   *
+   * Neither a desk tab nor a canvas card, which makes it the first app that can *only* be a
+   * channel. Every other surface app is something you glance at beside a conversation; a MOBA is
+   * half an hour of undivided attention, and as a tab it would be a live match you cannot see
+   * because you switched to the notes.
+   */
+  { id: 'moba', label: 'MOBA', icon: Swords, family: 'surface', removable: false, canvasable: false, channelable: true, group: 'tool' },
 
   // --- widget apps ---
   { id: 'music', label: 'Music', icon: Music, family: 'widget', removable: true, canvasable: true, channelable: true, card: { w: 300, h: 190 }, group: 'tool' },

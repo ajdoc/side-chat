@@ -75,6 +75,16 @@ export function useMeetings() {
     return create({ title, channel_id: channelId })
   }
 
+  /**
+   * Rooms that already exist and could hold a meeting — every voice channel and Side Space the
+   * caller can see. Exactly what the create path accepts as `channel_id`, so the picker can't
+   * offer one the save would refuse.
+   */
+  async function rooms() {
+    const res = await api<{ data: { id: number, name: string, type: string, server: string | null }[] }>('/api/meetings/rooms')
+    return res.data
+  }
+
   /** What a link leads to, before anybody commits to following it. Thin on purpose. */
   async function preview(token: string) {
     const res = await api<{ data: MeetingPreview }>(`/api/meetings/${token}`)
@@ -127,5 +137,5 @@ export function useMeetings() {
     return options.call ? `${base}?call=1` : base
   }
 
-  return { linkFor, create, forChannel, ensureFor, preview, join, joinAsGuest, roomPath }
+  return { linkFor, create, rooms, forChannel, ensureFor, preview, join, joinAsGuest, roomPath }
 }

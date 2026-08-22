@@ -39,8 +39,13 @@ use Illuminate\Validation\ValidationException;
  */
 final class JoinMeetingAsGuestAction
 {
-    /** How long a guest account is good for, when the meeting itself doesn't say. */
-    private const HOURS = 12;
+    /**
+     * How long a guest account is good for, when the meeting itself doesn't say.
+     *
+     * Public because following a *second* link extends the same account rather than minting
+     * another — see {@see JoinMeetingAction::extendGuest()}, which needs the same number.
+     */
+    public const HOURS = 12;
 
     public function __construct(private readonly PostSystemMessageAction $system) {}
 

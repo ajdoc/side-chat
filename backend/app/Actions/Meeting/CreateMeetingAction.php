@@ -10,6 +10,7 @@ use App\Models\CalendarEvent;
 use App\Models\Channel;
 use App\Models\Meeting;
 use App\Models\Server;
+use App\Support\SideSpace\MapSeeder;
 use App\Models\User;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\ValidationException;
@@ -40,6 +41,15 @@ use Illuminate\Validation\ValidationException;
  */
 final class CreateMeetingAction
 {
+    /**
+     * The room a Side Space meeting gets when nobody chose one.
+     *
+     * A meeting has a requirement the themed rooms don't: everybody who follows the link has to
+     * end up within earshot of each other seconds after arriving, without being told how to walk.
+     * See MapPresets::meetingRoom.
+     */
+    private const DEFAULT_PRESET = 'meeting-room';
+
     public function __construct(private readonly CreateGroupAction $groups) {}
 
     /**
@@ -116,20 +126,31 @@ final class CreateMeetingAction
             'position' => (int) $server->channels()->max('position') + 1,
         ]);
 
-        $channel->discussions()->create([
+        $general = $channel->discussions()->create([
             'server_id' => $server->getKey(),
             'name' => 'General',
             'type' => $type,
             'position' => 0,
         ]);
 
+        /*
+         * The map hangs off the **discussion**, and so does the meeting.
+         *
+         * A channel in a server is a container; what anybody actually opens is its discussion —
+         * that is what the sidebar links to (`resolveDiscussion`) and where every other space
+         * channel's map lives (see CreateChannelAction). A meeting that pointed at the container
+         * sent people to a channel with no map, and the room said "could not load this space".
+         *
+         * So the room *is* the General discussion: one channel, holding the map, the call and the
+         * timeline, exactly like a Side Space made by hand.
+         */
         if ($type === 'space') {
-            app(ChangeChannelTypeAction::class)->handle($channel, 'space', $preset);
+            MapSeeder::ensure($general, $preset ?? self::DEFAULT_PRESET);
         }
 
         broadcast(new ChannelCreated($channel));
 
-        return $channel;
+        return $general;
     }
 
     /**
@@ -162,7 +183,10 @@ final class CreateMeetingAction
         $channel = $conversation->channel;
 
         if ($type === 'space') {
-            app(ChangeChannelTypeAction::class)->handle($channel, 'space', $data['map_preset'] ?? null);
+            // Converting rather than seeding directly: a conversation's channel is made as `text`
+            // (see CreateGroupAction), so this is a genuine change of kind — and the action
+            // carries its discussions across and seeds their maps with it.
+            app(ChangeChannelTypeAction::class)->handle($channel, 'space', $data['map_preset'] ?? self::DEFAULT_PRESET);
         }
 
         return $channel->refresh();

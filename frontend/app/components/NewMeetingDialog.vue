@@ -28,12 +28,26 @@ import { Button } from '~/components/ui/button'
  */
 const open = defineModel<boolean>('open', { required: true })
 
-const { create, linkFor, roomPath } = useMeetings()
+const { create, rooms: fetchRooms, linkFor, roomPath } = useMeetings()
+
+/**
+ * Rooms that already exist.
+ *
+ * "Schedule something in the standup room we already have" was reachable only from inside that
+ * room — the API always took a `channel_id`, but nothing listed the rooms, so the dialog could
+ * only ever make a new one. Picking one here creates **no channel**: the meeting is a link (and
+ * perhaps a time) pointing at what's already there.
+ */
+const existing = ref<{ id: number, name: string, type: string, server: string | null }[]>([])
 const { servers } = useServers()
 
 const title = ref('')
 const type = ref<'voice' | 'space'>('voice')
-/** '' is a group chat; otherwise the id of a server to make the room in. */
+/**
+ * Where the meeting is held: `''` a new group chat, `s:<id>` a new room in that server, or
+ * `c:<id>` a room that already exists. One control, because it is one question — and the shapes
+ * differ only in what the API is told.
+ */
 const where = ref<string>('')
 const scheduled = ref(false)
 const startsAt = ref('')
@@ -49,10 +63,22 @@ const copied = ref(false)
 /** Only servers you could create a channel in — the same bar the API holds this to. */
 const staffServers = computed(() => servers.value.filter(s => s.is_owner || s.role === 'owner' || s.role === 'admin'))
 
-const inServer = computed(() => where.value !== '')
+const inServer = computed(() => where.value.startsWith('s:'))
+/** An existing room: nothing is created, and its own kind decides voice or Side Space. */
+const inExisting = computed(() => where.value.startsWith('c:'))
+
+const chosenRoom = computed(() =>
+  (inExisting.value ? existing.value.find(r => String(r.id) === where.value.slice(2)) : null) ?? null)
+
+/**
+ * An existing room that lives in a server is a server meeting in every way that matters: a link
+ * still can't admit anybody to that server, so the door setting has to be hidden there too.
+ */
+const inExistingServerRoom = computed(() => !!chosenRoom.value?.server)
 
 watch(open, (isOpen) => {
   if (!isOpen) return
+  void fetchRooms().then((list) => { existing.value = list }).catch(() => { existing.value = [] })
   title.value = ''
   type.value = 'voice'
   where.value = ''
@@ -73,11 +99,13 @@ async function submit() {
     made.value = await create({
       title: title.value.trim(),
       type: type.value,
-      server_id: inServer.value ? Number(where.value) : null,
+      server_id: inServer.value ? Number(where.value.slice(2)) : null,
+      channel_id: inExisting.value ? Number(where.value.slice(2)) : null,
       starts_at: scheduled.value && startsAt.value ? new Date(startsAt.value).toISOString() : null,
       remind_minutes: scheduled.value ? Number(remind.value) : null,
-      // Meaningless in a server, and refused there — see the class comment.
-      access: inServer.value ? 'members' : access.value,
+      // Meaningless in a server room — and refused there — see the class comment. An existing
+      // room is whatever it already is, so the same rule applies once it's in a server.
+      access: inServer.value || inExistingServerRoom.value ? 'members' : access.value,
     })
   }
   catch (e: any) {
@@ -169,8 +197,9 @@ function openRoom() {
         </label>
 
         <!-- Voice or Side Space, as two buttons rather than a select: it's a choice about what
-             the meeting *feels* like, and two options deserve to both be visible. -->
-        <div class="grid grid-cols-2 gap-2">
+             the meeting *feels* like, and two options deserve to both be visible. Not asked at
+             all for a room that already exists — it is whatever it already is. -->
+        <div v-if="!inExisting" class="grid grid-cols-2 gap-2">
           <button
             v-for="option in ([
               { id: 'voice', label: 'Voice', hint: 'A call', icon: Mic },
@@ -193,9 +222,16 @@ function openRoom() {
           <span class="text-xs font-medium">Where it lives</span>
           <select v-model="where" class="w-full rounded-md border bg-background px-2 py-1.5 text-sm">
             <option value="">A new group chat — anyone with the link can be let in</option>
-            <optgroup v-if="staffServers.length" label="In a server">
-              <option v-for="server in staffServers" :key="server.id" :value="String(server.id)">
+            <optgroup v-if="staffServers.length" label="A new room in a server">
+              <option v-for="server in staffServers" :key="server.id" :value="`s:${server.id}`">
                 {{ server.name }}
+              </option>
+            </optgroup>
+            <!-- Rooms that already exist. Nothing is created: the meeting is a link (and perhaps
+                 a time) pointing at what's already there. -->
+            <optgroup v-if="existing.length" label="A room you already have">
+              <option v-for="room in existing" :key="room.id" :value="`c:${room.id}`">
+                {{ room.type === 'space' ? '🗺️' : '🔊' }} {{ room.name }}<template v-if="room.server"> · {{ room.server }}</template>
               </option>
             </optgroup>
           </select>
@@ -203,7 +239,7 @@ function openRoom() {
 
         <!-- Three answers rather than a checkbox: "how far open is this door" genuinely has
              three, and a pair of booleans would have made a nonsense state expressible. -->
-        <label v-if="!inServer" class="block space-y-1">
+        <label v-if="!inServer && !inExistingServerRoom" class="block space-y-1">
           <span class="text-xs font-medium">Who can follow the link</span>
           <select v-model="access" class="w-full rounded-md border bg-background px-2 py-1.5 text-sm">
             <option value="guest">Anyone with the link — no account needed</option>
@@ -220,6 +256,10 @@ function openRoom() {
         <p v-else class="text-[11px] text-muted-foreground">
           Everyone in that server can join. A link can’t let anybody *into* a server — use a group
           chat for people from outside.
+        </p>
+
+        <p v-if="inExisting && !inExistingServerRoom" class="text-[11px] text-muted-foreground">
+          The meeting points at that room. Nothing new is created.
         </p>
 
         <label class="flex items-center gap-2 text-xs">

@@ -6,7 +6,7 @@ use App\Events\ChannelUpdated;
 use App\Events\VoiceStateUpdated;
 use App\Models\Channel;
 use App\Models\VoiceParticipant;
-use App\Support\SideSpace\MapPresets;
+use App\Support\SideSpace\MapSeeder;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\ValidationException;
 
@@ -68,7 +68,7 @@ final class ChangeChannelTypeAction
             $channel->update(['type' => $type]);
 
             if ($type === 'space') {
-                $this->ensureMap($channel, $mapPreset);
+                MapSeeder::ensure($channel, $mapPreset);
             }
 
             /*
@@ -82,7 +82,7 @@ final class ChangeChannelTypeAction
                 $discussion->update(['type' => $type]);
 
                 if ($type === 'space') {
-                    $this->ensureMap($discussion, $mapPreset);
+                    MapSeeder::ensure($discussion, $mapPreset);
                 }
 
                 if (! $discussion->allowsCalls()) {
@@ -101,28 +101,6 @@ final class ChangeChannelTypeAction
         broadcast(new ChannelUpdated($channel));
 
         return $channel;
-    }
-
-    /** A space needs somewhere to stand. An existing map is never replaced — see the class comment. */
-    private function ensureMap(Channel $channel, ?string $preset): void
-    {
-        if ($channel->spaceMap()->exists()) {
-            return;
-        }
-
-        $map = MapPresets::find($preset ?? 'blank') ?? MapPresets::find('blank');
-
-        $channel->spaceMap()->create([
-            'name' => $map['name'],
-            'width' => $map['width'],
-            'height' => $map['height'],
-            'tiles' => $map['tiles'],
-            'zones' => $map['zones'],
-            'objects' => $map['objects'],
-            'spawn' => $map['spawn'],
-            'backdrops' => $map['backdrops'] ?? [],
-            'portals' => $map['portals'] ?? [],
-        ]);
     }
 
     /**

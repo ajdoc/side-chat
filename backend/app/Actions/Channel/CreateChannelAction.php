@@ -7,7 +7,7 @@ use App\Events\ChannelCreated;
 use App\Models\Channel;
 use App\Models\Server;
 use App\Models\User;
-use App\Support\SideSpace\MapPresets;
+use App\Support\SideSpace\MapSeeder;
 use Illuminate\Support\Facades\DB;
 
 final class CreateChannelAction
@@ -43,7 +43,7 @@ final class CreateChannelAction
             // visit — there is no moment at which the channel exists and the room doesn't. The map
             // hangs off the discussion, not the container: each discussion is its own room.
             if ($channel->isSpace()) {
-                $this->seedMap($general, (string) $data->preset);
+                MapSeeder::ensure($general, (string) $data->preset);
             }
 
             // Same argument as the map, one layer up: an app channel whose app row didn't exist
@@ -72,23 +72,4 @@ final class CreateChannelAction
         return $channel;
     }
 
-    private function seedMap(Channel $channel, string $preset): void
-    {
-        // Validation has already checked the key is one of ours; the fallback is belt and braces
-        // against a future caller that skips the FormRequest.
-        $map = MapPresets::find($preset) ?? MapPresets::find('blank');
-
-        $channel->spaceMap()->create([
-            'name' => $map['name'],
-            'width' => $map['width'],
-            'height' => $map['height'],
-            'tiles' => $map['tiles'],
-            'zones' => $map['zones'],
-            'objects' => $map['objects'],
-            'spawn' => $map['spawn'],
-            // Only the artwork-backed presets carry any; everything else draws its tiles.
-            'backdrops' => $map['backdrops'] ?? [],
-            'portals' => $map['portals'] ?? [],
-        ]);
-    }
 }

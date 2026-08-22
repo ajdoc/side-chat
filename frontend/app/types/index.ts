@@ -199,6 +199,11 @@ export type ConversationType = 'dm' | 'group'
 export interface Conversation {
   id: number
   type: ConversationType
+  /**
+   * What kind of room the chat's channel is — `text` for an ordinary chat, `space` for one whose
+   * call is a Side Space. Channel types are convertible, so this can't be assumed.
+   */
+  channel_type?: ChannelType
   /** Groups only. A DM has no name of its own. */
   name: string | null
   owner_id: number | null
@@ -920,7 +925,7 @@ export interface WhiteboardStroke {
  *
  * `canvas` is in the union but never in a stored list: the Open Canvas can't be removed.
  */
-export type SideDeskSurfaceAppId = 'board' | 'notes' | 'docs' | 'canvas' | 'calendar' | 'tracker' | 'polls' | 'stickers'
+export type SideDeskSurfaceAppId = 'board' | 'notes' | 'docs' | 'canvas' | 'calendar' | 'tracker' | 'polls' | 'stickers' | 'moba'
 export type SideDeskWidgetAppId = WidgetType
 export type SideDeskAppId = SideDeskSurfaceAppId | SideDeskWidgetAppId
 
@@ -1014,6 +1019,14 @@ export interface MeetingPreview {
   member: boolean
   /** Whether somebody with no account may walk in. What turns the page into a name field. */
   guests: boolean
+  /**
+   * Why they can't come in, when they can't — `server-invite` or `invite`.
+   *
+   * The page used to give the server explanation for every refusal, which was the wrong one two
+   * times out of three. The reason is the server's answer, so the client picks a sentence rather
+   * than working out the situation for itself.
+   */
+  needs?: 'server-invite' | 'invite' | 'account' | null
 }
 
 /** One line of a meeting's audit — who was admitted, and how. */
@@ -2223,4 +2236,61 @@ export interface AdminOverview {
     new_users_this_week: number
   }
   banned_users: AdminUser[]
+}
+
+/* ── The MOBA ──────────────────────────────────────────────────────────────────────────────
+ *
+ * See MOBA.md. The match itself runs in a separate Rust process at 30Hz and this client speaks
+ * to it over its own WebSocket; everything typed here is the *metagame* the API owns — the
+ * roster, the queue, and the signed ticket that gets you a seat.
+ */
+
+export interface MobaHero {
+  id: string
+  name: string
+  role: string
+  /** Which of the three visual families the hero belongs to. Cosmetic, for grouping the grid. */
+  family: 'fantasy' | 'sidechat' | 'scifi'
+}
+
+export interface MobaCatalogue {
+  heroes: MobaHero[]
+  /** 1 through 5. A real mode, not a testing affordance — the sim scales to it. */
+  team_sizes: number[]
+}
+
+export interface MobaMatchPlayer {
+  user_id: number
+  name: string | null
+  team: number
+  slot: number
+  hero: string
+  kills: number | null
+  deaths: number | null
+  assists: number | null
+  mmr_change: number | null
+}
+
+export interface MobaMatch {
+  id: number
+  status: 'queued' | 'live' | 'finished' | 'abandoned'
+  team_size: number
+  server_address: string | null
+  winning_team: number | null
+  /**
+   * The signed pass into the game server. Minted per request and good for two minutes, so it is
+   * never stored — a reconnect asks for a new one rather than reusing a stale one.
+   */
+  ticket: string | null
+  you: { team: number, slot: number, hero: string } | null
+  players: MobaMatchPlayer[]
+}
+
+export interface MobaMe {
+  mmr: number
+  games: number
+  wins: number
+  queued: boolean
+  queued_size: number | null
+  match: MobaMatch | null
 }
