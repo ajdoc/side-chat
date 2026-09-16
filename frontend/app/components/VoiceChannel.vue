@@ -24,6 +24,7 @@ import {
 } from 'lucide-vue-next'
 import type { Channel, Peer, VoiceParticipant } from '~/types'
 import { watchKey } from '~/composables/useCallStage'
+import { VOICE_TOUR } from '~/lib/tour'
 import { Button } from '~/components/ui/button'
 import {
   AlertDialog,
@@ -131,6 +132,18 @@ const canModerate = computed(() => {
 
 /** Are we in *this* channel's call? You can be in another one and just reading this one. */
 const here = computed(() => channelId.value === props.channel.id && status.value !== 'idle')
+
+/**
+ * Show somebody round their first call.
+ *
+ * Waits for `connected` rather than firing on the click that joined: the stage and the
+ * control row are what the tour is about, and neither is on screen while we're still
+ * negotiating. Once per account — see useTour for why "seen" is per-tour.
+ */
+const { startOnce: startTourOnce } = useTour()
+watch(() => here.value && status.value === 'connected', (up) => {
+  if (up) startTourOnce(VOICE_TOUR)
+})
 const connecting = computed(() => here.value && status.value === 'connecting')
 
 /** Before you join, who's already in there — straight from the sidebar's roster. */
@@ -484,7 +497,7 @@ const deafenedCount = computed(() => waiting.value.filter(p => p.deafened).lengt
 
   <section v-if="!hidden" class="shrink-0 border-b bg-muted/20">
     <!-- Not in the call: a slim bar with whoever is, and a way in. -->
-    <div v-if="!here" class="flex items-center gap-3 px-4 py-2">
+    <div v-if="!here" data-tour="voice-roster" class="flex items-center gap-3 px-4 py-2">
       <Volume2 class="h-4 w-4 shrink-0 text-muted-foreground" />
 
       <template v-if="waiting.length">
@@ -521,7 +534,7 @@ const deafenedCount = computed(() => waiting.value.filter(p => p.deafened).lengt
         <VoiceEffectSettings :channel="channel" />
       </div>
 
-      <Button size="sm" :class="canSetEffects ? 'gap-2' : 'ml-auto gap-2'" @click="connect(channel.id)">
+      <Button data-tour="voice-join" size="sm" :class="canSetEffects ? 'gap-2' : 'ml-auto gap-2'" @click="connect(channel.id)">
         <Volume2 class="h-4 w-4" /> {{ joinLabel }}
       </Button>
     </div>
@@ -556,7 +569,7 @@ const deafenedCount = computed(() => waiting.value.filter(p => p.deafened).lengt
 
       <div v-if="!collapsed" class="flex flex-col gap-3 px-4 pb-3">
         <!-- Whatever you're watching — screens and faces, up to four of them side by side. -->
-        <section v-if="stages.length" class="flex flex-col gap-1.5">
+        <section v-if="stages.length" data-tour="voice-stage" class="flex flex-col gap-1.5">
           <div class="grid gap-1.5" :class="stageColumns">
             <CallStageTile
               v-for="w in stages"
@@ -634,7 +647,7 @@ const deafenedCount = computed(() => waiting.value.filter(p => p.deafened).lengt
       <!-- Controls stay put whether or not the tiles are showing. They wrap rather than
            overflow, because a phone can't fit the row on one line and a call control you
            can't reach is worse than one on a second row. -->
-      <div class="flex flex-wrap items-center justify-center gap-2 border-t px-4 py-2">
+      <div data-tour="voice-controls" class="flex flex-wrap items-center justify-center gap-2 border-t px-4 py-2">
         <Button
           :variant="micOpen ? 'secondary' : 'destructive'"
           size="icon"

@@ -295,7 +295,8 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <div @drop.prevent="onDrop" @dragover.prevent>
+  <!-- `data-tour` is the guided tour's hook for this element; see lib/tour.ts. -->
+  <div data-tour="composer" @drop.prevent="onDrop" @dragover.prevent>
     <!-- Pending attachments -->
     <div v-if="pending.length" class="flex flex-wrap gap-2 px-3 pt-2">
       <div

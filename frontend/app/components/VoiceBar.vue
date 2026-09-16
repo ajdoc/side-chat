@@ -83,7 +83,7 @@ const link = computed(() => {
 </script>
 
 <template>
-  <div v-if="inCall" class="shrink-0 border-t bg-muted/40 p-2">
+  <div v-if="inCall" data-tour="voice-bar" class="shrink-0 border-t bg-muted/40 p-2">
     <div class="flex items-center gap-2 px-1 pb-2">
       <Signal
         class="h-4 w-4 shrink-0"

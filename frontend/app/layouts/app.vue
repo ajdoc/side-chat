@@ -3,7 +3,7 @@ import {
   AudioLines,
   Bell,
   Bot,
-  Check, ChevronDown, ChevronRight, Copy, DoorOpen, Hash, HeadphoneOff, Lock, LogOut,
+  Check, ChevronDown, ChevronRight, Compass, Copy, DoorOpen, Hash, HeadphoneOff, Lock, LogOut,
   KeyRound,
   LayoutList,
   Map as MapIcon,
@@ -13,6 +13,7 @@ import {
 import { useLocalStorage } from '@vueuse/core'
 import type { Channel, Conversation, Server, ThemeColor, ThemeMode } from '~/types'
 import type { SplitPane } from '~/composables/useSplitView'
+import { TOURS } from '~/lib/tour'
 import { deskApp } from '~/composables/useDeskApps'
 import { useLongPress } from '~/composables/useTouch'
 import { useDesktopNotifications } from '~/composables/useDesktopNotifications'
@@ -23,6 +24,9 @@ import {
   DropdownMenuItem,
   DropdownMenuLabel,
   DropdownMenuSeparator,
+  DropdownMenuSub,
+  DropdownMenuSubContent,
+  DropdownMenuSubTrigger,
   DropdownMenuTrigger,
 } from '~/components/ui/dropdown-menu'
 import {
@@ -67,6 +71,9 @@ const { user, logout, updateProfile } = useAuth()
 // only piece of admin state the app layout knows about.
 const { isSuperAdmin } = useAdmin()
 const { goToAdmin } = usePanelSide()
+// The guided tour of the shell. The layout owns it because the shell *is* what it teaches —
+// the sidebar, the palette and the account menu are all here. See useTour.
+const { startOnce: startTourOnce, restart: restartTour, canRun: canRunTour } = useTour()
 const { hasDraft } = useDrafts()
 // People in a voice channel show under whatever they're called in this server.
 const { nameFor } = useNicknames()
@@ -795,6 +802,10 @@ onMounted(async () => {
   // isn't one.
   await Promise.all([fetchServers(), fetchConversations(), loadFriends()])
   await syncServer()
+
+  // Only after the sidebar has something in it. A tour of an empty shell teaches nothing,
+  // and half its steps would resolve to nothing and be skipped. Once per account, ever.
+  startTourOnce()
 })
 
 watch(activeServerId, syncServer)
@@ -824,6 +835,7 @@ onBeforeUnmount(() => { userStream.unsubscribe(); stopPresence() })
          in the stylesheet, so listing both would leave the drawer in the flex flow — still
          reserving its width while `-translate-x-full` merely slid it out of sight. -->
     <aside
+      data-tour="sidebar"
       class="flex flex-col border-r bg-sidebar transition-transform"
       :class="narrow
         ? ['safe-inset fixed inset-y-0 left-0 z-[45] w-[min(20rem,85vw)]', drawerOpen ? 'translate-x-0' : '-translate-x-full']
@@ -839,6 +851,7 @@ onBeforeUnmount(() => { userStream.unsubscribe(); stopPresence() })
              hint on the button rather than the only way in. -->
         <button
           type="button"
+          data-tour="search"
           class="ml-auto flex shrink-0 items-center gap-1.5 rounded-md px-1.5 py-1 text-muted-foreground transition hover:bg-muted hover:text-foreground"
           title="Search everything (⌘K)"
           @click="closeDrawer(); palette?.show()"
@@ -1138,6 +1151,7 @@ onBeforeUnmount(() => { userStream.unsubscribe(); stopPresence() })
                          still navigates on a plain click; both are the other gesture the same
                          row already invited. See `openBeside`. -->
                     <NuxtLink
+                      data-tour="channel-row"
                       :to="`/servers/${item.channel.server_id}/channels/${item.target.id}`"
                       draggable="true"
                       class="mx-2 flex items-center gap-2 rounded py-1.5 pr-2 text-sm hover:bg-muted"
@@ -1449,6 +1463,7 @@ onBeforeUnmount(() => { userStream.unsubscribe(); stopPresence() })
 
                 <NuxtLink
                   v-else-if="item.kind === 'add-server'"
+                  data-tour="add-server"
                   to="/onboarding"
                   class="mx-2 flex items-center gap-2 rounded px-2 py-1.5 text-sm text-muted-foreground transition hover:bg-muted hover:text-foreground"
                 >
@@ -1487,7 +1502,7 @@ onBeforeUnmount(() => { userStream.unsubscribe(); stopPresence() })
       <div class="shrink-0 border-t p-2">
         <DropdownMenu>
           <DropdownMenuTrigger as-child>
-            <button class="flex w-full items-center gap-2 rounded px-2 py-1.5 text-sm outline-none transition hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring">
+            <button data-tour="account" class="flex w-full items-center gap-2 rounded px-2 py-1.5 text-sm outline-none transition hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring">
               <span class="grid h-7 w-7 shrink-0 place-items-center rounded-full bg-primary text-[10px] font-semibold text-primary-foreground">
                 <img v-if="user?.avatar" :src="user.avatar" :alt="user.name" class="h-full w-full rounded-full object-cover">
                 <span v-else>{{ user ? initialsOf(user.name) : '?' }}</span>
@@ -1566,6 +1581,30 @@ onBeforeUnmount(() => { userStream.unsubscribe(); stopPresence() })
                 <ShieldCheck class="mr-2 h-4 w-4" /> Admin panel
               </DropdownMenuItem>
             </template>
+            <!--
+              Replay, and the list of what there is to be shown round.
+
+              Deliberately not hidden once taken: the app grows features, and "show me that
+              again" is a thing people ask months in. A tour whose subject isn't on screen —
+              voice, from a page with no call in it — is listed but disabled rather than
+              dropped, because the greyed row is itself the answer to "is there one for that?"
+            -->
+            <DropdownMenuSub>
+              <DropdownMenuSubTrigger>
+                <Compass class="mr-2 h-4 w-4" /> Take a tour
+              </DropdownMenuSubTrigger>
+              <DropdownMenuSubContent>
+                <DropdownMenuItem
+                  v-for="t in TOURS"
+                  :key="t.id"
+                  :disabled="!canRunTour(t)"
+                  :title="canRunTour(t) ? undefined : 'Open one to be shown round it'"
+                  @select="restartTour(t)"
+                >
+                  {{ t.label }}
+                </DropdownMenuItem>
+              </DropdownMenuSubContent>
+            </DropdownMenuSub>
             <DropdownMenuSeparator />
             <DropdownMenuItem class="text-destructive focus:text-destructive" @select="logout">
               <LogOut class="mr-2 h-4 w-4" /> Sign out
@@ -1680,6 +1719,10 @@ onBeforeUnmount(() => { userStream.unsubscribe(); stopPresence() })
          every screen in the app, and the thing it navigates to is usually not the page it was
          opened from. -->
     <SearchPalette ref="palette" />
+
+    <!-- The guided tour. Mounted here for the same reason as the shelf and the palette: it
+         spotlights things all over the shell, so it cannot live inside any one of them. -->
+    <TourOverlay />
 
     <!-- Who may be in a channel (staff), and who runs the server (owner). Mounted here
          beside the shelf so they survive the sidebar row that opened them being re-rendered. -->

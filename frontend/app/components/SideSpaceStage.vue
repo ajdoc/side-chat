@@ -74,6 +74,7 @@ import { EFFECT_MS, drawRoomEffect, drawRoomEffectLabel } from '~/lib/spaceEffec
 import { normaliseLook } from '~/lib/spaceAvatar'
 import { EMOTES, EMOTE_MS, emojiSprite } from '~/lib/spaceEmotes'
 import { Button } from '~/components/ui/button'
+import { SIDE_SPACE_TOUR } from '~/lib/tour'
 
 /**
  * A Side Space: the room, drawn.
@@ -992,6 +993,19 @@ async function toggleSummon() {
 
 /** Are we in *this* room's call, as opposed to some other channel's? */
 const inThisRoom = computed(() => inCall.value && activeCallChannel.value === props.channel.id)
+
+/**
+ * Show somebody round their first Side Space.
+ *
+ * A Side Space breaks the rules the rest of the app taught — you are a character, being heard
+ * depends on where you stand, and the furniture does things — so this is the one place an
+ * unprompted tour earns its interruption. Offered on arrival rather than on the page outside,
+ * because most of what it points at only exists once you're in. Once per account; see useTour.
+ */
+const { startOnce: startTourOnce } = useTour()
+watch(inThisRoom, (inside) => {
+  if (inside) startTourOnce(SIDE_SPACE_TOUR)
+})
 
 // Nothing left to look at in the people sheet once you've walked out.
 watch(inThisRoom, (still) => {
@@ -3306,6 +3320,7 @@ watch(inThisRoom, (now) => {
              these are the ones you reach for mid-sentence. -->
         <button
           v-if="inThisRoom"
+          data-tour="space-mic"
           type="button"
           class="rounded p-1.5 transition-colors hover:bg-muted"
           :class="micOpen ? 'text-foreground' : 'text-destructive'"
@@ -3388,6 +3403,7 @@ watch(inThisRoom, (now) => {
           class="relative rounded p-1.5 transition-colors hover:bg-muted"
           :class="peopleShowing ? 'text-primary' : 'text-muted-foreground'"
           :aria-expanded="peopleShowing"
+          data-tour="space-people"
           title="Who's in earshot — cameras, screens and volumes"
           @click="togglePeople"
         >
@@ -3399,11 +3415,11 @@ watch(inThisRoom, (now) => {
           />
         </button>
 
-        <Button v-if="inThisRoom" variant="ghost" size="sm" class="gap-1.5 text-destructive" @click="leave">
+        <Button v-if="inThisRoom" data-tour="space-leave" variant="ghost" size="sm" class="gap-1.5 text-destructive" @click="leave">
           <PhoneOff class="h-4 w-4" /> <span :class="narrow ? 'sr-only' : undefined">Leave</span>
         </Button>
 
-        <Button v-if="!inThisRoom" size="sm" class="gap-1.5" :disabled="joining || loading" @click="enter">
+        <Button v-if="!inThisRoom" data-tour="space-enter" size="sm" class="gap-1.5" :disabled="joining || loading" @click="enter">
           <Loader2 v-if="joining" class="h-4 w-4 animate-spin" />
           <MapIcon v-else class="h-4 w-4" />
           {{ joining ? 'Entering…' : narrow ? 'Enter' : 'Enter the space' }}
@@ -3490,6 +3506,7 @@ watch(inThisRoom, (now) => {
           <button
             type="button"
             :class="[toolClass, 'text-muted-foreground hover:text-foreground']"
+            data-tour="space-appearance"
             title="Change how you look, and pick a companion"
             @click="fromMenu(() => (dressing = true))"
           >
@@ -3719,6 +3736,7 @@ watch(inThisRoom, (now) => {
 
         <canvas
           ref="canvas"
+          data-tour="space-room"
           class="block h-full w-full touch-none"
           :class="inThisRoom ? 'cursor-pointer' : undefined"
           @pointerdown="onPointerDown"
@@ -4056,6 +4074,7 @@ watch(inThisRoom, (now) => {
         -->
         <SideSpaceMiniMap
           v-if="map && showMiniMap && !gameRunning && !gameMeeting"
+          data-tour="space-minimap"
           class="absolute right-2 top-[7.5rem]"
           :map="map"
           :occupants="occupants"
