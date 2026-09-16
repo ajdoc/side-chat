@@ -5,6 +5,9 @@
 //! - [`interp`] — the snapshot buffer and the ~100ms render delay. Where "does it feel smooth"
 //!   is actually decided.
 //! - [`input`] — clicks and keys becoming orders.
+//! - [`aim`] — what an armed ability is about to do, drawn before the click.
+//! - [`projection`] — the isometric ground plane. The shape of the world; `camera` adds where
+//!   you are standing on it.
 //! - [`camera`] — screen ↔ world, in one place.
 //! - [`effects`] — the transient feedback that makes a fight legible: damage numbers, hit
 //!   lines, cast rings, deaths.
@@ -21,12 +24,14 @@
 //! - [`web`] — the wasm shim: a canvas, a socket, and a frame loop. Mechanical, and compiled
 //!   only for `wasm32`, which is why `cargo test` on the host exercises everything above it.
 
+pub mod aim;
 pub mod camera;
 pub mod effects;
 pub mod hud;
 pub mod input;
 pub mod interp;
 pub mod minimap;
+pub mod projection;
 pub mod spells;
 pub mod sprites;
 pub mod terrain;

@@ -17,6 +17,7 @@ fn own(cooldowns: Vec<u32>, items: usize) -> NetSelf {
         cooldowns,
         abilities: vec![0; 10],
         targeting: vec![moba_proto::NetTargeting::Point; 10],
+        ranges: vec![0; 1],
         items: (0..items).map(|i| i as u16).collect(),
         ranks: vec![1; 10],
         rank_caps: vec![4; 10],

@@ -123,6 +123,16 @@ impl Sprite {
         }
     }
 
+    /// The file for one pose of a directional sprite: `ironclad_downright.png`.
+    ///
+    /// Not every character has these. One that does not falls back to its single overhead
+    /// drawing and the rotation that goes with it, which is what lets the direction sheets
+    /// arrive one hero at a time instead of all ten at once.
+    pub fn pose_file(self, pose: Pose) -> String {
+        let stem = self.file().trim_end_matches(".png");
+        format!("{stem}_{}.png", pose.suffix())
+    }
+
     /// Which directory the file is served from. Heroes are kept apart from the units because
     /// they are the batch most likely to be redrawn, and a hero is not a creep.
     pub fn directory(self) -> &'static str {
@@ -147,6 +157,107 @@ impl Sprite {
         } else {
             2.6
         }
+    }
+}
+
+/// One of the five drawings a directional character needs.
+///
+/// Named for how the pose *looks on screen*, not for the world heading it serves. That is the
+/// way round an artist can work to — "facing the bottom-right of the image" is a thing you can
+/// draw, "facing world +x" is not — and it keeps the projection's business inside
+/// [`pose_for_bucket`] rather than spread across ten filenames.
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
+pub enum Pose {
+    Down,
+    DownRight,
+    Right,
+    UpRight,
+    Up,
+}
+
+impl Pose {
+    pub const ALL: [Pose; 5] = [
+        Pose::Down,
+        Pose::DownRight,
+        Pose::Right,
+        Pose::UpRight,
+        Pose::Up,
+    ];
+
+    pub fn suffix(self) -> &'static str {
+        match self {
+            Pose::Down => "down",
+            Pose::DownRight => "downright",
+            Pose::Right => "right",
+            Pose::UpRight => "upright",
+            Pose::Up => "up",
+        }
+    }
+}
+
+/// Which drawing to use for one of the eight world headings, and whether to flip it.
+///
+/// ## Five drawings, eight directions
+///
+/// Mirroring a sprite left-to-right turns a heading into its reflection about the screen's
+/// vertical axis, so the four left-facing headings are the four right-facing ones flipped, and
+/// straight-up and straight-down are their own mirrors. Five drawings therefore cover eight
+/// directions, which is the difference between fifty pieces of art for this game and eighty.
+///
+/// The cost is that mirroring flips the character: a shield on the left arm is on the right arm
+/// in half the directions. At the size a hero is drawn nobody sees it, and it is what every
+/// two-dimensional isometric game did for twenty years.
+///
+/// The buckets are world headings — see [`crate::projection::direction_bucket`] — and the map
+/// from those to screen appearances is the projection's doing: world +x is *down and to the
+/// right* on an isometric screen, not to the right.
+pub fn pose_for_bucket(bucket: usize) -> (Pose, bool) {
+    match bucket % 8 {
+        0 => (Pose::DownRight, false), // world +x
+        1 => (Pose::Down, false),      // world +x +y
+        2 => (Pose::DownRight, true),  // world +y
+        3 => (Pose::Right, true),      // world -x +y
+        4 => (Pose::UpRight, true),    // world -x
+        5 => (Pose::Up, false),        // world -x -y
+        6 => (Pose::UpRight, false),   // world -y
+        _ => (Pose::Right, false),     // world +x -y
+    }
+}
+
+/// Where a directional drawing's feet are, as a fraction of its height.
+///
+/// The very bottom, unlike the overhead art, and for a reason the isometric view makes
+/// unavoidable: a posed character is a figure *standing* on the ground, so the point it occupies
+/// is under its feet. Centring one would sink it to the waist, and — worse — would put it at the
+/// wrong depth, since the draw order sorts on where a unit stands.
+///
+/// Exactly one rather than nearly one: the sheet is cut to the character's own outline, so the
+/// bottom edge of the image *is* the sole of the boot. Any less and the figure hovers.
+pub const POSED_ANCHOR: f32 = 1.0;
+
+/// How **tall** a directional drawing is, as a multiple of the placeholder disc's radius.
+///
+/// Height and not width, which is not a preference. The five poses of one character are not the
+/// same width — Ironclad seen from the side is 306 pixels across and 425 from the front — so
+/// sizing them by width draws the same hero at five different heights and he grows and shrinks
+/// as he turns. Sizing by height makes every pose the same size as every other, which is the
+/// only property that matters here.
+pub const POSED_HEIGHT: f32 = 3.1;
+
+/// How big a unit is drawn, in screen pixels before zoom.
+///
+/// One definition, used by the renderer to draw and by the camera to decide what a click landed
+/// on. Two copies of this is how you get a game where the thing you can see and the thing you
+/// can click are different sizes — which feels like bad input rather than like a bug, so nobody
+/// reports it precisely enough to find.
+pub fn draw_radius(kind: NetKind) -> f32 {
+    match kind {
+        NetKind::Hero => 26.0,
+        NetKind::Creep => 14.0,
+        NetKind::Tower => 34.0,
+        NetKind::Base => 52.0,
+        NetKind::Zone => 0.0,
+        NetKind::Projectile => 5.0,
     }
 }
 
@@ -251,6 +362,49 @@ mod tests {
         let count = files.len();
         files.dedup();
         assert_eq!(files.len(), count);
+    }
+
+    #[test]
+    fn the_five_poses_cover_all_eight_headings() {
+        let mut covered = std::collections::BTreeSet::new();
+        for bucket in 0..8 {
+            covered.insert(pose_for_bucket(bucket));
+        }
+        assert_eq!(covered.len(), 8, "two headings resolved to the same drawing and flip");
+    }
+
+    #[test]
+    fn opposite_headings_are_mirrors_of_each_other() {
+        // World +x and world +y are reflections across the screen's vertical axis, so they are
+        // the same drawing flipped. If this stops holding, the mirroring scheme is wrong and
+        // half the directions will face the wrong way.
+        assert_eq!(pose_for_bucket(0), (Pose::DownRight, false));
+        assert_eq!(pose_for_bucket(2), (Pose::DownRight, true));
+        assert_eq!(pose_for_bucket(7), (Pose::Right, false));
+        assert_eq!(pose_for_bucket(3), (Pose::Right, true));
+    }
+
+    #[test]
+    fn straight_up_and_straight_down_are_never_flipped() {
+        // They are their own mirrors, so flipping them would be a wasted transform that also
+        // swaps the character's gear for no gain.
+        assert_eq!(pose_for_bucket(1), (Pose::Down, false));
+        assert_eq!(pose_for_bucket(5), (Pose::Up, false));
+    }
+
+    #[test]
+    fn a_pose_file_hangs_off_the_sprite_name() {
+        assert_eq!(Sprite::Ironclad.pose_file(Pose::DownRight), "ironclad_downright.png");
+        assert_eq!(Sprite::Ironclad.pose_file(Pose::Up), "ironclad_up.png");
+    }
+
+    #[test]
+    fn every_pose_has_a_distinct_suffix() {
+        let mut names: Vec<&str> = Pose::ALL.iter().map(|p| p.suffix()).collect();
+        names.sort_unstable();
+        let count = names.len();
+        names.dedup();
+        assert_eq!(names.len(), count);
     }
 
     #[test]

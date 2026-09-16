@@ -11,7 +11,7 @@ use std::collections::BTreeMap;
 use wasm_bindgen::JsCast;
 use web_sys::{CanvasPattern, CanvasRenderingContext2d, HtmlCanvasElement, HtmlImageElement};
 
-use crate::sprites::Sprite;
+use crate::sprites::{Pose, Sprite};
 use crate::terrain::{Tile, TILE_WORLD};
 
 /// One texture, and the pattern built from it once it has arrived.
@@ -168,18 +168,47 @@ fn scaled_copy(image: &HtmlImageElement, width: u32) -> Option<HtmlCanvasElement
 /// build, so an image element is the whole of it.
 pub struct SpriteBank {
     images: BTreeMap<u8, HtmlImageElement>,
+    /// The directional drawings, keyed by sprite index and pose. Only heroes that have had a
+    /// direction sheet made for them appear here.
+    poses: BTreeMap<(u8, u8), HtmlImageElement>,
 }
 
 impl SpriteBank {
     pub fn load(base: &str) -> SpriteBank {
         let mut images = BTreeMap::new();
+        let mut poses = BTreeMap::new();
         for (index, sprite) in Sprite::ALL.iter().enumerate() {
             if let Ok(image) = HtmlImageElement::new() {
                 image.set_src(&format!("{base}/{}/{}", sprite.directory(), sprite.file()));
                 images.insert(index as u8, image);
             }
+
+            // The five directional drawings, requested for every hero whether or not one has
+            // been made. A hero without a sheet answers with four 404s and keeps its overhead
+            // drawing — which costs a handful of failed requests once, and is what lets the
+            // sheets arrive one hero at a time instead of all six together.
+            if sprite.is_hero() {
+                for (slot, pose) in Pose::ALL.iter().enumerate() {
+                    if let Ok(image) = HtmlImageElement::new() {
+                        image.set_src(&format!(
+                            "{base}/{}/{}",
+                            sprite.directory(),
+                            sprite.pose_file(*pose)
+                        ));
+                        poses.insert((index as u8, slot as u8), image);
+                    }
+                }
+            }
         }
-        SpriteBank { images }
+        SpriteBank { images, poses }
+    }
+
+    /// The drawing for one pose of a sprite, if a sheet has been made for it.
+    pub fn pose(&self, sprite: Sprite, pose: Pose) -> Option<&HtmlImageElement> {
+        let index = Sprite::ALL.iter().position(|s| *s == sprite)? as u8;
+        let slot = Pose::ALL.iter().position(|p| *p == pose)? as u8;
+        let image = self.poses.get(&(index, slot))?;
+        ready(image).then_some(image)
     }
 
     /// The picture for a sprite, or `None` while it is still downloading or if it is not there.

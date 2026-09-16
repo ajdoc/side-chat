@@ -5,7 +5,7 @@
 //! selection click.
 
 use moba_client::camera::Camera;
-use moba_client::input::{slot_for_key, Armed, Input, MouseButton};
+use moba_client::input::{slot_for_key, Armed, HeldKeys, Input, MouseButton};
 use moba_client::interp::RenderEntity;
 use moba_proto::{ClientMessage, NetKind, NetTarget, NetTeam};
 
@@ -303,4 +303,47 @@ fn an_ability_button_arms_unless_it_has_nothing_to_aim_at() {
         other => panic!("expected an immediate self-cast, got {other:?}"),
     }
     assert_eq!(input.armed, Armed::None);
+}
+
+#[test]
+fn the_movement_keys_point_where_they_look() {
+    // The bug this pins: these used to be world directions, which was the same thing while the
+    // view was top-down and stopped being it the moment the map became isometric. W then walked
+    // the hero up *and to the left*, and every other key was forty-five degrees off too.
+    //
+    // Screen up is world "up and left" — toward smaller x and smaller y — so both components
+    // must be negative and equal.
+    let mut held = HeldKeys::default();
+    held.press("w");
+    let (dx, dy) = held.world_direction();
+    assert!(dx < 0.0 && dy < 0.0, "W should walk toward the top of the screen, got ({dx},{dy})");
+    assert!((dx - dy).abs() < 0.001, "W should be evenly diagonal in world space");
+
+    held.release("w");
+    held.press("d");
+    let (dx, dy) = held.world_direction();
+    assert!(dx > 0.0 && dy < 0.0, "D should walk right across the screen, got ({dx},{dy})");
+}
+
+#[test]
+fn every_movement_key_is_a_unit_vector() {
+    // Unprojecting does not preserve length, so normalising has to happen after it. If it did
+    // not, walking one way would be measurably faster than walking another.
+    for keys in [vec!["w"], vec!["a"], vec!["w", "d"], vec!["s", "a"]] {
+        let mut held = HeldKeys::default();
+        for key in &keys {
+            held.press(key);
+        }
+        let (dx, dy) = held.world_direction();
+        let length = (dx * dx + dy * dy).sqrt();
+        assert!((length - 1.0).abs() < 0.001, "{keys:?} gave length {length}");
+    }
+}
+
+#[test]
+fn opposite_keys_still_cancel() {
+    let mut held = HeldKeys::default();
+    held.press("w");
+    held.press("s");
+    assert_eq!(held.world_direction(), (0.0, 0.0));
 }

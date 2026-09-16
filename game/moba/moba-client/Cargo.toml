@@ -27,4 +27,6 @@ features = [
   "HtmlImageElement", "CanvasPattern", "DomMatrix2dInit",
   # The fog layer: its own canvas, and a radial gradient per vision source.
   "CanvasGradient",
+  # Telling the page the match is over.
+  "CustomEvent", "CustomEventInit", "EventTarget",
 ]

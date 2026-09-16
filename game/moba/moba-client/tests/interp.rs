@@ -322,6 +322,7 @@ fn the_own_block_is_taken_from_the_newest_snapshot_not_the_rendered_one() {
         cooldowns: vec![0; 10],
         abilities: vec![0; 10],
         targeting: vec![moba_proto::NetTargeting::Point; 10],
+        ranges: vec![0; 1],
         items: vec![],
         ranks: vec![1; 10],
         rank_caps: vec![4; 10],

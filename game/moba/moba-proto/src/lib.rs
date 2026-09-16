@@ -19,7 +19,7 @@ use serde::{Deserialize, Serialize};
 /// The server rejects a client that does not match. A stale wasm bundle in somebody's cache is
 /// otherwise indistinguishable from a desync bug, and one of those is an evening of debugging
 /// while the other is a hard refresh.
-pub const PROTOCOL_VERSION: u32 = 12;
+pub const PROTOCOL_VERSION: u32 = 13;
 
 /// Ticks per second. Fixed, and shared by every crate, because a sim step is only meaningful
 /// against a known step duration.
@@ -105,6 +105,13 @@ pub struct NetSelf {
     pub abilities: Vec<u16>,
     /// How each slot is aimed, parallel to `abilities`.
     pub targeting: Vec<NetTargeting>,
+    /// How far each slot may be aimed, in `Q16.16` world units. Zero means unlimited.
+    ///
+    /// Sent rather than mirrored, because it is a *rule* and the client draws a promise with it:
+    /// a range ring the server disagrees with is worse than no ring at all — it tells you a cast
+    /// will land and then the cast is refused, and the player learns to distrust the display
+    /// rather than the number.
+    pub ranges: Vec<i32>,
     /// The rank of each slot; zero means unlearned and uncastable.
     pub ranks: Vec<u8>,
     /// The highest rank each slot may currently be raised to, so the client can grey out a

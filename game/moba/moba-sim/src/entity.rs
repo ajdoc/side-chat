@@ -326,6 +326,18 @@ pub struct Entity {
     /// they lie there. Without a marker it re-killed the same hero thirty times a second: a
     /// death event, a bounty and a credited kill per tick.
     pub respawn_at: Option<u32>,
+    /// Which way this is pointing. Not normalised to anything in particular; only the direction
+    /// is read.
+    ///
+    /// **Persisted rather than derived from the current order**, which is how it used to work and
+    /// was wrong for every order except one. `MoveTo` was the only kind that carried a direction
+    /// in it, so a hero walking on WASD (`MoveDirection`), a creep pushing a lane (`PushLane`),
+    /// anything attacking, and anything standing still all reported a facing of exactly zero —
+    /// and the renderer, asked which of eight ways to draw them, always got the same answer.
+    ///
+    /// Keeping the last real heading also gets the behaviour players expect for free: stop
+    /// walking and you keep facing the way you were going, rather than snapping to a default.
+    pub facing: Vec2,
     /// The tick of the last action taken. Ghostuser's Idle reads it, which is why actions have
     /// to be observable as events rather than only as mutations.
     ///
@@ -385,6 +397,7 @@ impl Entity {
             modifiers: Vec::new(),
             lane_leg: 0,
             lane: None,
+            facing: Vec2::ZERO,
             hero: 0,
             tier: 0,
             owner: None,

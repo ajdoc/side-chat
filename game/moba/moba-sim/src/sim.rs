@@ -900,6 +900,10 @@ impl Sim {
             // brushing a wall from sticking to it completely, which reads as the controls having
             // failed rather than as a wall being there.
             let direction = to_go.normalized();
+            // Where it is going is where it faces. Set from the movement itself rather than from
+            // the order, so every way of moving — a click, a held key, a lane walk, chasing an
+            // attack target — turns the unit the same way.
+            e.facing = direction;
             let wanted = e.pos + direction.scale(step);
             e.pos = if !blocked(wanted) {
                 wanted
@@ -949,11 +953,12 @@ impl Sim {
                 continue;
             }
 
-            let in_range = self
+            let target_pos = self
                 .entities
                 .get(target)
-                .is_some_and(|t| t.is_alive() && (t.pos - e.pos).len_sq() <= range_sq);
-            if !in_range {
+                .filter(|t| t.is_alive() && (t.pos - e.pos).len_sq() <= range_sq)
+                .map(|t| t.pos);
+            if target_pos.is_none() {
                 continue;
             }
 
@@ -997,6 +1002,14 @@ impl Sim {
             if let Some(e) = self.entities.get_mut(id) {
                 e.attack_cooldown = interval;
                 e.last_attack_target = Some(target);
+                // Swinging at something turns you toward it. Without this a hero who walks past
+                // an enemy and stops to fight keeps facing the way they were walking.
+                if let Some(toward) = target_pos {
+                    let to_target = toward - e.pos;
+                    if to_target.len_sq() > Fx::ZERO.sq() {
+                        e.facing = to_target.normalized();
+                    }
+                }
                 e.last_action_tick = tick;
                 // Attacking breaks stealth. Ghostuser's Idle says "any action breaks it", and
                 // an autoattack is the action players will most expect to.

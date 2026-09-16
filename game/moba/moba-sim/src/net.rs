@@ -194,10 +194,6 @@ impl Sim {
                 self.can_see(team, e, &sources)
             })
             .map(|(id, e)| {
-                let facing = match e.order {
-                    crate::entity::Order::MoveTo(p) => (p - e.pos).normalized(),
-                    _ => crate::fixed::Vec2::ZERO,
-                };
                 NetEntity {
                     id: id.to_net(),
                     kind: net_kind(e.kind),
@@ -211,8 +207,8 @@ impl Sim {
                     } else {
                         0
                     },
-                    facing_x: facing.x.raw(),
-                    facing_y: facing.y.raw(),
+                    facing_x: e.facing.x.raw(),
+                    facing_y: e.facing.y.raw(),
                     vision: vision_radius(e.kind).raw(),
                     variant: match e.kind {
                         EntityKind::Hero => e.hero,
@@ -256,6 +252,15 @@ impl Sim {
                             | crate::ability::Targeting::Skillshot => NetTargeting::Vector,
                         },
                         None => NetTargeting::None,
+                    })
+                    .collect(),
+                ranges: e
+                    .abilities
+                    .slots
+                    .iter()
+                    .map(|slot| {
+                        slot.and_then(|id| self.abilities.get(id))
+                            .map_or(0, |spec| spec.range.raw())
                     })
                     .collect(),
                 items: e.items.iter().map(|i| i.0).collect(),

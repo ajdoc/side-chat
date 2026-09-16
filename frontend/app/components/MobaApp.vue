@@ -132,6 +132,27 @@ watch(inMatch, (playing) => {
   }
 })
 
+/**
+ * The game client says the match is over; ask the API for the result now rather than waiting.
+ *
+ * The wasm client knows the instant a base falls, but it is not what records the result — the
+ * game *server* posts that to the API, and this panel finds out by polling every two seconds. So
+ * without this there is a gap of up to two seconds where the player is looking at "Victory" and
+ * nothing is visibly happening.
+ *
+ * Deliberately only a nudge. The poll stays the authority, so a missed event costs a moment
+ * rather than leaving anybody stuck on a result screen — and the client cannot talk this panel
+ * into believing a match ended that the API disagrees about.
+ */
+function onMatchEnded() {
+  // A beat first: the game server has to post the result before the API can report it, and
+  // asking before it has arrived just spends a request to be told what we already know.
+  setTimeout(() => { refresh() }, 400)
+}
+
+onMounted(() => window.addEventListener('moba:ended', onMatchEnded))
+onBeforeUnmount(() => window.removeEventListener('moba:ended', onMatchEnded))
+
 const confirmLeave = ref(false)
 const finished = computed(() => match.value?.status === 'finished' ? match.value : null)
 

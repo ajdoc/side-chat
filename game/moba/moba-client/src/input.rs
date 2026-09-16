@@ -187,12 +187,16 @@ pub fn slot_for_key(key: &str) -> Option<u8> {
     })
 }
 
-/// Which way a movement key points, if it is one.
+/// Which way a movement key points **on screen**.
 ///
-/// Arrows alongside WASD because they cost nothing and someone will reach for them — and on a
-/// keyboard laid out for another language, WASD is not always where W A S D are.
+/// Screen and not world, and the distinction is the whole of a bug worth remembering: these were
+/// world directions, which was the same thing while the view was top-down and stopped being it
+/// the moment the map became isometric. Pressing W then sent the hero toward world north, which
+/// on an isometric ground is up *and to the left* — every key forty-five degrees off what it
+/// looked like it should do. It read as the controls being vague rather than as being wrong,
+/// which is why it is pinned by a test now.
 ///
-/// Y grows downward, matching the world's axes and the canvas's, so "up" is negative.
+/// [`HeldKeys::world_direction`] is what turns these into something the sim can be told.
 pub fn direction_for_key(key: &str) -> Option<(f32, f32)> {
     Some(match key {
         "w" | "W" | "ArrowUp" => (0.0, -1.0),
@@ -238,6 +242,26 @@ impl HeldKeys {
     }
 
     /// The unit vector the held keys add up to, or zero for none.
+    /// Where the held keys point in the world, ready to send to the sim.
+    ///
+    /// The keys are read on screen and the sim only knows about the world, so this is where the
+    /// projection is undone. Normalised *after* unprojecting rather than before: the projection
+    /// is not an isometry, so a unit vector going in does not come out as one, and skipping this
+    /// would make diagonal movement a different speed from straight movement.
+    pub fn world_direction(&self) -> (f32, f32) {
+        let (sx, sy) = self.direction();
+        if sx == 0.0 && sy == 0.0 {
+            return (0.0, 0.0);
+        }
+        let (wx, wy) = crate::projection::unproject(sx, sy);
+        let length = (wx * wx + wy * wy).sqrt();
+        if length < 0.001 {
+            return (0.0, 0.0);
+        }
+        (wx / length, wy / length)
+    }
+
+    /// Where the held keys point on screen. See [`direction_for_key`].
     pub fn direction(&self) -> (f32, f32) {
         let (mut x, mut y) = (0.0f32, 0.0f32);
         for key in &self.keys {

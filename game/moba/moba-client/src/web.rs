@@ -17,11 +17,12 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use moba_proto::{ClientMessage, NetKind, NetTeam, ServerMessage, PROTOCOL_VERSION};
+use moba_proto::{ClientMessage, NetKind, NetTargeting, NetTeam, ServerMessage, PROTOCOL_VERSION};
 use wasm_bindgen::prelude::*;
 use wasm_bindgen::JsCast;
 use web_sys::{CanvasRenderingContext2d, HtmlCanvasElement, MessageEvent, WebSocket};
 
+use crate::aim::{plan, Aim};
 use crate::camera::Camera;
 use crate::effects::{EffectKind, Effects};
 use crate::hud::Hud;
@@ -29,7 +30,10 @@ use crate::input::{slot_for_key, Armed, HeldKeys, Input, MouseButton};
 use crate::interp::{from_fixed, RenderEntity, SnapshotBuffer};
 use crate::minimap::Minimap;
 use crate::spells::{look, short_name, Shape};
-use crate::sprites::{facing_angle, for_entity};
+use crate::sprites::{
+    draw_radius, facing_angle, for_entity, pose_for_bucket, POSED_ANCHOR, POSED_HEIGHT,
+};
+use crate::projection::{direction_bucket, project, GROUND_SQUASH};
 use crate::terrain::{is_border, Tile, BASE_PLAZA, FOG_ALPHA, FOG_FEATHER};
 use crate::tileset::{SpriteBank, TileSet};
 
@@ -79,6 +83,12 @@ struct State {
     /// The ground textures. Starts downloading at construction and is drawable before it
     /// finishes — every tile falls back to the flat colour the client used before there was
     /// any art, so a missing or slow file costs looks and never playability.
+    /// Where the pointer last was, in canvas pixels. `None` before it has moved, and on a
+    /// touch device between taps.
+    ///
+    /// Kept because aiming needs it every frame while the mouse only reports on movement — a
+    /// preview that redrew only when the cursor moved would vanish the moment it stopped.
+    cursor: Option<(f32, f32)>,
     /// Which team this client plays. `None` until the handshake.
     team: Option<NetTeam>,
     tiles: TileSet,
@@ -138,6 +148,7 @@ impl MobaGame {
                 give_up: false,
                 wants_reconnect: false,
                 reconnect_in: 0.0,
+                cursor: None,
                 team: None,
                 tiles: TileSet::load(TERRAIN_BASE),
                 sprites: SpriteBank::load(UNIT_BASE),
@@ -258,7 +269,17 @@ fn open_socket(url: &str, ticket: &str, state: Rc<RefCell<State>>) -> Result<(),
                                 state.hurt_flash = 0.35;
                             }
                             moba_proto::NetEvent::MatchEnded { winner } => {
-                                state.outcome = Some(format!("{winner:?} wins"));
+                                let won = state.team == Some(*winner);
+                                state.outcome = Some(if won { "Victory" } else { "Defeat" }.into());
+
+                                // Tell the page. The match result reaches the API by a different
+                                // road entirely — the game server posts it — and the panel around
+                                // this canvas only finds out by polling, so without this the
+                                // player sits on a result screen for up to two seconds with no
+                                // sign that anything is going to happen. Notifying is a hint to
+                                // refresh sooner; the poll remains what actually decides, so a
+                                // dropped event costs a moment rather than a stuck screen.
+                                announce_match_ended(*winner == NetTeam::Blue);
                             }
                             // Why the last thing you pressed did nothing. A refusal with no
                             // feedback is indistinguishable from a broken ability.
@@ -339,6 +360,7 @@ impl MobaGame {
                     let mut state = state.borrow_mut();
                     let entities = state.buffer.sample();
                     state.input.hovered = state.camera.pick(&entities, sx, sy).map(|e| e.id);
+                    state.cursor = Some((sx, sy));
                 });
             canvas.set_onmousemove(Some(on_move.as_ref().unchecked_ref()));
             on_move.forget();
@@ -480,6 +502,7 @@ impl MobaGame {
                     // with a mouse — a phone has no hover, so the pick happens at tap time.
                     let entities = state.buffer.sample();
                     state.input.hovered = state.camera.pick(&entities, sx, sy).map(|e| e.id);
+                    state.cursor = Some((sx, sy));
                     let message = state.input.tap(to_fixed(wx), to_fixed(wy));
                     send(&state, message);
                 });
@@ -498,7 +521,7 @@ impl MobaGame {
                     // abilities, and letting them fall through would scroll the page.
                     if state.held.press(&key) {
                         e.prevent_default();
-                        let (dx, dy) = state.held.direction();
+                        let (dx, dy) = state.held.world_direction();
                         send(
                             &state,
                             Some(ClientMessage::MoveDir {
@@ -560,7 +583,7 @@ impl MobaGame {
                 move |e: web_sys::KeyboardEvent| {
                     let mut state = state.borrow_mut();
                     if state.held.release(&e.key()) {
-                        let (dx, dy) = state.held.direction();
+                        let (dx, dy) = state.held.world_direction();
                         send(
                             &state,
                             Some(ClientMessage::MoveDir {
@@ -705,26 +728,31 @@ fn draw_terrain(
     h: f64,
 ) {
     let camera = &state.camera;
-    let zoom = camera.zoom as f64;
     let cell = map.size as f32 / map.cells_across.max(1) as f32;
 
-    // The world rectangle the viewport covers, for culling. Cheaper than converting every one of
-    // 4096 cells and asking whether it landed on screen, and it is the same answer.
-    let (left, top) = camera.screen_to_world(0.0, 0.0);
-    let (right, bottom) = camera.screen_to_world(w as f32, h as f32);
+    // The world-space bounding box of the viewport, for culling.
+    //
+    // All four screen corners, not two: under an isometric projection the viewport is a diamond
+    // in world space, so the top-left and bottom-right corners alone do not bound it — taking
+    // only those would cull away most of what is on screen.
+    let corners = [
+        camera.screen_to_world(0.0, 0.0),
+        camera.screen_to_world(w as f32, 0.0),
+        camera.screen_to_world(0.0, h as f32),
+        camera.screen_to_world(w as f32, h as f32),
+    ];
+    let left = corners.iter().map(|c| c.0).fold(f32::MAX, f32::min);
+    let right = corners.iter().map(|c| c.0).fold(f32::MIN, f32::max);
+    let top = corners.iter().map(|c| c.1).fold(f32::MAX, f32::min);
+    let bottom = corners.iter().map(|c| c.1).fold(f32::MIN, f32::max);
 
+    // The ground plane as one canvas transform. Under it the terrain is drawn in plain world
+    // coordinates and comes out isometric — including its textures, which shear with the ground
+    // rather than sitting flat on the screen, and including the base plazas, whose circles
+    // become the correct ellipses for free.
+    let m = camera.ground_matrix();
     context.save();
-    if context
-        .set_transform(
-            zoom,
-            0.0,
-            0.0,
-            zoom,
-            -camera.x as f64 * zoom + w / 2.0,
-            -camera.y as f64 * zoom + h / 2.0,
-        )
-        .is_err()
-    {
+    if context.set_transform(m[0], m[1], m[2], m[3], m[4], m[5]).is_err() {
         context.restore();
         return;
     }
@@ -839,6 +867,110 @@ fn draw_terrain(
     context.restore();
 }
 
+/// Begin a path for a circle that lies *on the ground* rather than facing the viewer.
+///
+/// A vision radius, an attack range and a spell's area are all circles in the world, and on an
+/// isometric plane a world circle is an ellipse squashed by [`GROUND_SQUASH`]. Drawing them as
+/// circles is the single clearest tell that a view is only pretending to be isometric.
+fn ground_circle(context: &CanvasRenderingContext2d, sx: f64, sy: f64, radius: f64) {
+    context.begin_path();
+    let _ = context.ellipse(
+        sx,
+        sy,
+        radius,
+        radius * GROUND_SQUASH as f64,
+        0.0,
+        0.0,
+        TAU,
+    );
+}
+
+/// The armed ability's preview: where it would land, and whether it would be refused.
+///
+/// Drawn between the ground and the units, so it reads as being *on* the ground rather than
+/// floating over the fight. See [`crate::aim`] for why the range check is the server's number
+/// and not a mirror of it.
+fn draw_aim(context: &CanvasRenderingContext2d, state: &State, entities: &[RenderEntity]) {
+    let Armed::Slot(slot) = state.input.armed else {
+        return;
+    };
+    let (Some(own), Some(cursor)) = (state.buffer.own(), state.cursor) else {
+        return;
+    };
+    let Some(me) = entities.iter().find(|e| Some(e.id) == state.own_id) else {
+        return;
+    };
+
+    let index = slot as usize;
+    let targeting = own.targeting.get(index).copied().unwrap_or(NetTargeting::None);
+    let range = own.ranges.get(index).map_or(0.0, |r| from_fixed(*r));
+    let ability = own.abilities.get(index).copied().unwrap_or(u16::MAX);
+    let spell = look(ability);
+
+    let (cx, cy) = state.camera.screen_to_world(cursor.0, cursor.1);
+    let aim = plan(targeting, (me.x, me.y), (cx, cy), range, spell.reach);
+    if matches!(aim, Aim::None) && range <= 0.0 {
+        return;
+    }
+
+    let zoom = state.camera.zoom;
+    let (mx, my) = state.camera.world_to_screen(me.x, me.y);
+    let bad = aim.out_of_range();
+    let tint = if bad { "#ff6b6b" } else { spell.colour };
+
+    // How far it may be aimed. Drawn for every aimed ability including the ones that are in
+    // range, because "how far can I reach" is the question being asked *before* the click.
+    if range > 0.0 {
+        context.set_global_alpha(if bad { 0.5 } else { 0.28 });
+        context.set_stroke_style_str(tint);
+        context.set_line_width(2.0);
+        ground_circle(context, mx as f64, my as f64, (range * zoom) as f64);
+        context.stroke();
+        context.set_global_alpha(1.0);
+    }
+
+    match aim {
+        Aim::None | Aim::Unit { .. } => {}
+        Aim::Point { x, y, .. } => {
+            let (px, py) = state.camera.world_to_screen(x, y);
+            let footprint = (spell.reach.max(60.0) * zoom) as f64;
+            context.set_fill_style_str(tint);
+            context.set_stroke_style_str(tint);
+            context.set_global_alpha(0.18);
+            ground_circle(context, px as f64, py as f64, footprint);
+            context.fill();
+            context.set_global_alpha(0.9);
+            context.set_line_width(2.0);
+            ground_circle(context, px as f64, py as f64, footprint);
+            context.stroke();
+            context.set_global_alpha(1.0);
+        }
+        Aim::Vector { to_x, to_y } => {
+            let (tx, ty) = state.camera.world_to_screen(to_x, to_y);
+            context.set_stroke_style_str(tint);
+            context.set_global_alpha(0.75);
+            context.set_line_width(4.0);
+            context.begin_path();
+            context.move_to(mx as f64, my as f64);
+            context.line_to(tx as f64, ty as f64);
+            context.stroke();
+            // A cap at the far end, so the length of the shot is legible rather than implied.
+            context.set_line_width(2.0);
+            ground_circle(context, tx as f64, ty as f64, (46.0 * zoom) as f64);
+            context.stroke();
+            context.set_global_alpha(1.0);
+        }
+    }
+
+    // Say so in words as well as in colour. Red alone is not enough: it is the one cue a
+    // colour-blind player may not have, and it is also ambiguous — red could mean "enemy".
+    if bad {
+        context.set_fill_style_str("#ff6b6b");
+        context.set_font("600 13px system-ui, sans-serif");
+        let _ = context.fill_text("out of range", cursor.0 as f64 + 14.0, cursor.1 as f64 - 10.0);
+    }
+}
+
 /// The fog of war, as the player sees it.
 ///
 /// ## This is not the fog of war
@@ -899,15 +1031,22 @@ fn draw_fog(
         {
             continue;
         }
+        // Squashed with the ground, like every other world circle. A gradient cannot be given
+        // an ellipse directly, so the canvas is scaled around the source and the circle drawn
+        // into that — which squashes the gradient's falloff along with its shape.
         let gradient = mask
-            .create_radial_gradient(sx as f64, sy as f64, inner, sx as f64, sy as f64, outer)
+            .create_radial_gradient(0.0, 0.0, inner, 0.0, 0.0, outer)
             .ok()?;
         gradient.add_color_stop(0.0, "rgba(0,0,0,1)").ok()?;
         gradient.add_color_stop(1.0, "rgba(0,0,0,0)").ok()?;
+        mask.save();
+        let _ = mask.translate(sx as f64, sy as f64);
+        let _ = mask.scale(1.0, GROUND_SQUASH as f64);
         mask.set_fill_style_canvas_gradient(&gradient);
         mask.begin_path();
-        mask.arc(sx as f64, sy as f64, outer, 0.0, TAU).ok()?;
+        mask.arc(0.0, 0.0, outer, 0.0, TAU).ok()?;
         mask.fill();
+        mask.restore();
         lit = true;
     }
 
@@ -954,16 +1093,24 @@ fn draw(
     // definition, so dimming it would only make what you *are* allowed to see harder to read.
     draw_fog(context, state, entities, w, h);
 
-    for entity in entities {
+    // Back to front. An isometric view has a depth order and a top-down one does not: without
+    // this a creep standing behind a tower is drawn over it, and the tower stops looking like it
+    // has any height at all. Depth is `x + y`, which is exactly what the projection turns into
+    // screen height — see `projection::depth_is_the_sum_of_the_coordinates`.
+    //
+    // Sorted into a scratch list rather than in place because `entities` is the interpolator's,
+    // and the order it hands back is the order the snapshot had.
+    let mut ordered: Vec<&RenderEntity> = entities.iter().collect();
+    ordered.sort_by(|a, b| (a.x + a.y).total_cmp(&(b.x + b.y)));
+
+    // Under the units: an aiming preview belongs on the ground, not over the fight.
+    draw_aim(context, state, entities);
+
+    for entity in ordered {
         let (sx, sy) = state.camera.world_to_screen(entity.x, entity.y);
-        let radius = match entity.kind {
-            NetKind::Hero => 26.0,
-            NetKind::Creep => 14.0,
-            NetKind::Tower => 34.0,
-            NetKind::Base => 52.0,
-            NetKind::Zone => 0.0,
-            NetKind::Projectile => 5.0,
-        } * state.camera.zoom as f64;
+        // The same size the camera uses to decide what a click landed on, so what you can see
+        // and what you can target are one number.
+        let radius = (draw_radius(entity.kind) * state.camera.zoom) as f64;
 
         if matches!(entity.kind, NetKind::Zone) {
             continue;
@@ -983,9 +1130,33 @@ fn draw(
         // degraded mode to apologise for: it is what keeps a missing or still-downloading file
         // from costing anyone a playable game, and it is what lets the art arrive a unit at a
         // time rather than all at once or not at all.
-        let drawn = for_entity(entity.kind, entity.team, entity.variant)
-            .and_then(|sprite| state.sprites.get(sprite).map(|image| (sprite, image)))
-            .map(|(sprite, image)| {
+        // A contact shadow, before anything else this unit draws.
+        //
+        // Not decoration. On an isometric ground a figure with nothing under it reads as
+        // hovering however carefully it is anchored, because the only cue for *where along the
+        // floor* something stands is the floor touching it — and the ground plane recedes
+        // upward, so a sprite drawn one pixel high is indistinguishable from one standing a
+        // metre further away. The shadow is what pins it.
+        if !matches!(entity.kind, NetKind::Projectile | NetKind::Zone) {
+            context.set_fill_style_str("rgba(0,0,0,0.34)");
+            ground_circle(context, sx as f64, sy as f64, radius * 0.85);
+            context.fill();
+        }
+
+        // A directional sheet if this character has one, and the single overhead drawing if not.
+        // The two are drawn the same way apart from the turn: a posed sprite is already facing
+        // the right way and must not be rotated, an overhead one must.
+        let posed = for_entity(entity.kind, entity.team, entity.variant).and_then(|sprite| {
+            let (pose, flip) = pose_for_bucket(direction_bucket(entity.facing_x, entity.facing_y));
+            state.sprites.pose(sprite, pose).map(|image| (sprite, image, flip))
+        });
+
+        let drawn = posed
+            .or_else(|| {
+                for_entity(entity.kind, entity.team, entity.variant)
+                    .and_then(|sprite| state.sprites.get(sprite).map(|image| (sprite, image, false)))
+            })
+            .map(|(sprite, image, flip)| {
                 // A hero is one drawing for both teams, so the team has to be said some other
                 // way. A ring on the ground under the feet, which is also where the eye already
                 // looks to read who is where in a fight.
@@ -998,29 +1169,42 @@ fn draw(
                     context.set_stroke_style_str(ring);
                     context.set_line_width((2.5 * state.camera.zoom as f64).max(1.5));
                     context.set_global_alpha(0.85);
-                    context.begin_path();
-                    let _ = context.ellipse(
-                        sx as f64,
-                        sy as f64,
-                        radius,
-                        radius * 0.55,
-                        0.0,
-                        0.0,
-                        TAU,
-                    );
+                    ground_circle(context, sx as f64, sy as f64, radius);
                     context.stroke();
                     context.set_global_alpha(1.0);
                 }
 
-                let width = radius * 2.0 * sprite.scale() as f64;
                 let aspect = image.natural_height() as f64 / image.natural_width().max(1) as f64;
-                let height = width * aspect;
+                let (width, height, anchor) = if posed.is_some() {
+                    // Sized by height. The five poses of one character differ in width, so
+                    // fitting them to a width would draw the same hero at five different sizes.
+                    let height = (radius * POSED_HEIGHT as f64).max(1.0);
+                    (height / aspect.max(0.01), height, POSED_ANCHOR)
+                } else {
+                    let width = radius * 2.0 * sprite.scale() as f64;
+                    (width, width * aspect, sprite.ground_anchor())
+                };
 
                 context.save();
                 let _ = context.translate(sx as f64, sy as f64);
-                if sprite.rotates() {
-                    let _ = context
-                        .rotate(facing_angle(entity.facing_x, entity.facing_y) as f64);
+                if posed.is_some() {
+                    // Already drawn facing the right way. All that is left is the mirror that
+                    // turns five drawings into eight directions.
+                    if flip {
+                        let _ = context.scale(-1.0, 1.0);
+                    }
+                } else if sprite.rotates() {
+                    // The *projected* heading, not the world one. These sprites are drawn
+                    // looking straight down, so on an isometric ground they have to turn the way
+                    // the unit appears to move rather than the way it actually moves — world
+                    // east is down-and-right on screen. Projection is linear, so projecting the
+                    // direction vector is the same as projecting two points and subtracting.
+                    //
+                    // This is the placeholder path. Once the directional sheets land a unit
+                    // picks its sprite by `direction_bucket` on its world heading and is not
+                    // rotated at all.
+                    let (fx, fy) = project(entity.facing_x, entity.facing_y);
+                    let _ = context.rotate(facing_angle(fx, fy) as f64);
                 }
                 // The anchor is where the *entity* sits inside the picture. A creep is centred
                 // on itself; a tower is not, because it is drawn from slightly in front and
@@ -1028,7 +1212,7 @@ fn draw(
                 let _ = context.draw_image_with_html_image_element_and_dw_and_dh(
                     image,
                     -width / 2.0,
-                    -height * sprite.ground_anchor() as f64,
+                    -height * anchor as f64,
                     width,
                     height,
                 );
@@ -1051,13 +1235,25 @@ fn draw(
             context.fill();
         }
 
+        // What this click would land on. Tracked since the mouse handlers were written and never
+        // drawn, which meant the only way to find out what you had targeted was to fire and see
+        // — the single biggest reason aiming felt imprecise.
+        if state.input.hovered == Some(entity.id) && Some(entity.id) != state.own_id {
+            let armed = !matches!(state.input.armed, Armed::None);
+            context.set_stroke_style_str(if armed { "#ffd866" } else { "#ffffff" });
+            context.set_line_width(2.0);
+            context.set_global_alpha(if armed { 0.95 } else { 0.5 });
+            ground_circle(context, sx as f64, sy as f64, radius + 4.0);
+            context.stroke();
+            context.set_global_alpha(1.0);
+        }
+
         if Some(entity.id) == state.own_id {
             // Its own path now, rather than re-stroking whatever was last filled: with a sprite
             // drawn instead of a disc there is no disc path left to stroke.
             context.set_stroke_style_str("#ffffff");
             context.set_line_width(2.0);
-            context.begin_path();
-            let _ = context.arc(sx as f64, sy as f64, radius, 0.0, TAU);
+            ground_circle(context, sx as f64, sy as f64, radius);
             context.stroke();
 
             // Your reach, drawn faintly on the ground. Without it there is no way to tell why an
@@ -1069,8 +1265,7 @@ fn draw(
                     context.set_global_alpha(0.16);
                     context.set_stroke_style_str("#ffffff");
                     context.set_line_width(1.5);
-                    context.begin_path();
-                    let _ = context.arc(sx as f64, sy as f64, reach as f64, 0.0, TAU);
+                    ground_circle(context, sx as f64, sy as f64, reach as f64);
                     context.stroke();
                     context.set_global_alpha(1.0);
                 }
@@ -1166,32 +1361,17 @@ fn draw(
                 match spell.shape {
                     Shape::Ring => {
                         let radius = (14.0 + progress * spell.reach.min(220.0)) * zoom;
-                        context.begin_path();
-                        let _ = context.arc(sx as f64, sy as f64, radius as f64, 0.0, TAU);
+                        ground_circle(context, sx as f64, sy as f64, radius as f64);
                         context.stroke();
                     }
                     Shape::Blast => {
                         // Lands at full size and fades, rather than growing: a ground-targeted
                         // area covers what it covers from the instant it goes off.
                         context.set_global_alpha((fade * 0.35) as f64);
-                        context.begin_path();
-                        let _ = context.arc(
-                            sx as f64,
-                            sy as f64,
-                            (spell.reach * zoom) as f64,
-                            0.0,
-                            TAU,
-                        );
+                        ground_circle(context, sx as f64, sy as f64, (spell.reach * zoom) as f64);
                         context.fill();
                         context.set_global_alpha(fade as f64);
-                        context.begin_path();
-                        let _ = context.arc(
-                            sx as f64,
-                            sy as f64,
-                            (spell.reach * zoom) as f64,
-                            0.0,
-                            TAU,
-                        );
+                        ground_circle(context, sx as f64, sy as f64, (spell.reach * zoom) as f64);
                         context.stroke();
                     }
                     Shape::Beam => {
@@ -1216,8 +1396,7 @@ fn draw(
                     Shape::Implode => {
                         // Tightening rather than spreading: something *arriving*.
                         let radius = (spell.reach.min(220.0) * (1.0 - progress) + 8.0) * zoom;
-                        context.begin_path();
-                        let _ = context.arc(sx as f64, sy as f64, radius as f64, 0.0, TAU);
+                        ground_circle(context, sx as f64, sy as f64, radius as f64);
                         context.stroke();
                     }
                     Shape::Pulse => {
@@ -1227,8 +1406,7 @@ fn draw(
                             let phase = (progress + offset) % 1.0;
                             context.set_global_alpha(((1.0 - phase) * fade) as f64);
                             let radius = (14.0 + phase * spell.reach.min(300.0)) * zoom;
-                            context.begin_path();
-                            let _ = context.arc(sx as f64, sy as f64, radius as f64, 0.0, TAU);
+                            ground_circle(context, sx as f64, sy as f64, radius as f64);
                             context.stroke();
                         }
                     }
@@ -1576,10 +1754,43 @@ fn draw(
     }
 
     if let Some(outcome) = &state.outcome {
-        context.set_fill_style_str("rgba(0,0,0,0.65)");
-        context.fill_rect(0.0, h / 2.0 - 40.0, w, 80.0);
-        context.set_fill_style_str("#f0f6fc");
-        context.set_font("bold 28px monospace");
-        let _ = context.fill_text(outcome, w / 2.0 - 90.0, h / 2.0 + 10.0);
+        context.set_fill_style_str("rgba(0,0,0,0.72)");
+        context.fill_rect(0.0, h / 2.0 - 56.0, w, 112.0);
+        context.set_fill_style_str(if outcome == "Victory" {
+            "#6ee787"
+        } else {
+            "#ff6b6b"
+        });
+        context.set_font("bold 34px system-ui, sans-serif");
+        context.set_text_align("center");
+        let _ = context.fill_text(outcome, w / 2.0, h / 2.0);
+
+        // Say what happens next. A result with no follow-up reads as the game having frozen on
+        // it, and the one thing a player wants to know at this point is whether to keep waiting.
+        context.set_fill_style_str("#8b949e");
+        context.set_font("14px system-ui, sans-serif");
+        let _ = context.fill_text("returning to the lobby…", w / 2.0, h / 2.0 + 30.0);
+        context.set_text_align("start");
     }
+}
+
+/// Let the page know the match is over, as a DOM event on `window`.
+///
+/// A `CustomEvent` rather than an exported method the page polls, because the page is Vue and
+/// this is wasm: an event is the one channel that needs neither side to hold a reference to the
+/// other, and a listener that is not there simply misses it — which is exactly the failure mode
+/// worth having, since the poll is the authority either way.
+fn announce_match_ended(blue_won: bool) -> Option<()> {
+    let detail = js_sys::Object::new();
+    let _ = js_sys::Reflect::set(
+        &detail,
+        &JsValue::from_str("blueWon"),
+        &JsValue::from_bool(blue_won),
+    );
+    let init = web_sys::CustomEventInit::new();
+    init.set_detail(&detail);
+    let event =
+        web_sys::CustomEvent::new_with_event_init_dict("moba:ended", &init).ok()?;
+    web_sys::window()?.dispatch_event(&event).ok()?;
+    Some(())
 }
