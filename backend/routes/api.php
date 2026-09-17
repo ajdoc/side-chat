@@ -10,6 +10,9 @@ use App\Http\Controllers\AppCommentController;
 use App\Http\Controllers\AppDiscussionController;
 use App\Http\Controllers\AppImportController;
 use App\Http\Controllers\AppPollController;
+use App\Http\Controllers\SignupController;
+use App\Http\Controllers\SignupGroupController;
+use App\Http\Controllers\SignupSeriesController;
 use App\Http\Controllers\AppReactionController;
 use App\Http\Controllers\AppStickerController;
 use App\Http\Controllers\AppTagController;
@@ -556,6 +559,34 @@ Route::middleware('auth:api')->group(function () {
     Route::delete('channels/{channel}/polls/{poll}', [AppPollController::class, 'destroy']);
     // The body is the set of options you now stand behind, not a delta — see the controller.
     Route::put('channels/{channel}/polls/{poll}/vote', [AppPollController::class, 'vote']);
+
+    /*
+     * Sign-ups — custom sign-up sheets, the roster behind their suggestions, and the payables.
+     * See SignupController for who may do what.
+     */
+    Route::get('channels/{channel}/signups', [SignupController::class, 'index']);
+    Route::post('channels/{channel}/signups/sheets', [SignupController::class, 'store']);
+    Route::get('channels/{channel}/signups/sheets/{sheet}', [SignupController::class, 'show']);
+    Route::patch('channels/{channel}/signups/sheets/{sheet}', [SignupController::class, 'update']);
+    Route::delete('channels/{channel}/signups/sheets/{sheet}', [SignupController::class, 'destroy']);
+    Route::post('channels/{channel}/signups/sheets/{sheet}/duplicate', [SignupController::class, 'duplicate']);
+    Route::put('channels/{channel}/signups/sheets/{sheet}/slot', [SignupController::class, 'slot']);
+    Route::post('channels/{channel}/signups/archive', [SignupController::class, 'archive']);
+    Route::get('channels/{channel}/signups/people', [SignupController::class, 'people']);
+    Route::patch('channels/{channel}/signups/people/{person}', [SignupController::class, 'renamePerson']);
+    Route::delete('channels/{channel}/signups/people/{person}', [SignupController::class, 'destroyPerson']);
+    Route::get('channels/{channel}/signups/payables', [SignupController::class, 'payables']);
+    Route::post('channels/{channel}/signups/payables/paid', [SignupController::class, 'markPaid']);
+    Route::post('channels/{channel}/signups/copy-month', [SignupController::class, 'copyMonth']);
+    Route::post('channels/{channel}/signups/groups', [SignupGroupController::class, 'store']);
+    Route::put('channels/{channel}/signups/groups/order', [SignupGroupController::class, 'reorder']);
+    Route::patch('channels/{channel}/signups/groups/{group}', [SignupGroupController::class, 'update'])->whereNumber('group');
+    Route::delete('channels/{channel}/signups/groups/{group}', [SignupGroupController::class, 'destroy'])->whereNumber('group');
+    Route::post('channels/{channel}/signups/schedules/preview', [SignupSeriesController::class, 'preview']);
+    Route::post('channels/{channel}/signups/schedules', [SignupSeriesController::class, 'store']);
+    Route::patch('channels/{channel}/signups/schedules/{series}', [SignupSeriesController::class, 'update'])->whereNumber('series');
+    Route::delete('channels/{channel}/signups/schedules/{series}', [SignupSeriesController::class, 'destroy'])->whereNumber('series');
+    Route::post('channels/{channel}/signups/schedules/{series}/generate', [SignupSeriesController::class, 'generate'])->whereNumber('series');
 
     /*
      * The kanban board — columns and cards.

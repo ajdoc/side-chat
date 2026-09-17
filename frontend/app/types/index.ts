@@ -920,7 +920,7 @@ export interface WhiteboardStroke {
  *
  * `canvas` is in the union but never in a stored list: the Open Canvas can't be removed.
  */
-export type SideDeskSurfaceAppId = 'board' | 'notes' | 'docs' | 'canvas' | 'calendar' | 'tracker' | 'polls' | 'stickers'
+export type SideDeskSurfaceAppId = 'board' | 'notes' | 'docs' | 'canvas' | 'calendar' | 'tracker' | 'polls' | 'stickers' | 'signups'
 export type SideDeskWidgetAppId = WidgetType
 export type SideDeskAppId = SideDeskSurfaceAppId | SideDeskWidgetAppId
 
@@ -2223,4 +2223,138 @@ export interface AdminOverview {
     new_users_this_week: number
   }
   banned_users: AdminUser[]
+}
+
+// --- Sign-ups app ------------------------------------------------------------------------------
+
+/** A channel's own grouping of sheets. */
+export interface SignupGroup {
+  id: number
+  name: string
+  color: string
+  position: number
+}
+
+/**
+ * A recurring schedule: a sheet template and the days it repeats on. `weeks` null means every
+ * week; otherwise which occurrences of the weekday in the month (1–5, or -1 for the last).
+ */
+export interface SignupSchedule {
+  id: number
+  group_id: number | null
+  title: string
+  header: { label: string, value: string | null }[]
+  columns: SignupColumn[]
+  fees: SignupFee[]
+  slots: number
+  weekdays: number[]
+  weeks: number[] | null
+  sheets_count: number | null
+}
+/** Only `attending` columns are billed. */
+export type SignupColumnKind = 'attending' | 'waitlist' | 'absent' | 'info'
+
+export interface SignupColumn {
+  /** Minted by the server from the label; blank on a column that hasn't been saved yet. */
+  key: string
+  label: string
+  color: string
+  kind: SignupColumnKind
+}
+
+export interface SignupFee {
+  key: string
+  label: string
+  amount: number
+  note: string | null
+}
+
+export interface SignupEntry {
+  id: number
+  column_key: string
+  position: number
+  person_id: number
+  name: string
+  note: string | null
+}
+
+export interface SignupSheet {
+  id: number
+  title: string
+  group_id: number | null
+  /** Set when a schedule made this sheet. */
+  series_id: number | null
+  year: number
+  event_date: string | null
+  header: { label: string, value: string | null }[]
+  columns: SignupColumn[]
+  fees: SignupFee[]
+  slots: number
+  locked: boolean
+  archived: boolean
+  /** Names per column — on the wall listing. */
+  counts?: Record<string, number>
+  /** The names themselves — only on a sheet that has been opened. */
+  entries?: SignupEntry[]
+  created_at: string
+  updated_at: string
+}
+
+export interface SignupYear {
+  year: number
+  sheets: number
+  archived: boolean
+}
+
+export interface SignupPerson {
+  id: number
+  name: string
+  signups: number
+  last_signed_up_at: string | null
+}
+
+export interface SignupCharge {
+  id: number
+  sheet_id: number
+  sheet_title: string
+  group: string | null
+  label: string
+  amount: number
+  billed_on: string
+  paid: boolean
+  paid_at: string | null
+}
+
+export interface SignupPayablePerson {
+  person_id: number
+  name: string
+  sessions: number
+  due: number
+  paid: number
+  balance: number
+  charges: SignupCharge[]
+}
+
+export interface SignupPayables {
+  from: string
+  to: string
+  totals: { people: number, due: number, paid: number, balance: number }
+  people: SignupPayablePerson[]
+  can_manage: boolean
+}
+
+/** What the sheet/schedule editor hands back. `weekdays`/`weeks`/`month` only in schedule mode. */
+export interface SignupEditorPayload {
+  title: string
+  group_id: number | null
+  event_date?: string | null
+  slots: number
+  header: { label: string, value: string }[]
+  columns: SignupColumn[]
+  fees: SignupFee[]
+  weekdays?: number[]
+  weeks?: number[] | null
+  month?: string | null
+  /** How far the edit reaches along a schedule — see SignupLayout on the server. */
+  apply_to?: string
 }

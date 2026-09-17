@@ -1,5 +1,5 @@
 import {
-  BarChart3, CalendarDays, Columns3, FileText, Film, Flag, Gamepad2, LayoutGrid, ListChecks,
+  BarChart3, CalendarDays, ClipboardList, Columns3, FileText, Film, Flag, Gamepad2, LayoutGrid, ListChecks,
   Music, NotebookPen, Palette, PenTool, Spade, Sticker, Vote,
 } from 'lucide-vue-next'
 import type { Component } from 'vue'
@@ -106,6 +106,8 @@ export const DESK_APPS: DeskApp[] = [
   // A shared collage. Not canvasable for the same reason the Board isn't much use in a card:
   // it *is* a canvas, and nesting one in another is a scrollbar inside a scrollbar.
   { id: 'stickers', label: 'Sticker Wall', icon: Sticker, family: 'surface', removable: true, canvasable: false, channelable: true, group: 'workspace' },
+  // Sign-up sheets with custom columns and fees, a roster, and the payables they raise.
+  { id: 'signups', label: 'Sign-ups', icon: ClipboardList, family: 'surface', removable: true, canvasable: false, channelable: true, group: 'workspace' },
   // Docs is a file shelf with its own upload flow and viewers; squeezed into a canvas card it's
   // a scrollbar around a scrollbar, so it stays a tab.
   { id: 'docs', label: 'Docs', icon: FileText, family: 'surface', removable: true, canvasable: false, channelable: true, group: 'workspace' },
