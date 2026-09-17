@@ -92,6 +92,13 @@ const importing = ref(false)
       :can-edit="canEdit"
     />
 
+    <SignupsApp
+      v-else-if="channel.app_id === 'signups'"
+      :base-path="basePath"
+      :stream-name="streamName"
+      :can-edit="canEdit"
+    />
+
     <StickerWallApp
       v-else-if="channel.app_id === 'stickers'"
       :base-path="basePath"

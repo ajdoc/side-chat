@@ -229,6 +229,15 @@ function popOut() {
       :can-edit="canEdit"
     />
 
+    <!-- Sign-ups — the channel's sheets, roster and payables. -->
+    <SignupsApp
+      v-else-if="resolved === 'signups'"
+      :key="`${channelPath}-signups`"
+      :base-path="channelPath"
+      :stream-name="channelStream"
+      :can-edit="canEdit"
+    />
+
     <!-- Sticker Wall — the shared collage. -->
     <StickerWallApp
       v-else-if="resolved === 'stickers'"

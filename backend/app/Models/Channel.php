@@ -444,6 +444,16 @@ class Channel extends Model
     }
 
     /**
+     * This channel's sign-up sheets — what the Sign-ups app draws.
+     *
+     * @return HasMany<SignupSheet, $this>
+     */
+    public function signupSheets(): HasMany
+    {
+        return $this->hasMany(SignupSheet::class);
+    }
+
+    /**
      * This channel's Sticker Wall.
      *
      * @return HasMany<AppSticker, $this>

@@ -52,6 +52,8 @@ final class AppRegistry
         // the timeline. Two different things that both deserve to exist.
         'polls' => ['family' => 'surface', 'desk' => true, 'channel' => true],
         'stickers' => ['family' => 'surface', 'desk' => true, 'channel' => true],
+        // Custom sign-up sheets with fees and a payables ledger. See SignupController.
+        'signups' => ['family' => 'surface', 'desk' => true, 'channel' => true],
 
         // Widgets promoted to apps.
         'music' => ['family' => 'widget', 'desk' => true, 'channel' => true],
