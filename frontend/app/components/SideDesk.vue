@@ -238,6 +238,15 @@ function popOut() {
       :can-edit="canEdit"
     />
 
+    <!-- Training — multi-week programs with everyone's ticks. -->
+    <TrainingApp
+      v-else-if="resolved === 'training'"
+      :key="`${channelPath}-training`"
+      :base-path="channelPath"
+      :stream-name="channelStream"
+      :can-edit="canEdit"
+    />
+
     <!-- Sticker Wall — the shared collage. -->
     <StickerWallApp
       v-else-if="resolved === 'stickers'"

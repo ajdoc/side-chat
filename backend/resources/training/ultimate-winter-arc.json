@@ -1,0 +1,1135 @@
+{
+  "meta": {
+    "title": "Ultimate winter arc",
+    "description": "A 13-week morning field program for ultimate: throwing, cutting and conditioning, in Foundation, Build and Peak phases.",
+    "default_start": "2026-09-28"
+  },
+  "weeks": 13,
+  "days": [
+    {
+      "key": "mon",
+      "label": "Mon",
+      "tag": "Light",
+      "offset": 0
+    },
+    {
+      "key": "tue",
+      "label": "Tue",
+      "tag": "Cutting",
+      "offset": 1
+    },
+    {
+      "key": "wed",
+      "label": "Wed",
+      "tag": "Short game",
+      "offset": 2
+    },
+    {
+      "key": "thu",
+      "label": "Thu",
+      "tag": "Light",
+      "offset": 3
+    },
+    {
+      "key": "fri",
+      "label": "Fri",
+      "tag": "Long game",
+      "offset": 4
+    },
+    {
+      "key": "sat",
+      "label": "Sat",
+      "tag": "Conditioning",
+      "offset": 5
+    }
+  ],
+  "phases": [
+    {
+      "name": "Foundation",
+      "from": 1,
+      "to": 4,
+      "line": "Foundation: clean throwing mechanics, learning to stop and change direction well, and building the base for harder weeks."
+    },
+    {
+      "name": "Build",
+      "from": 5,
+      "to": 9,
+      "line": "Build: throwing at game pace, sharper cutting patterns, and more power."
+    },
+    {
+      "name": "Peak",
+      "from": 10,
+      "to": 13,
+      "line": "Peak: throwing and cutting under pressure and fatigue, with less volume so you stay sharp."
+    }
+  ],
+  "notes": {
+    "1": "Test week. Do Saturday's tests instead of conditioning, and keep the other sessions at the low end of each rep range.",
+    "4": "Lighter week. Cut every block's reps by about 40% and keep the quality high. You should finish feeling fresh.",
+    "9": "Lighter week. Cut every block's reps by about 40% before the Peak phase starts.",
+    "13": "Taper and retest. Halve the sets Monday to Friday, then do the tests on Saturday."
+  },
+  "warmups": {
+    "standard": {
+      "label": "Warm-up, 10 minutes",
+      "items": [
+        "2 easy laps of the field",
+        {
+          "text": "Leg swings, 10 forward and 10 sideways per leg",
+          "videos": [
+            {
+              "label": "Leg swings",
+              "search": "leg swings dynamic warm up"
+            }
+          ]
+        },
+        {
+          "text": "Walking lunge with a twist, 10 per side",
+          "videos": [
+            {
+              "label": "Walking lunge with twist",
+              "search": "walking lunge with rotation"
+            }
+          ]
+        },
+        {
+          "text": "Lateral shuffle and carioca, 2 × 20m each",
+          "videos": [
+            {
+              "label": "Carioca",
+              "search": "carioca drill"
+            }
+          ]
+        },
+        {
+          "text": "A-skips, 2 × 20m",
+          "videos": [
+            {
+              "label": "A-skips",
+              "search": "a skip drill technique"
+            }
+          ]
+        },
+        {
+          "text": "Easy throws: 10 backhands and 10 forehands, building from 10m to 20m",
+          "videos": [
+            {
+              "label": "Backhand technique",
+              "search": "ultimate frisbee backhand technique"
+            },
+            {
+              "label": "Forehand technique",
+              "search": "ultimate frisbee forehand flick technique"
+            }
+          ]
+        }
+      ]
+    },
+    "speed": {
+      "label": "Warm-up, 10 minutes",
+      "items": [
+        "2 easy laps of the field",
+        {
+          "text": "Leg swings, 10 forward and 10 sideways per leg",
+          "videos": [
+            {
+              "label": "Leg swings",
+              "search": "leg swings dynamic warm up"
+            }
+          ]
+        },
+        {
+          "text": "Walking lunge with a twist, 10 per side",
+          "videos": [
+            {
+              "label": "Walking lunge with twist",
+              "search": "walking lunge with rotation"
+            }
+          ]
+        },
+        {
+          "text": "Lateral shuffle and carioca, 2 × 20m each",
+          "videos": [
+            {
+              "label": "Carioca",
+              "search": "carioca drill"
+            }
+          ]
+        },
+        {
+          "text": "A-skips, 2 × 20m",
+          "videos": [
+            {
+              "label": "A-skips",
+              "search": "a skip drill technique"
+            }
+          ]
+        },
+        {
+          "text": "Easy throws: 10 backhands and 10 forehands, building from 10m to 20m",
+          "videos": [
+            {
+              "label": "Backhand technique",
+              "search": "ultimate frisbee backhand technique"
+            },
+            {
+              "label": "Forehand technique",
+              "search": "ultimate frisbee forehand flick technique"
+            }
+          ]
+        },
+        {
+          "text": "Build-ups: 3 × 30m at about 60%, 80%, then 90%",
+          "videos": [
+            {
+              "label": "Build-ups",
+              "search": "sprint build ups drill"
+            }
+          ]
+        }
+      ]
+    }
+  },
+  "plan": {
+    "mon": "light",
+    "tue": [
+      "cut-foundation",
+      "cut-build",
+      "cut-peak"
+    ],
+    "wed": [
+      "short-foundation",
+      "short-build",
+      "short-peak"
+    ],
+    "thu": "light",
+    "fri": [
+      "long-foundation",
+      "long-build",
+      "long-peak"
+    ],
+    "sat": [
+      "cond-foundation",
+      "cond-build",
+      "cond-peak"
+    ]
+  },
+  "overrides": [
+    {
+      "weeks": [
+        1,
+        13
+      ],
+      "day": "sat",
+      "session": "test"
+    }
+  ],
+  "sessions": {
+    "light": {
+      "title": "Light morning",
+      "time": "15 to 20 minutes",
+      "hard": false,
+      "warmup": null,
+      "intent": "Team training is tonight, so this is volume, not a workout. No sprinting.",
+      "blocks": [
+        {
+          "name": "Target throws",
+          "dose": "25 backhands and 25 forehands to a cone at 15 to 20m",
+          "cue": "Flat release, finish your follow-through toward the target.",
+          "videos": [
+            {
+              "label": "Backhand technique",
+              "search": "ultimate frisbee backhand technique"
+            },
+            {
+              "label": "Forehand technique",
+              "search": "ultimate frisbee forehand flick technique"
+            }
+          ]
+        },
+        {
+          "name": "Curves",
+          "dose": "5 each: inside-out backhand, outside-in backhand, inside-out forehand, outside-in forehand",
+          "cue": "Pick a landing spot before each throw.",
+          "videos": [
+            {
+              "label": "Inside-out and outside-in",
+              "search": "ultimate frisbee inside out outside in throw"
+            }
+          ]
+        },
+        {
+          "name": "Overheads",
+          "dose": "10 hammers at 15m",
+          "cue": "Relaxed arm, let the disc turn over.",
+          "videos": [
+            {
+              "label": "Hammer throw",
+              "search": "ultimate frisbee hammer throw tutorial"
+            },
+            {
+              "label": "Scoober",
+              "search": "ultimate frisbee scoober tutorial"
+            }
+          ]
+        },
+        {
+          "name": "Pivot throws",
+          "dose": "20 throws, stepping wide and releasing low",
+          "cue": "Get your release below the mark's knees.",
+          "videos": [
+            {
+              "label": "Pivoting and low release",
+              "search": "ultimate frisbee pivot low release break throw"
+            }
+          ]
+        },
+        {
+          "name": "Mobility",
+          "dose": "90/90 hip switches 2 × 8, couch stretch 60s per side, ankle rocks 15 per side, deep squat hold 60s",
+          "cue": "Easy breathing. This keeps your hips and ankles ready for tonight.",
+          "videos": [
+            {
+              "label": "90/90 hip switch",
+              "search": "90 90 hip switch mobility"
+            },
+            {
+              "label": "Couch stretch",
+              "search": "couch stretch hip flexor"
+            },
+            {
+              "label": "Ankle rocks",
+              "search": "knee to wall ankle mobility drill"
+            },
+            {
+              "label": "Deep squat hold",
+              "search": "deep squat hold mobility"
+            }
+          ]
+        }
+      ]
+    },
+    "cut-foundation": {
+      "title": "Cutting: stop and change direction",
+      "time": "45 minutes",
+      "hard": true,
+      "warmup": "speed",
+      "intent": "Stopping well matters more than raw speed. Every cut starts with a good stop.",
+      "blocks": [
+        {
+          "name": "Decel stops",
+          "dose": "6 reps: sprint 10m, stop in 2 to 3 steps, hold low for 2s",
+          "cue": "Hips low before you plant. Walk back to rest.",
+          "videos": [
+            {
+              "label": "Deceleration drills",
+              "search": "deceleration drills for athletes"
+            }
+          ]
+        },
+        {
+          "name": "45° cuts",
+          "dose": "5 per side: jog 5m, plant the outside foot, accelerate 10m",
+          "cue": "Short steps into the cut, eyes up.",
+          "videos": [
+            {
+              "label": "45° cut",
+              "search": "45 degree cut agility drill"
+            }
+          ]
+        },
+        {
+          "name": "90° cuts",
+          "dose": "5 per side: sprint 10m, cut 90°, sprint 5m",
+          "cue": "Chop your steps before the plant, don't slide.",
+          "videos": [
+            {
+              "label": "90° cut",
+              "search": "90 degree cut change of direction drill"
+            }
+          ]
+        },
+        {
+          "name": "Hip flips",
+          "dose": "4 per side: backpedal 5m, open your hips, sprint 10m",
+          "cue": "Turn with your hips, not your shoulders.",
+          "videos": [
+            {
+              "label": "Backpedal hip turn",
+              "search": "backpedal hip turn sprint drill"
+            }
+          ]
+        },
+        {
+          "name": "Plyos",
+          "dose": "Pogo hops 3 × 20, snap-downs 3 × 5, lateral line hops 3 × 10s",
+          "cue": "Quiet, stiff ankles. Stop the set if contacts get sloppy.",
+          "videos": [
+            {
+              "label": "Pogo hops",
+              "search": "pogo hops plyometric drill"
+            },
+            {
+              "label": "Snap-downs",
+              "search": "snap down drill landing mechanics"
+            },
+            {
+              "label": "Lateral line hops",
+              "search": "lateral line hops drill"
+            }
+          ]
+        },
+        {
+          "name": "Finish with throws",
+          "dose": "30 easy throws, then walk a lap",
+          "cue": "Nothing hard. Just loosen up.",
+          "videos": [
+            {
+              "label": "Solo throwing drills",
+              "search": "ultimate frisbee solo throwing drills"
+            }
+          ]
+        }
+      ]
+    },
+    "cut-build": {
+      "title": "Cutting: patterns and power",
+      "time": "50 minutes",
+      "hard": true,
+      "warmup": "speed",
+      "intent": "Put stops and starts together into the cuts you use in games, and add more power.",
+      "blocks": [
+        {
+          "name": "In-out cuts",
+          "dose": "6 per side: jab 2 steps deep, drive under 10m, plant, break out 10m",
+          "cue": "Sell the first step with your shoulders.",
+          "videos": [
+            {
+              "label": "In and out cuts",
+              "search": "ultimate frisbee in cut out cut"
+            }
+          ]
+        },
+        {
+          "name": "Under-to-deep",
+          "dose": "6 reps: 2 steps under, sell it, turn and sprint 20m deep",
+          "cue": "The fake only works if it looks like a real cut.",
+          "videos": [
+            {
+              "label": "Under and deep cuts",
+              "search": "ultimate frisbee under deep cut"
+            }
+          ]
+        },
+        {
+          "name": "5-10-5 agility",
+          "dose": "4 reps with 60 to 90s rest",
+          "cue": "Time your best rep in Weeks 5 and 9.",
+          "videos": [
+            {
+              "label": "5-10-5 pro agility",
+              "search": "5-10-5 pro agility shuttle technique"
+            }
+          ]
+        },
+        {
+          "name": "Flying 20s",
+          "dose": "4 reps: 20m build-in, 20m at max speed, 2 minutes rest",
+          "cue": "Relaxed face and shoulders at top speed.",
+          "videos": [
+            {
+              "label": "Flying sprints",
+              "search": "flying 20m sprint drill"
+            }
+          ]
+        },
+        {
+          "name": "Plyos",
+          "dose": "Broad jumps 3 × 4, lateral bounds 3 × 5 per side (stick for 2s), single-leg hops 2 × 5 per leg",
+          "cue": "Land quietly and stick every landing.",
+          "videos": [
+            {
+              "label": "Broad jump",
+              "search": "standing broad jump technique"
+            },
+            {
+              "label": "Lateral bounds",
+              "search": "lateral bound stick landing drill"
+            },
+            {
+              "label": "Single-leg hops",
+              "search": "single leg hop plyometric drill"
+            }
+          ]
+        },
+        {
+          "name": "Catch on the cut",
+          "dose": "10 reps. Partner: leading passes on in-out cuts. Solo: throw a high, floaty pass and run it down",
+          "cue": "Catch with two hands at full speed.",
+          "videos": [
+            {
+              "label": "Catching technique",
+              "search": "ultimate frisbee catching technique"
+            }
+          ]
+        }
+      ]
+    },
+    "cut-peak": {
+      "title": "Cutting: reactive and under fatigue",
+      "time": "45 minutes",
+      "hard": true,
+      "warmup": "speed",
+      "intent": "Cut on reaction instead of a script, and stay sharp when you're tired.",
+      "blocks": [
+        {
+          "name": "Reactive cuts",
+          "dose": "8 reps. Partner points or calls in, out, or deep at random. Solo: use a random-interval timer app for the cue",
+          "cue": "React on the first cue. No guessing early.",
+          "videos": [
+            {
+              "label": "Reactive agility",
+              "search": "reactive agility drill"
+            }
+          ]
+        },
+        {
+          "name": "Cut-cut-sprint",
+          "dose": "3 sets of 3: in-cut 10m, out-cut 10m, sprint deep 25m. 20s between reps, 2 minutes between sets",
+          "cue": "Your last cut should look like your first.",
+          "videos": [
+            {
+              "label": "Ultimate cutting drills",
+              "search": "ultimate frisbee cutting drills"
+            }
+          ]
+        },
+        {
+          "name": "Clear and re-cut",
+          "dose": "6 reps: sprint deep 20m, stop, re-cut under 10m",
+          "cue": "Stop fast. This is how you get open for the second look.",
+          "videos": [
+            {
+              "label": "Clearing and re-cutting",
+              "search": "ultimate frisbee clearing cuts"
+            }
+          ]
+        },
+        {
+          "name": "Flying 20s",
+          "dose": "3 reps with full rest",
+          "cue": "Stay sharp, not tired.",
+          "videos": [
+            {
+              "label": "Flying sprints",
+              "search": "flying 20m sprint drill"
+            }
+          ]
+        },
+        {
+          "name": "Plyos (reduced)",
+          "dose": "Pogo hops 2 × 15, lateral bounds 2 × 4 per side",
+          "cue": "Crisp and short.",
+          "videos": [
+            {
+              "label": "Pogo hops",
+              "search": "pogo hops plyometric drill"
+            },
+            {
+              "label": "Lateral bounds",
+              "search": "lateral bound stick landing drill"
+            }
+          ]
+        }
+      ]
+    },
+    "short-foundation": {
+      "title": "Short game: mechanics",
+      "time": "45 minutes",
+      "hard": false,
+      "warmup": "standard",
+      "intent": "Build a clean, repeatable release on both sides before adding pressure.",
+      "blocks": [
+        {
+          "name": "Target throws",
+          "dose": "20 backhands and 20 forehands from 20m at a 2m cone zone",
+          "cue": "Count your hits. That's your baseline for this block.",
+          "videos": [
+            {
+              "label": "Backhand technique",
+              "search": "ultimate frisbee backhand technique"
+            },
+            {
+              "label": "Forehand technique",
+              "search": "ultimate frisbee forehand flick technique"
+            }
+          ]
+        },
+        {
+          "name": "Pivot series",
+          "dose": "10 low backhands and 10 low forehands breaking each way",
+          "cue": "Step wide, stay balanced, keep your pivot foot planted.",
+          "videos": [
+            {
+              "label": "Pivoting and low release",
+              "search": "ultimate frisbee pivot low release break throw"
+            }
+          ]
+        },
+        {
+          "name": "Curves at 25m",
+          "dose": "2 rounds of 5 each: inside-out and outside-in, both sides",
+          "cue": "Watch where each throw starts to turn.",
+          "videos": [
+            {
+              "label": "Inside-out and outside-in",
+              "search": "ultimate frisbee inside out outside in throw"
+            }
+          ]
+        },
+        {
+          "name": "Overheads",
+          "dose": "10 hammers or scoobers at 15m",
+          "cue": "Hit a spot, not just the general area.",
+          "videos": [
+            {
+              "label": "Hammer throw",
+              "search": "ultimate frisbee hammer throw tutorial"
+            },
+            {
+              "label": "Scoober",
+              "search": "ultimate frisbee scoober tutorial"
+            }
+          ]
+        },
+        {
+          "name": "Quick release",
+          "dose": "20 throws: pick the disc off the ground and throw in one motion",
+          "cue": "Grip ready before you stand up.",
+          "videos": [
+            {
+              "label": "Quick release",
+              "search": "ultimate frisbee quick release throw"
+            }
+          ]
+        }
+      ]
+    },
+    "short-build": {
+      "title": "Short game: game pace",
+      "time": "45 minutes",
+      "hard": false,
+      "warmup": "standard",
+      "intent": "Throw the way you will in games: faking, pivoting, and releasing fast.",
+      "blocks": [
+        {
+          "name": "Warm-up targets",
+          "dose": "20 throws from 20m at a 2m zone",
+          "cue": "Log hits and compare with Weeks 1 to 4.",
+          "videos": [
+            {
+              "label": "Backhand technique",
+              "search": "ultimate frisbee backhand technique"
+            },
+            {
+              "label": "Forehand technique",
+              "search": "ultimate frisbee forehand flick technique"
+            }
+          ]
+        },
+        {
+          "name": "Fake-to-break",
+          "dose": "20 per side: fake one way, pivot, break the other",
+          "cue": "Your fake should move your whole body, not just your arm.",
+          "videos": [
+            {
+              "label": "Faking and breaking the mark",
+              "search": "ultimate frisbee fake break the mark"
+            }
+          ]
+        },
+        {
+          "name": "3-second release",
+          "dose": "30 throws: pick up the disc and pivot, count the stall out loud, release by 3",
+          "cue": "Decide early. Hesitating is slower than a bad fake.",
+          "videos": [
+            {
+              "label": "Quick release",
+              "search": "ultimate frisbee quick release throw"
+            }
+          ]
+        },
+        {
+          "name": "Two-cone breaks",
+          "dose": "20 throws alternating between cones on opposite sides",
+          "cue": "Same release height every throw.",
+          "videos": [
+            {
+              "label": "Break throws",
+              "search": "ultimate frisbee break throw drill"
+            }
+          ]
+        },
+        {
+          "name": "Low around breaks",
+          "dose": "20 throws",
+          "cue": "Release outside and below where a mark's hand would be.",
+          "videos": [
+            {
+              "label": "Around break",
+              "search": "ultimate frisbee around break throw"
+            }
+          ]
+        }
+      ]
+    },
+    "short-peak": {
+      "title": "Short game: pressure",
+      "time": "40 minutes",
+      "hard": false,
+      "warmup": "standard",
+      "intent": "Make your throws hold up when a miss costs you something.",
+      "blocks": [
+        {
+          "name": "10 in a row",
+          "dose": "Break throws from 20m at a 2m zone. Restart at 0 on any miss (cap at 15 minutes)",
+          "cue": "Treat each throw like a stall of 8.",
+          "videos": [
+            {
+              "label": "Break throws",
+              "search": "ultimate frisbee break throw drill"
+            }
+          ]
+        },
+        {
+          "name": "Accuracy ladder",
+          "dose": "5 throws each at 20m, 30m, and 40m. Hit 3 of 5 to move up. Do it on both sides",
+          "cue": "If you stall on a distance, stay there.",
+          "videos": [
+            {
+              "label": "Solo throwing drills",
+              "search": "ultimate frisbee solo throwing drills"
+            }
+          ]
+        },
+        {
+          "name": "Fatigue throws",
+          "dose": "8 rounds: sprint 20m, walk back, then immediately throw 2 breaks",
+          "cue": "Settle your feet before you throw.",
+          "videos": [
+            {
+              "label": "Solo throwing drills",
+              "search": "ultimate frisbee solo throwing drills"
+            }
+          ]
+        },
+        {
+          "name": "Live mark",
+          "dose": "If you have a partner: 20 throws past an active mark",
+          "cue": "Solo: repeat the 10-in-a-row block instead.",
+          "videos": [
+            {
+              "label": "Breaking the mark",
+              "search": "ultimate frisbee breaking the mark drill"
+            }
+          ]
+        }
+      ]
+    },
+    "long-foundation": {
+      "title": "Long game: controlled hucks",
+      "time": "40 minutes",
+      "hard": false,
+      "warmup": "standard",
+      "intent": "Build a huck you can control before you chase distance.",
+      "blocks": [
+        {
+          "name": "Build distance",
+          "dose": "20 throws, stepping back 5m every 5 throws",
+          "cue": "Same smooth motion at every distance.",
+          "videos": [
+            {
+              "label": "Throwing farther",
+              "search": "ultimate frisbee throw farther technique"
+            }
+          ]
+        },
+        {
+          "name": "Controlled hucks",
+          "dose": "10 backhands and 5 forehands at a 5m zone 35 to 40m away",
+          "cue": "Focus on the angle and follow-through, not power.",
+          "videos": [
+            {
+              "label": "Backhand huck",
+              "search": "ultimate frisbee backhand huck technique"
+            },
+            {
+              "label": "Forehand huck",
+              "search": "ultimate frisbee forehand huck technique"
+            }
+          ]
+        },
+        {
+          "name": "Hammers to a zone",
+          "dose": "10 throws at 20m",
+          "cue": "Pick a landing spot every time.",
+          "videos": [
+            {
+              "label": "Hammer throw",
+              "search": "ultimate frisbee hammer throw tutorial"
+            }
+          ]
+        },
+        {
+          "name": "Wind work",
+          "dose": "10 upwind and 10 downwind throws",
+          "cue": "Upwind: flatter and lower. Downwind: more angle, less power.",
+          "videos": [
+            {
+              "label": "Throwing in wind",
+              "search": "ultimate frisbee throwing in wind"
+            }
+          ]
+        },
+        {
+          "name": "Resets",
+          "dose": "20 short throws to finish",
+          "cue": "Easy and accurate.",
+          "videos": [
+            {
+              "label": "Reset throws",
+              "search": "ultimate frisbee handler reset"
+            }
+          ]
+        }
+      ]
+    },
+    "long-build": {
+      "title": "Long game: distance",
+      "time": "45 minutes",
+      "hard": false,
+      "warmup": "standard",
+      "intent": "Push past 40m while staying accurate.",
+      "blocks": [
+        {
+          "name": "Build distance",
+          "dose": "15 throws working back to 30m",
+          "cue": "Don't rush into full hucks.",
+          "videos": [
+            {
+              "label": "Throwing farther",
+              "search": "ultimate frisbee throw farther technique"
+            }
+          ]
+        },
+        {
+          "name": "Hucks at 40m+",
+          "dose": "15 backhands and 10 forehands at a 5m zone",
+          "cue": "Log hits. Aim to beat your Foundation-phase numbers.",
+          "videos": [
+            {
+              "label": "Backhand huck",
+              "search": "ultimate frisbee backhand huck technique"
+            },
+            {
+              "label": "Forehand huck",
+              "search": "ultimate frisbee forehand huck technique"
+            }
+          ]
+        },
+        {
+          "name": "Curved hucks",
+          "dose": "5 inside-out and 5 outside-in",
+          "cue": "Let the curve bring the disc into the zone.",
+          "videos": [
+            {
+              "label": "IO and OI hucks",
+              "search": "ultimate frisbee inside out huck"
+            }
+          ]
+        },
+        {
+          "name": "Step-out hucks",
+          "dose": "10 throws: pivot wide first, then huck",
+          "cue": "Keep your balance through the step.",
+          "videos": [
+            {
+              "label": "Step-out huck",
+              "search": "ultimate frisbee huck pivot step out"
+            }
+          ]
+        },
+        {
+          "name": "Hammers over a mark",
+          "dose": "10 throws at 25 to 30m",
+          "cue": "Get the release high enough to clear a raised hand.",
+          "videos": [
+            {
+              "label": "Hammer throw",
+              "search": "ultimate frisbee hammer throw tutorial"
+            }
+          ]
+        }
+      ]
+    },
+    "long-peak": {
+      "title": "Long game: hucks under pressure",
+      "time": "40 minutes",
+      "hard": false,
+      "warmup": "standard",
+      "intent": "Throw long when you're tired, rushed, or throwing to a moving target.",
+      "blocks": [
+        {
+          "name": "Huck off the cut",
+          "dose": "8 reps: sprint 10m, pick up the disc, and huck within 3 seconds",
+          "cue": "Set your feet fast, then throw.",
+          "videos": [
+            {
+              "label": "Backhand huck",
+              "search": "ultimate frisbee backhand huck technique"
+            },
+            {
+              "label": "Forehand huck",
+              "search": "ultimate frisbee forehand huck technique"
+            }
+          ]
+        },
+        {
+          "name": "Huck to a runner",
+          "dose": "10 throws. Partner runs deep. Solo: aim at a zone and move the cone after every throw",
+          "cue": "Lead the receiver. Throw to space, not to a person.",
+          "videos": [
+            {
+              "label": "Hucking to space",
+              "search": "ultimate frisbee hucking to receiver"
+            }
+          ]
+        },
+        {
+          "name": "Called distance",
+          "dose": "3 rounds of 3 hucks. Call 30m, 40m, or 50m before each throw",
+          "cue": "Control beats max distance.",
+          "videos": [
+            {
+              "label": "Backhand huck",
+              "search": "ultimate frisbee backhand huck technique"
+            },
+            {
+              "label": "Forehand huck",
+              "search": "ultimate frisbee forehand huck technique"
+            }
+          ]
+        },
+        {
+          "name": "Overheads to a zone",
+          "dose": "10 hammers or blades",
+          "cue": "Commit to the release.",
+          "videos": [
+            {
+              "label": "Hammer throw",
+              "search": "ultimate frisbee hammer throw tutorial"
+            },
+            {
+              "label": "Blade throw",
+              "search": "ultimate frisbee blade throw"
+            }
+          ]
+        }
+      ]
+    },
+    "cond-foundation": {
+      "title": "Conditioning: tempo",
+      "time": "35 minutes",
+      "hard": true,
+      "warmup": "speed",
+      "intent": "Build the aerobic base that lets you recover between points. Skip this on bootcamp weekends.",
+      "blocks": [
+        {
+          "name": "Tempo runs",
+          "dose": "10 to 12 × 100m at about 70%, walking back to recover",
+          "cue": "Relaxed and steady. You should be able to talk after each rep.",
+          "videos": [
+            {
+              "label": "Tempo runs",
+              "search": "tempo run 100m intervals"
+            }
+          ]
+        },
+        {
+          "name": "Throws after",
+          "dose": "30 throws",
+          "cue": "Get used to throwing with tired legs.",
+          "videos": [
+            {
+              "label": "Solo throwing drills",
+              "search": "ultimate frisbee solo throwing drills"
+            }
+          ]
+        }
+      ]
+    },
+    "cond-build": {
+      "title": "Conditioning: repeat sprints",
+      "time": "35 minutes",
+      "hard": true,
+      "warmup": "speed",
+      "intent": "Build the ability to sprint hard over and over, like a long point. Skip this on bootcamp weekends.",
+      "blocks": [
+        {
+          "name": "Repeat sprints",
+          "dose": "3 sets of 6 × 40m with 20s rest between reps and 3 minutes between sets",
+          "cue": "Your last rep should be within a second of your first.",
+          "videos": [
+            {
+              "label": "Repeated sprint training",
+              "search": "repeated sprint ability training"
+            }
+          ]
+        },
+        {
+          "name": "Throws after",
+          "dose": "30 throws",
+          "cue": "Break throws only.",
+          "videos": [
+            {
+              "label": "Solo throwing drills",
+              "search": "ultimate frisbee solo throwing drills"
+            }
+          ]
+        }
+      ]
+    },
+    "cond-peak": {
+      "title": "Conditioning: game simulation",
+      "time": "40 minutes",
+      "hard": true,
+      "warmup": "speed",
+      "intent": "Play points on your own: cutting, sprinting, and recovering like in a real game. Skip this on bootcamp weekends.",
+      "blocks": [
+        {
+          "name": "Game-sim points",
+          "dose": "8 points of about 45s (cut, cut, sprint deep, jog back, cut again) with 60 to 90s rest",
+          "cue": "Every cut at game intensity.",
+          "videos": [
+            {
+              "label": "Ultimate conditioning",
+              "search": "ultimate frisbee conditioning drills"
+            }
+          ]
+        },
+        {
+          "name": "Throws after",
+          "dose": "20 break throws",
+          "cue": "Stay accurate while you're tired.",
+          "videos": [
+            {
+              "label": "Solo throwing drills",
+              "search": "ultimate frisbee solo throwing drills"
+            }
+          ]
+        }
+      ]
+    },
+    "test": {
+      "title": "Test day",
+      "time": "60 minutes",
+      "hard": true,
+      "warmup": "speed",
+      "intent": "Record your numbers so you can compare Week 1 and Week 13. Skip bootcamp this weekend if you can.",
+      "blocks": [
+        {
+          "name": "30m sprint",
+          "dose": "Best of 3 with full rest",
+          "cue": "Time it on your phone from a standing start.",
+          "videos": [
+            {
+              "label": "Sprint start technique",
+              "search": "30m sprint start technique"
+            }
+          ]
+        },
+        {
+          "name": "5-10-5 agility",
+          "dose": "Best of 3",
+          "cue": "Touch each line with your hand.",
+          "videos": [
+            {
+              "label": "5-10-5 pro agility",
+              "search": "5-10-5 pro agility shuttle technique"
+            }
+          ]
+        },
+        {
+          "name": "Repeat sprints",
+          "dose": "6 × 40m with 20s rest",
+          "cue": "Record your slowest rep.",
+          "videos": [
+            {
+              "label": "Repeated sprint training",
+              "search": "repeated sprint ability training"
+            }
+          ]
+        },
+        {
+          "name": "Accuracy",
+          "dose": "10 backhands and 10 forehands from 20m at a 2m zone",
+          "cue": "Record hits on each side.",
+          "videos": [
+            {
+              "label": "Backhand technique",
+              "search": "ultimate frisbee backhand technique"
+            },
+            {
+              "label": "Forehand technique",
+              "search": "ultimate frisbee forehand flick technique"
+            }
+          ]
+        },
+        {
+          "name": "Longest controlled huck",
+          "dose": "Best of 5 that lands inside a 5m zone",
+          "cue": "Pace out the distance and write it down.",
+          "videos": [
+            {
+              "label": "Backhand huck",
+              "search": "ultimate frisbee backhand huck technique"
+            },
+            {
+              "label": "Forehand huck",
+              "search": "ultimate frisbee forehand huck technique"
+            }
+          ]
+        }
+      ]
+    }
+  },
+  "reference": [
+    {
+      "title": "Rules for every morning",
+      "body": null,
+      "items": [
+        "Train early while it's cool, and bring more water than you think you need.",
+        "Quality over volume. If your throws or cuts get sloppy, end the block there.",
+        "If Monday night left your legs flat, do Tuesday's session on Wednesday and throw only on Tuesday.",
+        "No bootcamp this weekend? Saturday's conditioning is on. Bootcamp weekend? Skip it; bootcamp is your conditioning.",
+        "Keep at least 6 hours and a proper meal between the morning session and gym at night."
+      ]
+    },
+    {
+      "title": "Test day (Saturday of Weeks 1 and 13)",
+      "body": "Warm up fully, then test in this order with full rest between. Write the numbers down so Week 13 can be compared fairly.",
+      "items": [
+        "30m sprint: best of 3, timed on a phone.",
+        "5-10-5 agility: best of 3, touch each line with your hand.",
+        "Repeat sprints: 6 × 40m with 20s rest. Record your slowest rep.",
+        "Accuracy: 10 backhands and 10 forehands from 20m at a 2m cone zone. Record hits.",
+        "Longest controlled huck: furthest throw that lands inside a 5m zone, best of 5."
+      ]
+    },
+    {
+      "title": "What you need",
+      "body": "At least 3 discs (5 or more is better for throwing blocks), 6 to 8 cones, a phone for timing, and a partner when you can get one. Every block has a solo version.",
+      "items": []
+    }
+  ]
+}

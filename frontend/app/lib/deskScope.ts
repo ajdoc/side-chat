@@ -19,7 +19,7 @@ import type { SideDeskAppId } from '~/types'
  */
 
 /** The apps whose rows belong to a channel even when the desk is on a side chat. */
-export const CHANNEL_SCOPED_APPS: SideDeskAppId[] = ['tracker', 'polls', 'stickers', 'signups']
+export const CHANNEL_SCOPED_APPS: SideDeskAppId[] = ['tracker', 'polls', 'stickers', 'signups', 'training']
 
 /**
  * Is this base path a channel's?

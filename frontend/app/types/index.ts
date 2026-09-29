@@ -920,7 +920,7 @@ export interface WhiteboardStroke {
  *
  * `canvas` is in the union but never in a stored list: the Open Canvas can't be removed.
  */
-export type SideDeskSurfaceAppId = 'board' | 'notes' | 'docs' | 'canvas' | 'calendar' | 'tracker' | 'polls' | 'stickers' | 'signups'
+export type SideDeskSurfaceAppId = 'board' | 'notes' | 'docs' | 'canvas' | 'calendar' | 'tracker' | 'polls' | 'stickers' | 'signups' | 'training'
 export type SideDeskWidgetAppId = WidgetType
 export type SideDeskAppId = SideDeskSurfaceAppId | SideDeskWidgetAppId
 
@@ -2357,4 +2357,99 @@ export interface SignupEditorPayload {
   month?: string | null
   /** How far the edit reaches along a schedule — see SignupLayout on the server. */
   apply_to?: string
+}
+
+// --- Training ---------------------------------------------------------------------------------
+
+/** A "how it's done" link: a YouTube search, or a direct `url`. */
+export interface TrainingVideo {
+  label: string
+  search?: string
+  url?: string
+}
+
+/** One exercise block in a session — the unit a member ticks off. */
+export interface TrainingBlock {
+  /** Stable for the block's life — ticks point at it, so reordering never moves a tick. */
+  id: string
+  name: string
+  dose: string
+  cue: string
+  videos?: TrainingVideo[]
+}
+
+/** A warm-up step: plain text, or text with video links. */
+export type TrainingWarmupItem = string | { text: string, videos?: TrainingVideo[] }
+
+export interface TrainingSession {
+  title: string
+  time: string
+  hard: boolean
+  intent: string
+  /** A key into `warmups`, or null for no warm-up. */
+  warmup: string | null
+  blocks: TrainingBlock[]
+}
+
+export interface TrainingDay {
+  key: string
+  label: string
+  tag: string
+  /** Days after the week's Monday. */
+  offset: number
+}
+
+export interface TrainingPhase {
+  name: string
+  from: number
+  to: number
+  line: string
+}
+
+/**
+ * A whole program, as authored. Which session a day gets is `plan[day]` — one session id for
+ * every week, or one per phase — unless an `overrides` entry names that week and day.
+ * Resolved by `sessionFor` in lib/training.ts.
+ */
+export interface TrainingContent {
+  meta?: { title?: string, description?: string, default_start?: string }
+  weeks: number
+  days: TrainingDay[]
+  phases: TrainingPhase[]
+  notes: Record<string, string>
+  warmups: Record<string, { label: string, items: TrainingWarmupItem[] }>
+  /** A session id for every week, or one per phase (null = rest in that phase). */
+  plan: Record<string, string | (string | null)[]>
+  /** Swap a day's session in specific weeks; `session: null` makes it a rest day those weeks. */
+  overrides: { weeks: number[], day: string, session: string | null }[]
+  sessions: Record<string, TrainingSession>
+  reference: { title: string, body: string | null, items: string[] }[]
+}
+
+export interface TrainingProgramSummary {
+  id: number
+  title: string
+  template: string | null
+  /** Monday of Week 1, `YYYY-MM-DD`. */
+  starts_on: string
+  weeks: number
+}
+
+export interface TrainingProgram extends TrainingProgramSummary {
+  content: TrainingContent
+  /** The viewer's own ticks, as `week:day:block` keys. */
+  mine: string[]
+}
+
+export interface TrainingTemplate {
+  id: string
+  title: string
+  description: string
+  default_start: string | null
+  weeks: number
+}
+
+export interface TrainingTeamMember {
+  user: { id: number, name: string, avatar: string | null }
+  ticks: string[]
 }
