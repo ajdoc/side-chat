@@ -13,6 +13,7 @@ use App\Http\Controllers\AppPollController;
 use App\Http\Controllers\SignupController;
 use App\Http\Controllers\SignupGroupController;
 use App\Http\Controllers\SignupSeriesController;
+use App\Http\Controllers\TrainingController;
 use App\Http\Controllers\AppReactionController;
 use App\Http\Controllers\AppStickerController;
 use App\Http\Controllers\AppTagController;
@@ -587,6 +588,19 @@ Route::middleware('auth:api')->group(function () {
     Route::patch('channels/{channel}/signups/schedules/{series}', [SignupSeriesController::class, 'update'])->whereNumber('series');
     Route::delete('channels/{channel}/signups/schedules/{series}', [SignupSeriesController::class, 'destroy'])->whereNumber('series');
     Route::post('channels/{channel}/signups/schedules/{series}/generate', [SignupSeriesController::class, 'generate'])->whereNumber('series');
+
+    /*
+     * Training — multi-week programs and each member's ticks. See TrainingController.
+     */
+    Route::get('channels/{channel}/training', [TrainingController::class, 'index']);
+    Route::post('channels/{channel}/training/programs', [TrainingController::class, 'store']);
+    Route::get('channels/{channel}/training/programs/{program}', [TrainingController::class, 'show'])->whereNumber('program');
+    Route::patch('channels/{channel}/training/programs/{program}', [TrainingController::class, 'update'])->whereNumber('program');
+    Route::delete('channels/{channel}/training/programs/{program}', [TrainingController::class, 'destroy'])->whereNumber('program');
+    Route::put('channels/{channel}/training/programs/{program}/content', [TrainingController::class, 'replaceContent'])->whereNumber('program');
+    Route::put('channels/{channel}/training/programs/{program}/tick', [TrainingController::class, 'tick'])->whereNumber('program');
+    Route::delete('channels/{channel}/training/programs/{program}/ticks', [TrainingController::class, 'clear'])->whereNumber('program');
+    Route::get('channels/{channel}/training/programs/{program}/team', [TrainingController::class, 'team'])->whereNumber('program');
 
     /*
      * The kanban board — columns and cards.

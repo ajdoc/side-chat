@@ -54,6 +54,8 @@ final class AppRegistry
         'stickers' => ['family' => 'surface', 'desk' => true, 'channel' => true],
         // Custom sign-up sheets with fees and a payables ledger. See SignupController.
         'signups' => ['family' => 'surface', 'desk' => true, 'channel' => true],
+        // Multi-week training programs with per-member ticks. See TrainingController.
+        'training' => ['family' => 'surface', 'desk' => true, 'channel' => true],
 
         // Widgets promoted to apps.
         'music' => ['family' => 'widget', 'desk' => true, 'channel' => true],

@@ -454,6 +454,16 @@ class Channel extends Model
     }
 
     /**
+     * This channel's training programs — what the Training app draws.
+     *
+     * @return HasMany<TrainingProgram, $this>
+     */
+    public function trainingPrograms(): HasMany
+    {
+        return $this->hasMany(TrainingProgram::class);
+    }
+
+    /**
      * This channel's Sticker Wall.
      *
      * @return HasMany<AppSticker, $this>
